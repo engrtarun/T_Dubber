@@ -4,6 +4,8 @@ import json
 import subprocess
 import shutil
 import re
+import uuid
+import glob
 
 # Force Kaggle CLI to use the local folder containing kaggle.json
 local_kaggle_dir = os.path.abspath("kaggle_paperWork")
@@ -52,16 +54,50 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
         return
     
     timestamp = int(time.time())
+    unique_id = uuid.uuid4().hex[:6]
     
     safe_video_name = sanitize_name(os.path.basename(video_path).split('.')[0])
-    dataset_name = sanitize_name(f"dubber-video-{safe_video_name}")[:35] + f"-{timestamp}"
+    dataset_name = sanitize_name(f"dubber-video-{safe_video_name}")[:35] + f"-{unique_id}"
     dataset_name = dataset_name.lower().replace("_", "-") 
     
     dataset_dir = os.path.join(project_dir, "dataset_safe")
     os.makedirs(dataset_dir, exist_ok=True)
     
     video_filename = os.path.basename(video_path)
-    shutil.copy(video_path, os.path.join(dataset_dir, video_filename))
+    
+    # Task 3: Auto-Compression
+    file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+    needs_compression = file_size_mb > 30
+    if not needs_compression:
+        probe_cmd = f'ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 "{video_path}"'
+        try:
+            res_probe = subprocess.run(probe_cmd, shell=True, capture_output=True, text=True)
+            if res_probe.returncode == 0 and res_probe.stdout.strip():
+                height = int(res_probe.stdout.strip())
+                if height > 1080:
+                    needs_compression = True
+        except:
+            pass
+
+    compressed_video_path = None
+    if needs_compression:
+        yield f"[STAGE:1] 🛠️ Video is large or >1080p ({file_size_mb:.1f}MB). Compressing to 480p...\n"
+        compressed_video_path = os.path.join(project_dir, f"compressed_{unique_id}.mp4")
+        ffmpeg_cmd = f'ffmpeg -y -i "{video_path}" -vf scale=854:480 -b:v 1M "{compressed_video_path}"'
+        yield f"[STAGE:1] Executing: {ffmpeg_cmd}\n"
+        run_cmd(ffmpeg_cmd)
+        
+        if os.path.exists(compressed_video_path) and os.path.getsize(compressed_video_path) > 0:
+            target_upload_path = compressed_video_path
+            video_filename = os.path.basename(compressed_video_path)
+            yield "[STAGE:1] ✅ Compression successful.\n"
+        else:
+            yield "[STAGE:1] ⚠️ Compression failed. Proceeding with original video.\n"
+            target_upload_path = video_path
+    else:
+        target_upload_path = video_path
+        
+    shutil.copy(target_upload_path, os.path.join(dataset_dir, video_filename))
     
     # Task 3: Ensure no .git directory in dataset folder
     git_dir = os.path.join(dataset_dir, ".git")
@@ -108,8 +144,8 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
             upload_success = True
             break
         elif "500" in res.stderr or "500" in res.stdout or attempt < max_retries - 1:
-            yield f"[STAGE:3] ⚠️ Upload failed (Possible 500 Error). Retrying in 10 seconds...\n"
-            time.sleep(10)
+            yield f"[STAGE:3] ⚠️ Upload failed (Possible 500 Error). Retrying in 60 seconds...\n"
+            time.sleep(60)
         else:
             break
             
@@ -146,60 +182,85 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
         
         with open(kmeta_path, "w") as f:
             json.dump(kmeta, f, indent=4)
+
+    yield "[STAGE:4] ⚠️ IMPORTANT: Kaggle API notebooks have internet disabled by default (platform limitation). If the worker fails with a network error, manually open the Kaggle notebook URL and enable Internet in Settings.\n"
             
-    yield f"[STAGE:4] 🔥 Pushing execution code to Kaggle GPU Worker ({kernel_id})...\n"
-    k_push_cmd = ["python", "-m", "kaggle", "kernels", "push", "-p", kernel_dir]
-    yield f"[STAGE:4] Executing: {' '.join(k_push_cmd)}\n"
-    res = run_cmd(k_push_cmd)
-    if res.returncode != 0:
-        yield f"[STAGE:4] ❌ Error pushing kernel:\n{res.stderr}\n"
-        return
-        
-    yield f"[STAGE:5] ⏳ Waiting for Kaggle Worker to complete...\n"
-    
-    # Task 3: 2-hour timeout
-    timeout = 2 * 60 * 60  
-    start_time = time.time()
-    
-    status_cmd = ["python", "-m", "kaggle", "kernels", "status", kernel_id]
-    
-    # Task 1 & 2: Real polling loop
-    while True:
-        elapsed = time.time() - start_time
-        if elapsed > timeout:
-            yield "[STAGE:5] ❌ Timeout: Worker did not finish within 2 hours.\n"
+    for kernel_attempt in range(2):
+        yield "[STAGE:4] 💡 Tip: If the worker fails, manually enable Internet in Kaggle Notebook Settings.\n"
+        yield f"[STAGE:4] 🔥 Pushing execution code to Kaggle GPU Worker ({kernel_id}) [Attempt {kernel_attempt+1}]...\n"
+        k_push_cmd = ["python", "-m", "kaggle", "kernels", "push", "-p", kernel_dir]
+        yield f"[STAGE:4] Executing: {' '.join(k_push_cmd)}\n"
+        res = run_cmd(k_push_cmd)
+        if res.returncode != 0:
+            yield f"[STAGE:4] ❌ Error pushing kernel:\n{res.stderr}\n"
+            if "could not resolve" in res.stderr.lower() or "500" in res.stderr or "network" in res.stderr.lower():
+                if kernel_attempt == 0:
+                    yield "[STAGE:4] ⚠️ Network error during push. Retrying in 60 seconds...\n"
+                    time.sleep(60)
+                    continue
             return
             
-        res = run_cmd(status_cmd)
-        status_text = res.stdout.lower() + res.stderr.lower()
+        yield f"[STAGE:5] ⏳ Waiting for Kaggle Worker to complete...\n"
         
-        if "complete" in status_text:
-            yield "[STAGE:5] ✅ Kaggle execution completed!\n"
-            break
-        elif "error" in status_text or "cancel" in status_text:
-            yield "[STAGE:5] ❌ Kaggle execution failed or was cancelled!\n"
-            yield "[STAGE:5] ⬇️ Downloading Kaggle logs for debugging...\n"
-            run_cmd(["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir])
+        # Task 3: 2-hour timeout
+        timeout = 2 * 60 * 60  
+        start_time = time.time()
+        
+        status_cmd = ["python", "-m", "kaggle", "kernels", "status", kernel_id]
+        
+        kernel_success = False
+        kernel_failed_with_network_error = False
+        
+        # Task 1 & 2: Real polling loop
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                yield "[STAGE:5] ❌ Timeout: Worker did not finish within 2 hours.\n"
+                return
+                
+            res = run_cmd(status_cmd)
+            status_text = res.stdout.lower() + res.stderr.lower()
             
-            error_log_path = os.path.join(project_dir, "error_log.txt")
-            if os.path.exists(error_log_path):
-                with open(error_log_path, "r") as f:
-                    err_content = f.read()
-                yield f"[STAGE:5] ❌ Error Details:\n{err_content}\n"
-            else:
-                import glob
-                log_files = glob.glob(os.path.join(project_dir, "*.log"))
-                if log_files:
-                    with open(log_files[0], "r") as f:
+            if "complete" in status_text:
+                yield "[STAGE:5] ✅ Kaggle execution completed!\n"
+                kernel_success = True
+                break
+            elif "error" in status_text or "cancel" in status_text:
+                yield "[STAGE:5] ❌ Kaggle execution failed or was cancelled!\n"
+                yield "[STAGE:5] ⬇️ Downloading Kaggle logs for debugging...\n"
+                run_cmd(["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir])
+                
+                error_log_path = os.path.join(project_dir, "error_log.txt")
+                err_content = ""
+                if os.path.exists(error_log_path):
+                    with open(error_log_path, "r") as f:
                         err_content = f.read()
-                        # Output last 2000 chars to avoid overwhelming the UI
-                        yield f"[STAGE:5] ❌ Kaggle Kernel Log:\n{err_content[-2000:]}\n"
+                else:
+                    import glob
+                    log_files = glob.glob(os.path.join(project_dir, "*.log"))
+                    if log_files:
+                        with open(log_files[0], "r") as f:
+                            err_content = f.read()
+                            
+                if err_content:
+                    yield f"[STAGE:5] ❌ Error Details:\n{err_content[-2000:]}\n"
+                    if "could not resolve host" in err_content.lower() or "network is unreachable" in err_content.lower():
+                        kernel_failed_with_network_error = True
                 else:
                     yield f"[STAGE:5] ❌ No error log or .log file found in {project_dir}\n"
+                break
+            
+            yield f"[STAGE:5] 🔄 Worker is still processing... (Elapsed: {int(elapsed/60)}m {int(elapsed%60)}s)\n"
+            time.sleep(30)
+            
+        if kernel_success:
+            break
+        elif kernel_failed_with_network_error and kernel_attempt == 0:
+            yield "[STAGE:5] ⚠️ Kernel failed with a network error. Waiting 60 seconds and re-pushing once...\n"
+            time.sleep(60)
+            continue
+        else:
             return
-        
-        yield f"[STAGE:5] 🔄 Worker is still processing... (Elapsed: {int(elapsed/60)}m {int(elapsed%60)}s)\n"
-        time.sleep(30)
         
     yield "[STAGE:6] ⬇️ Downloading final outputs from Kaggle...\n"
     
@@ -207,11 +268,39 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
     yield f"[STAGE:6] Executing: {' '.join(output_cmd)}\n"
     run_cmd(output_cmd)
     
-    # Task 4: Verify downloaded output video
-    import glob
-    mp4_files = [f for f in glob.glob(os.path.join(project_dir, "*.mp4")) if os.path.basename(f) != video_filename]
+    # Verify downloaded output video
+    original_video_basename = os.path.basename(video_path)
+    mp4_files = [f for f in glob.glob(os.path.join(project_dir, "*.mp4")) if os.path.basename(f) != original_video_basename]
     
     if mp4_files and os.path.getsize(mp4_files[0]) > 0:
         yield f"[STAGE:7] 🎉 Pipeline finished successfully! Video saved at {os.path.basename(mp4_files[0])} and report saved locally."
     else:
-        yield f"[STAGE:7] ❌ Error: Downloaded video is missing or empty. Please check Kaggle logs.\n"
+        # Worker said 'complete' but output is missing — this is NOT a success.
+        # Download and display the actual error log from Kaggle.
+        yield "[STAGE:7] ⚠️ Worker reported 'complete' but output video is missing or empty. Fetching error logs...\n"
+        
+        error_log_path = os.path.join(project_dir, "error_log.txt")
+        err_content = ""
+        if os.path.exists(error_log_path):
+            with open(error_log_path, "r") as f:
+                err_content = f.read()
+        else:
+            log_files = glob.glob(os.path.join(project_dir, "*.log")) + glob.glob(os.path.join(project_dir, "*.txt"))
+            for lf in log_files:
+                with open(lf, "r") as f:
+                    err_content += f"\n--- {os.path.basename(lf)} ---\n" + f.read()
+        
+        if err_content:
+            yield f"[STAGE:7] ❌ Worker Error Log:\n{err_content[-2500:]}\n"
+        else:
+            yield f"[STAGE:7] ❌ No error_log.txt found. The worker likely failed silently (e.g., pip install failed due to no internet).\n"
+        
+        yield f"[STAGE:7] 💡 FIX: Open https://www.kaggle.com/code/{kernel_id} → Settings → Enable Internet → Re-run the notebook manually.\n"
+        
+    # Clean up local temporary compressed files after upload is done
+    if compressed_video_path and os.path.exists(compressed_video_path):
+        try:
+            os.remove(compressed_video_path)
+            yield f"[STAGE:7] 🧹 Cleaned up temporary compressed video.\n"
+        except:
+            pass
