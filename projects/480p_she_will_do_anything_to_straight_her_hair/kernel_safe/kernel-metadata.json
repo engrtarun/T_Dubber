@@ -1,6 +1,6 @@
 {
-    "id": "engrtarun/dubber-worker-1790777535",
-    "title": "Dubber Worker 1790777535",
+    "id": "engrtarun/dubber-480pshewilldoan-01oct26-2131",
+    "title": "Dubber Worker 01oct26-2131",
     "code_file": "kaggle_worker.ipynb",
     "language": "python",
     "kernel_type": "notebook",
@@ -10,7 +10,7 @@
     "enable_internet": "true",
     "machine_shape": "",
     "dataset_sources": [
-        "engrtarun/dubber-video-480p-she-will-do-anyth-cec328"
+        "engrtarun/dubber-video-480p-she-will-do-anyth-8717a5"
     ],
     "competition_sources": [],
     "kernel_sources": [],

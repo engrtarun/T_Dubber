@@ -1,0 +1,18 @@
+{
+    "id": "engrtarun/dubber-tmparld1uvt-01oct26-2102",
+    "title": "Dubber Worker 01oct26-2102",
+    "code_file": "kaggle_worker.ipynb",
+    "language": "python",
+    "kernel_type": "notebook",
+    "is_private": "true",
+    "enable_gpu": "true",
+    "enable_tpu": "false",
+    "enable_internet": "true",
+    "machine_shape": "",
+    "dataset_sources": [
+        "engrtarun/dubber-video-tmparld1uvt-d83961"
+    ],
+    "competition_sources": [],
+    "kernel_sources": [],
+    "model_sources": []
+}

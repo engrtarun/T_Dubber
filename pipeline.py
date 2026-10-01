@@ -6,6 +6,7 @@ import shutil
 import re
 import uuid
 import glob
+import datetime
 
 # Force Kaggle CLI to use the local folder containing kaggle.json
 local_kaggle_dir = os.path.abspath("kaggle_paperWork")
@@ -105,6 +106,17 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
         shutil.rmtree(git_dir)
     
     yield "[STAGE:2] 📦 Creating Dataset structure...\n"
+    
+    # Add the local mazinger source code to the dataset for offline installation
+    mazinger_src = os.path.abspath("mazinger")
+    if os.path.exists(mazinger_src):
+        shutil.copytree(
+            mazinger_src, 
+            os.path.join(dataset_dir, "mazinger"), 
+            ignore=shutil.ignore_patterns(".git"),
+            dirs_exist_ok=True
+        )
+        
     init_cmd = ["python", "-m", "kaggle", "datasets", "init", "-p", dataset_dir]
     yield f"[STAGE:2] Executing: {' '.join(init_cmd)}\n"
     run_cmd(init_cmd)
@@ -167,12 +179,15 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
     run_cmd(k_init_cmd)
     
     kmeta_path = os.path.join(kernel_dir, "kernel-metadata.json")
-    kernel_id = f"{KAGGLE_USERNAME}/dubber-worker-{timestamp}"
+    clean_movie = re.sub(r'[^a-z0-9]', '', safe_video_name.lower())[:15] or "vid"
+    time_str = datetime.datetime.now().strftime("%d%b%y-%H%M").lower()
+    kernel_id = f"{KAGGLE_USERNAME}/dubber-worker-{time_str}"
+    
     if os.path.exists(kmeta_path):
         with open(kmeta_path, "r") as f:
             kmeta = json.load(f)
         kmeta["id"] = kernel_id
-        kmeta["title"] = f"Dubber Worker {timestamp}"
+        kmeta["title"] = f"Dubber Worker {time_str}"
         kmeta["code_file"] = "kaggle_worker.ipynb"
         kmeta["language"] = "python"
         kmeta["kernel_type"] = "notebook"
@@ -236,7 +251,6 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
                     with open(error_log_path, "r") as f:
                         err_content = f.read()
                 else:
-                    import glob
                     log_files = glob.glob(os.path.join(project_dir, "*.log"))
                     if log_files:
                         with open(log_files[0], "r") as f:
@@ -295,7 +309,10 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
         else:
             yield f"[STAGE:7] ❌ No error_log.txt found. The worker likely failed silently (e.g., pip install failed due to no internet).\n"
         
-        yield f"[STAGE:7] 💡 FIX: Open https://www.kaggle.com/code/{kernel_id} → Settings → Enable Internet → Re-run the notebook manually.\n"
+        if "resolve host" in err_content.lower() or "network" in err_content.lower() or "internet" in err_content.lower() or not err_content:
+            yield f"[STAGE:7] 💡 FIX: Open https://www.kaggle.com/code/{kernel_id} → Settings → Enable Internet → Re-run the notebook manually.\n"
+        else:
+            yield f"[STAGE:7] 💡 FIX: An error occurred in the execution. Please check the logs above or open https://www.kaggle.com/code/{kernel_id} to debug.\n"
         
     # Clean up local temporary compressed files after upload is done
     if compressed_video_path and os.path.exists(compressed_video_path):

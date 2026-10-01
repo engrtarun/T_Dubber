@@ -1,0 +1,18 @@
+{
+    "id": "engrtarun/dubber-dummy-30sep26-2239",
+    "title": "Dubber Worker 30sep26-2239",
+    "code_file": "kaggle_worker.ipynb",
+    "language": "python",
+    "kernel_type": "notebook",
+    "is_private": "true",
+    "enable_gpu": "true",
+    "enable_tpu": "false",
+    "enable_internet": "true",
+    "machine_shape": "",
+    "dataset_sources": [
+        "engrtarun/dubber-video-dummy-654a31"
+    ],
+    "competition_sources": [],
+    "kernel_sources": [],
+    "model_sources": []
+}

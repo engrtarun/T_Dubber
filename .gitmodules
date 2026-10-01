@@ -1,0 +1,21 @@
+[submodule "kotaemon-gradio-theme"]
+	path = kotaemon-gradio-theme
+	url = https://github.com/lone17/kotaemon-gradio-theme.git
+[submodule "ui-buttons"]
+	path = ui-buttons
+	url = https://github.com/youneslaaroussi/ui-buttons.git
+[submodule "css-loaders"]
+	path = css-loaders
+	url = https://github.com/lukehaas/css-loaders.git
+[submodule "references/kaggle-solutions"]
+	path = references/kaggle-solutions
+	url = https://github.com/faridrashidi/kaggle-solutions
+[submodule "references/Telegram-Drive"]
+	path = references/Telegram-Drive
+	url = https://github.com/caamer20/Telegram-Drive
+[submodule "references/TGstorage"]
+	path = references/TGstorage
+	url = https://github.com/DraxonV1/TGstorage
+[submodule "references/awesome-design-md"]
+	path = references/awesome-design-md
+	url = https://github.com/VoltAgent/awesome-design-md
