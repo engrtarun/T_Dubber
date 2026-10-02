@@ -34,20 +34,7 @@
 
 <br/>
 
-<table align="center" width="100%" style="border: none;">
-  <tr>
-    <td width="50%" align="center" style="border: none;">
-      <img src="TG Web Cloud/tg_web_cloud_screenshot_1.png" width="90%" style="border-radius:10px; box-shadow: 0 4px 8px rgba(0,0,0,0.5);" />
-      <br/><br/><b>𝗖𝗹𝗼𝘂𝗱 𝗧𝗲𝗹𝗲𝗺𝗲𝘁𝗿𝘆 & 𝗦𝘁𝗼𝗿𝗮𝗴𝗲</b>
-    </td>
-    <td width="50%" align="center" style="border: none;">
-      <img src="TG Web Cloud/tg_web_cloud_screenshot_2.png" width="90%" style="border-radius:10px; box-shadow: 0 4px 8px rgba(0,0,0,0.5);" />
-      <br/><br/><b>𝗗𝘆𝗻𝗮𝗺𝗶𝗰 𝗪𝗼𝗿𝗸𝗲𝗿 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁</b>
-    </td>
-  </tr>
-</table>
 
-<br/>
 
 ## ⬢ 𝗖𝗼𝗿𝗲 𝗖𝗮𝗽𝗮𝗯𝗶𝗹𝗶𝘁𝗶𝗲𝘀
 
