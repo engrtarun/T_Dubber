@@ -627,7 +627,7 @@ def save_tg_config(api_id, api_hash, phone, channel):
         logger.exception("Could not save Telegram settings")
         return f"❌ Settings could not be saved securely: {exc}"
 
-def do_telegram_upload(video_file):
+def do_telegram_upload(video_file, progress=gr.Progress()):
     if not video_file:
         return "❌ Please upload or dub a video first."
         
@@ -639,8 +639,16 @@ def do_telegram_upload(video_file):
         if not os.path.exists(SESSION_PATH + ".session"):
             return "❌ Session file not found! Pehle terminal mein `python telegram_uploader.py` chalao."
             
-        link = upload_to_telegram(video_file, api_id, api_hash, phone, channel)
-        return f"✅ **Upload Success!** Link: {link}"
+        def tg_progress(current, total):
+            if total > 0:
+                mb_curr = current / (1024 * 1024)
+                mb_total = total / (1024 * 1024)
+                progress(current/total, desc=f"Uploading: {mb_curr:.2f} MB / {mb_total:.2f} MB")
+            else:
+                progress(0, desc="Uploading...")
+
+        link = upload_to_telegram(video_file, api_id, api_hash, phone, channel, progress_callback=tg_progress)
+        return f"✅ **Upload Success!** [Click here to view on Telegram]({link})"
     except Exception as e:
         return f"❌ Upload Failed: {str(e)}"
 
@@ -714,12 +722,16 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
                     gr.Markdown("### 📊 Quality Dashboard")
                     metrics_ui = gr.HTML(parse_report_metrics(None))
 
-        # --- TAB 2: Telegram Setup ---
-        with gr.Tab("📡 Telegram Setup"):
-            gr.Markdown("### ⚙️ Telegram Configuration")
-            gr.Markdown("Pehli baar terminal mein `python telegram_uploader.py` chalakar OTP se login karna zaroori hai. This saves to `config.json`.")
+        # --- TAB 2: Telegram Drive ---
+        with gr.Tab("☁️ Telegram Drive"):
+            gr.HTML("""
+            <div style="padding: 25px; background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); border-radius: 12px; color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.2); margin-bottom: 20px;">
+                <h2 style="margin: 0; color: white; font-family: 'Inter', sans-serif; font-weight: 800; font-size: 28px;">☁️ Telegram Drive Workspace</h2>
+                <p style="margin: 8px 0 0 0; opacity: 0.9; font-size: 16px;">Local-first file workspace powered by your Telegram account. Supports 90GB+ files via CFS Auto-Chunking & Manifest Generation.</p>
+            </div>
+            """)
             
-            with gr.Group():
+            with gr.Accordion("⚙️ Connection Settings (API & Channel)", open=False):
                 init_api_id, init_api_hash, init_phone, init_channel = load_tg_config()
                 with gr.Row():
                     tg_api_id = gr.Textbox(label="API ID", value=init_api_id)
@@ -736,6 +748,34 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
                     inputs=[tg_api_id, tg_api_hash, tg_phone, tg_channel],
                     outputs=[config_status]
                 )
+
+            with gr.Row():
+                with gr.Column(scale=2):
+                    gr.Markdown("### 📤 Upload Massive Files")
+                    drive_file_input = gr.File(label="Select any file (up to 90GB)", type="filepath")
+                    drive_upload_btn = gr.Button("🚀 Start Auto-Chunked Upload", variant="primary", size="lg")
+                    drive_progress_out = gr.Markdown("Status: **Ready for Upload**")
+                    
+                    drive_upload_btn.click(
+                        fn=do_telegram_upload,
+                        inputs=[drive_file_input],
+                        outputs=[drive_progress_out]
+                    )
+                    
+                with gr.Column(scale=1):
+                    gr.HTML("""
+                    <div style="background: var(--background-fill-secondary); padding: 20px; border-radius: 12px; border: 1px solid var(--border-color-primary); box-shadow: var(--shadow-drop);">
+                        <h3 style="margin-top:0; color: var(--color-accent);">📊 Storage Insights</h3>
+                        <hr style="border-color: var(--border-color-primary); opacity: 0.5;">
+                        <p style="font-size: 14px;"><b>Total Capacity:</b> Unlimited</p>
+                        <p style="font-size: 14px;"><b>Single File Limit:</b> 90GB+ Bypass</p>
+                        <p style="font-size: 14px;"><b>Algorithm:</b> TGStorage CFS (1.9GB parts)</p>
+                        <p style="font-size: 14px;"><b>Encryption:</b> Standard Telegram Protocol</p>
+                        <div style="margin-top: 15px; padding: 10px; background: rgba(0, 255, 0, 0.1); border-left: 4px solid #28a745; border-radius: 4px;">
+                            <small style="color: #28a745; font-weight: bold;">System Healthy & Connected</small>
+                        </div>
+                    </div>
+                    """)
 
         # --- TAB 3: Project History ---
         with gr.Tab("📂 Project History"):

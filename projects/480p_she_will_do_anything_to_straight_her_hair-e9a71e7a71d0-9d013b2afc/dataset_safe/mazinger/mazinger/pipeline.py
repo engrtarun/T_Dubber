@@ -359,7 +359,7 @@ class MazingerDubber:
             if voice_script and os.path.isfile(voice_script):
                 with open(voice_script, encoding="utf-8") as fh:
                     ref_text = fh.read().strip()
-            else:
+            elif voice_script:
                 ref_text = voice_script.strip()
 
         # -- Keep the voice so single segments can be re-dubbed later ------

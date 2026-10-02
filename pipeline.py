@@ -17,17 +17,19 @@ local_kaggle_dir = os.path.join(APP_DIR, "kaggle_paperWork")
 os.environ["KAGGLE_CONFIG_DIR"] = local_kaggle_dir
 
 def run_cmd(cmd):
-    """
-    Accepts either a string or a list. 
-    If list, shell=False is used for safe execution with spaces in paths.
-    """
+    """Run a subprocess with UTF-8-safe output capture on Windows and Linux."""
+    child_env = os.environ.copy()
+    child_env["PYTHONIOENCODING"] = "utf-8"
+    child_env["PYTHONUTF8"] = "1"
     if isinstance(cmd, list):
         print(f"Executing command list: {cmd}")
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    else:
-        print(f"Executing command string: {cmd}")
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    return result
+        return subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=child_env
+        )
+    print(f"Executing command string: {cmd}")
+    return subprocess.run(
+        cmd, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=child_env
+    )
 
 def sanitize_name(name):
     """Replaces spaces and invalid characters with underscores."""
@@ -108,6 +110,12 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
         target_upload_path = video_path
         
     shutil.copy(target_upload_path, os.path.join(dataset_dir, video_filename))
+
+    # Pass the UI's selected target through the versioned input dataset. The
+    # worker must not silently dub every project into a hard-coded language.
+    job_config_path = os.path.join(dataset_dir, "dub_job.json")
+    with open(job_config_path, "w", encoding="utf-8") as config_file:
+        json.dump({"target_language": target_lang}, config_file, ensure_ascii=False, indent=2)
     
     # Task 3: Ensure no .git directory in dataset folder
     git_dir = os.path.join(dataset_dir, ".git")
@@ -249,7 +257,7 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
             
     worker_url = f"https://www.kaggle.com/code/{kernel_id}"
     yield f"[STAGE:4] 🔗 Kaggle Worker URL: {worker_url}\n"
-    yield "[STAGE:4] ⬇️ First run downloads vLLM and the Homura model; model setup may take up to 15 minutes. Keep Kaggle Notebook Internet enabled.\n"
+    yield "[STAGE:4] ⬇️ First run downloads vLLM and Homura-2B; setup may take up to 20 minutes. Keep Kaggle Notebook Internet enabled.\n"
     for kernel_attempt in range(2):
         yield "[STAGE:4] 💡 If downloads fail, open the worker URL and enable Internet in Kaggle Notebook Settings.\n"
         yield f"[STAGE:4] 🔥 Pushing execution code to Kaggle GPU Worker ({kernel_id}) [Attempt {kernel_attempt+1}]...\n"
@@ -353,6 +361,9 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
     mp4_files = [f for f in glob.glob(os.path.join(project_dir, "*.mp4")) if os.path.basename(f) != original_video_basename]
     
     if mp4_files and os.path.getsize(mp4_files[0]) > 0:
+        stale_error_log = os.path.join(project_dir, "error_log.txt")
+        if os.path.isfile(stale_error_log):
+            os.remove(stale_error_log)
         yield f"[STAGE:7] 🎉 Pipeline finished successfully! Video saved at {os.path.basename(mp4_files[0])} and report saved locally."
     else:
         # Worker said 'complete' but output is missing — this is NOT a success.

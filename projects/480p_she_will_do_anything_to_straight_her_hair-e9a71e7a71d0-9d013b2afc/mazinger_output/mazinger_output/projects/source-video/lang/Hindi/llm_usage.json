@@ -1,0 +1,26 @@
+[
+  {
+    "stage": "thumbnails",
+    "model": "IndexTeam/Index-Homura-2B",
+    "input_tokens": 303,
+    "output_tokens": 29
+  },
+  {
+    "stage": "describe",
+    "model": "IndexTeam/Index-Homura-2B",
+    "input_tokens": 635,
+    "output_tokens": 10
+  },
+  {
+    "stage": "translate",
+    "model": "IndexTeam/Index-Homura-2B",
+    "input_tokens": 1161,
+    "output_tokens": 44
+  },
+  {
+    "stage": "translate",
+    "model": "IndexTeam/Index-Homura-2B",
+    "input_tokens": 1161,
+    "output_tokens": 41
+  }
+]

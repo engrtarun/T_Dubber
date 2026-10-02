@@ -710,7 +710,7 @@ def translate_srt(
             resp = client.chat.completions.create(
                 model=llm_model, temperature=0.3, messages=msgs,
                 top_p=0.9,
-                num_predict=8000,
+                num_predict=int(os.environ.get("MAZINGER_LLM_MAX_OUTPUT_TOKENS", "8000")),
             )
             if usage_tracker is not None:
                 usage_tracker.record("translate", llm_model, resp)
@@ -868,7 +868,7 @@ def translate_chunk(
     resp = client.chat.completions.create(
         model=llm_model, temperature=0.3, messages=msgs,
         top_p=0.9,
-        num_predict=8000,
+        num_predict=int(os.environ.get("MAZINGER_LLM_MAX_OUTPUT_TOKENS", "8000")),
     )
     if usage_tracker is not None:
         usage_tracker.record("translate", llm_model, resp)
