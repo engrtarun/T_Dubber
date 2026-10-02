@@ -5,11 +5,15 @@ import subprocess
 import shutil
 import re
 import uuid
+import hashlib
 import glob
-import datetime
+import zipfile
+from pathlib import Path
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Force Kaggle CLI to use the local folder containing kaggle.json
-local_kaggle_dir = os.path.abspath("kaggle_paperWork")
+local_kaggle_dir = os.path.join(APP_DIR, "kaggle_paperWork")
 os.environ["KAGGLE_CONFIG_DIR"] = local_kaggle_dir
 
 def run_cmd(cmd):
@@ -19,7 +23,7 @@ def run_cmd(cmd):
     """
     if isinstance(cmd, list):
         print(f"Executing command list: {cmd}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     else:
         print(f"Executing command string: {cmd}")
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
@@ -54,17 +58,21 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
         yield f"[STAGE:1] ❌ Error reading kaggle.json: {e}\n"
         return
     
-    timestamp = int(time.time())
     unique_id = uuid.uuid4().hex[:6]
-    
-    safe_video_name = sanitize_name(os.path.basename(video_path).split('.')[0])
-    dataset_name = sanitize_name(f"dubber-video-{safe_video_name}")[:35] + f"-{unique_id}"
-    dataset_name = dataset_name.lower().replace("_", "-") 
+    # Reuse one private dataset so normal jobs create versions instead of
+    # repeatedly calling Kaggle's less reliable CreateDataset endpoint.
+    install_key = hashlib.sha256(os.path.abspath(APP_DIR).encode("utf-8")).hexdigest()[:8]
+    dataset_slug = f"dubber-video-{install_key}"
+    dataset_title = f"Dubber Input {install_key}"
+    dataset_id = f"{KAGGLE_USERNAME}/{dataset_slug}"
     
     dataset_dir = os.path.join(project_dir, "dataset_safe")
     os.makedirs(dataset_dir, exist_ok=True)
     
-    video_filename = os.path.basename(video_path)
+    video_filename = "source_video" + (Path(video_path).suffix.lower() or ".mp4")
+    # A stable filename lets dataset versions replace the previous input cleanly.
+    for old_video in Path(dataset_dir).glob("source_video.*"):
+        old_video.unlink()
     
     # Task 3: Auto-Compression
     file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
@@ -90,7 +98,8 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
         
         if os.path.exists(compressed_video_path) and os.path.getsize(compressed_video_path) > 0:
             target_upload_path = compressed_video_path
-            video_filename = os.path.basename(compressed_video_path)
+            video_filename = "source_video.mp4"
+            # Keep the stable dataset filename across versions.
             yield "[STAGE:1] ✅ Compression successful.\n"
         else:
             yield "[STAGE:1] ⚠️ Compression failed. Proceeding with original video.\n"
@@ -108,7 +117,7 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
     yield "[STAGE:2] 📦 Creating Dataset structure...\n"
     
     # Add the local mazinger source code to the dataset for offline installation
-    mazinger_src = os.path.abspath("mazinger")
+    mazinger_src = os.path.join(APP_DIR, "mazinger")
     if os.path.exists(mazinger_src):
         shutil.copytree(
             mazinger_src, 
@@ -116,62 +125,99 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
             ignore=shutil.ignore_patterns(".git"),
             dirs_exist_ok=True
         )
+    bundled_mazinger = os.path.join(dataset_dir, "mazinger", "pyproject.toml")
+    if not os.path.isfile(bundled_mazinger):
+        yield "[STAGE:2] ❌ Local Mazinger source was not copied into the Kaggle dataset; refusing to upload a broken worker input.\n"
+        return
+    # Kaggle CLI's datasets create defaults to --dir-mode skip, so nested
+    # directories are not uploaded. Keep an explicit ZIP at the dataset root.
+    mazinger_archive = os.path.join(dataset_dir, "mazinger_source.zip")
+    if os.path.exists(mazinger_archive):
+        os.remove(mazinger_archive)
+    with zipfile.ZipFile(mazinger_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for source_file in Path(mazinger_src).rglob("*"):
+            relative_path = source_file.relative_to(mazinger_src)
+            if not source_file.is_file() or any(
+                part in {".git", "__pycache__"} for part in relative_path.parts
+            ):
+                continue
+            archive.write(source_file, relative_path.as_posix())
+    yield (
+        f"[STAGE:2] ✅ Bundled Mazinger source as root-level archive "
+        f"({os.path.getsize(mazinger_archive):,} bytes).\n"
+    )
         
-    init_cmd = ["python", "-m", "kaggle", "datasets", "init", "-p", dataset_dir]
-    yield f"[STAGE:2] Executing: {' '.join(init_cmd)}\n"
-    run_cmd(init_cmd)
-    
     meta_path = os.path.join(dataset_dir, "dataset-metadata.json")
-    if os.path.exists(meta_path):
-        with open(meta_path, "r") as f:
-            meta = json.load(f)
-        meta["id"] = f"{KAGGLE_USERNAME}/{dataset_name}"
-        meta["title"] = dataset_name
-        with open(meta_path, "w") as f:
-            json.dump(meta, f, indent=4)
-            
-    # Task 2: Check for dataset existence (duplicate check)
-    check_cmd = ["python", "-m", "kaggle", "datasets", "status", f"{KAGGLE_USERNAME}/{dataset_name}"]
-    res_check = run_cmd(check_cmd)
-    if "ready" in res_check.stdout.lower() or res_check.returncode == 0:
-        dataset_name += f"-{int(time.time())}"
-        yield f"[STAGE:2] ⚠️ Dataset name existed! Changed to {dataset_name}\n"
-        with open(meta_path, "r") as f:
-            meta = json.load(f)
-        meta["id"] = f"{KAGGLE_USERNAME}/{dataset_name}"
-        meta["title"] = dataset_name
-        with open(meta_path, "w") as f:
-            json.dump(meta, f, indent=4)
-            
-    yield f"[STAGE:3] ☁️ Uploading video to Kaggle (Dataset: {dataset_name}). This might take a while...\n"
-    create_cmd = ["python", "-m", "kaggle", "datasets", "create", "-p", dataset_dir]
-    
-    # Task 1: Retry Logic
-    max_retries = 3
+    if not os.path.isfile(meta_path):
+        init_cmd = ["python", "-m", "kaggle", "datasets", "init", "-p", dataset_dir]
+        yield f"[STAGE:2] Executing: {' '.join(init_cmd)}\n"
+        init_result = run_cmd(init_cmd)
+        if init_result.returncode != 0:
+            yield f"[STAGE:2] ❌ Could not initialize dataset metadata:\n{init_result.stderr or init_result.stdout}\n"
+            return
+    with open(meta_path, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+    meta["id"] = dataset_id
+    meta["title"] = dataset_title
+    meta["licenses"] = [{"name": "CC0-1.0"}]
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+
+    yield f"[STAGE:3] ☁️ Uploading video to reusable Kaggle dataset ({dataset_id})...\n"
+    status_cmd = ["python", "-m", "kaggle", "datasets", "status", dataset_id]
+    status_result = run_cmd(status_cmd)
+    dataset_exists = status_result.returncode == 0
+    if dataset_exists:
+        yield "[STAGE:3] 📚 Existing dataset found; uploading a new version.\n"
+        upload_cmd = ["python", "-m", "kaggle", "datasets", "version", "-p", dataset_dir, "-m", f"Dubbing input {unique_id}"]
+    else:
+        yield "[STAGE:3] 🆕 Dataset not found; creating it once.\n"
+        upload_cmd = ["python", "-m", "kaggle", "datasets", "create", "-p", dataset_dir]
+
     upload_success = False
+    max_retries = 4
+    last_result = None
     for attempt in range(max_retries):
-        yield f"[STAGE:3] Executing Upload (Attempt {attempt+1}/{max_retries})...\n"
-        res = run_cmd(create_cmd)
-        if res.returncode == 0:
+        yield f"[STAGE:3] Executing upload (Attempt {attempt + 1}/{max_retries})...\n"
+        last_result = run_cmd(upload_cmd)
+        if last_result.returncode == 0:
             upload_success = True
             break
-        elif "500" in res.stderr or "500" in res.stdout or attempt < max_retries - 1:
-            yield f"[STAGE:3] ⚠️ Upload failed (Possible 500 Error). Retrying in 60 seconds...\n"
-            time.sleep(60)
-        else:
+
+        # Kaggle may return a server error after accepting the create request.
+        # Check the stable ID before retrying or switching to a version upload.
+        status_result = run_cmd(status_cmd)
+        status_text = (status_result.stdout + "\n" + status_result.stderr).lower()
+        if status_result.returncode == 0 and any(word in status_text for word in ("ready", "complete", "processing")):
+            if not dataset_exists:
+                dataset_exists = True
+                yield "[STAGE:3] ✅ Kaggle confirms the dataset was created despite the upload response; continuing with it.\n"
+            upload_success = True
             break
-            
+        if not dataset_exists and attempt < max_retries - 1:
+            # A create that did not commit can be retried; a duplicate response
+            # on the next pass falls through to status detection above.
+            pass
+        elif attempt < max_retries - 1:
+            upload_cmd = ["python", "-m", "kaggle", "datasets", "version", "-p", dataset_dir, "-m", f"Dubbing input {unique_id}"]
+        if attempt < max_retries - 1:
+            delay = 15 * (2 ** attempt)
+            yield f"[STAGE:3] ⚠️ Kaggle upload failed ({(last_result.stderr or last_result.stdout).strip()[-500:]}); checking again in {delay}s.\n"
+            time.sleep(delay)
+
     if not upload_success:
-        yield f"[STAGE:3] ❌ Error uploading dataset after {max_retries} attempts:\n{res.stderr}\n"
+        error_text = (last_result.stderr or last_result.stdout or "No error details returned.").strip()
+        yield f"[STAGE:3] ❌ Dataset upload failed after {max_retries} attempts:\n{error_text}\n"
+        yield "[STAGE:3] Kaggle did not confirm that the dataset exists. Check Kaggle service/account status, then retry; this run did not submit a worker.\n"
         return
-        
+
     yield "[STAGE:3] ✅ Upload complete.\n"
     
     # Push Kaggle Notebook (The Worker)
     kernel_dir = os.path.join(project_dir, "kernel_safe")
     os.makedirs(kernel_dir, exist_ok=True)
     
-    shutil.copy("kaggle_worker.ipynb", os.path.join(kernel_dir, "kaggle_worker.ipynb"))
+    shutil.copy(os.path.join(APP_DIR, "kaggle_worker.ipynb"), os.path.join(kernel_dir, "kaggle_worker.ipynb"))
     
     yield "[STAGE:4] ⚙️ Initializing Kaggle Worker Kernel...\n"
     k_init_cmd = ["python", "-m", "kaggle", "kernels", "init", "-p", kernel_dir]
@@ -179,29 +225,33 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
     run_cmd(k_init_cmd)
     
     kmeta_path = os.path.join(kernel_dir, "kernel-metadata.json")
-    clean_movie = re.sub(r'[^a-z0-9]', '', safe_video_name.lower())[:15] or "vid"
-    time_str = datetime.datetime.now().strftime("%d%b%y-%H%M").lower()
-    kernel_id = f"{KAGGLE_USERNAME}/dubber-worker-{time_str}"
+    # Keep one private notebook so its configuration persists between video runs.
+    kernel_slug = "dubber-worker-homura"
+    kernel_id = f"{KAGGLE_USERNAME}/{kernel_slug}"
     
     if os.path.exists(kmeta_path):
         with open(kmeta_path, "r") as f:
             kmeta = json.load(f)
         kmeta["id"] = kernel_id
-        kmeta["title"] = f"Dubber Worker {time_str}"
+        kmeta["title"] = "Dubber Worker Homura"
         kmeta["code_file"] = "kaggle_worker.ipynb"
         kmeta["language"] = "python"
         kmeta["kernel_type"] = "notebook"
         kmeta["is_private"] = "true"
         kmeta["enable_gpu"] = "true"
-        kmeta["dataset_sources"] = [f"{KAGGLE_USERNAME}/{dataset_name}"]
+        kmeta["enable_internet"] = "true"
+        kmeta["dataset_sources"] = [dataset_id]
         
         with open(kmeta_path, "w") as f:
             json.dump(kmeta, f, indent=4)
 
-    yield "[STAGE:4] ⚠️ IMPORTANT: Kaggle API notebooks have internet disabled by default (platform limitation). If the worker fails with a network error, manually open the Kaggle notebook URL and enable Internet in Settings.\n"
+    yield "[STAGE:4] ⚠️ If the worker cannot download its model, open the Kaggle notebook URL and enable Internet in Settings.\n"
             
+    worker_url = f"https://www.kaggle.com/code/{kernel_id}"
+    yield f"[STAGE:4] 🔗 Kaggle Worker URL: {worker_url}\n"
+    yield "[STAGE:4] ⬇️ First run downloads vLLM and the Homura model; model setup may take up to 15 minutes. Keep Kaggle Notebook Internet enabled.\n"
     for kernel_attempt in range(2):
-        yield "[STAGE:4] 💡 Tip: If the worker fails, manually enable Internet in Kaggle Notebook Settings.\n"
+        yield "[STAGE:4] 💡 If downloads fail, open the worker URL and enable Internet in Kaggle Notebook Settings.\n"
         yield f"[STAGE:4] 🔥 Pushing execution code to Kaggle GPU Worker ({kernel_id}) [Attempt {kernel_attempt+1}]...\n"
         k_push_cmd = ["python", "-m", "kaggle", "kernels", "push", "-p", kernel_dir]
         yield f"[STAGE:4] Executing: {' '.join(k_push_cmd)}\n"
@@ -217,8 +267,9 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
             
         yield f"[STAGE:5] ⏳ Waiting for Kaggle Worker to complete...\n"
         
-        # Task 3: 2-hour timeout
-        timeout = 2 * 60 * 60  
+        # Feature films can take several hours on a free shared GPU.
+        # Kaggle remains the hard upper bound and reports failure sooner.
+        timeout = 10 * 60 * 60
         start_time = time.time()
         
         status_cmd = ["python", "-m", "kaggle", "kernels", "status", kernel_id]
@@ -230,7 +281,7 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
         while True:
             elapsed = time.time() - start_time
             if elapsed > timeout:
-                yield "[STAGE:5] ❌ Timeout: Worker did not finish within 2 hours.\n"
+                yield "[STAGE:5] ❌ Timeout: Worker did not finish within 10 hours.\n"
                 return
                 
             res = run_cmd(status_cmd)
@@ -243,7 +294,19 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
             elif "error" in status_text or "cancel" in status_text:
                 yield "[STAGE:5] ❌ Kaggle execution failed or was cancelled!\n"
                 yield "[STAGE:5] ⬇️ Downloading Kaggle logs for debugging...\n"
-                run_cmd(["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir])
+                output_cmd = ["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir]
+                output_result = None
+                for output_attempt in range(3):
+                    if output_attempt:
+                        yield f"[STAGE:5] ⏳ Kaggle outputs are not ready; retrying log download ({output_attempt + 1}/3).\n"
+                        time.sleep(8)
+                    output_result = run_cmd(output_cmd)
+                    downloaded_logs = (
+                        os.path.isfile(os.path.join(project_dir, "error_log.txt"))
+                        or bool(glob.glob(os.path.join(project_dir, "*.log")))
+                    )
+                    if downloaded_logs:
+                        break
                 
                 error_log_path = os.path.join(project_dir, "error_log.txt")
                 err_content = ""
@@ -262,6 +325,9 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
                         kernel_failed_with_network_error = True
                 else:
                     yield f"[STAGE:5] ❌ No error log or .log file found in {project_dir}\n"
+                    if output_result and (output_result.stderr or output_result.stdout):
+                        cli_error = (output_result.stderr or output_result.stdout).strip()
+                        yield f"[STAGE:5] Kaggle output download message:\n{cli_error[-1200:]}\n"
                 break
             
             yield f"[STAGE:5] 🔄 Worker is still processing... (Elapsed: {int(elapsed/60)}m {int(elapsed%60)}s)\n"

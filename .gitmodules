@@ -19,3 +19,6 @@
 [submodule "references/awesome-design-md"]
 	path = references/awesome-design-md
 	url = https://github.com/VoltAgent/awesome-design-md
+[submodule "Index-Translate"]
+	path = Index-Translate
+	url = https://github.com/bilibili/Index-Translate.git

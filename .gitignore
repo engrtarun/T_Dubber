@@ -1,0 +1,8 @@
+__pycache__/
+projects/
+dataset_safe/
+kernel_safe/
+*.mp4
+*.png
+*.jpg
+*.jpeg

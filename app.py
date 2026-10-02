@@ -4,7 +4,20 @@ import shutil
 import glob
 import json
 import re
+import hashlib
+import html
+import logging
+import uuid
+import base64
+import ctypes
+import datetime
+from ctypes import wintypes
 import gradio as gr
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECTS_DIR = os.path.join(APP_DIR, "projects")
+CONFIG_PATH = os.path.join(APP_DIR, "config.json")
+logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------
 # UI THEME: KOTAEMON
@@ -21,7 +34,7 @@ except ImportError as e:
     custom_theme = gr.themes.Default()
 
 from pipeline import run_pipeline
-from telegram_uploader import upload_to_telegram
+from telegram_uploader import upload_to_telegram, SESSION_PATH
 
 # -------------------------------------------------------------------------
 # AI ASSISTANT & UI HELPERS
@@ -112,15 +125,26 @@ async () => {
     if (window.puter_tick_interval) clearInterval(window.puter_tick_interval);
     
     if (typeof puter === 'undefined') {
-        await new Promise(r => {
+        await new Promise(resolve => {
             let s = document.createElement('script');
             s.src = "https://js.puter.com/v2/";
-            s.onload = r;
+            s.onload = resolve;
+            s.onerror = resolve;
             document.head.appendChild(s);
         });
     }
 
+    if (typeof puter === 'undefined') {
+        var messageEl = document.getElementById("puter-message");
+        var statusEl = document.getElementById("puter-countdown");
+        if (messageEl) messageEl.textContent = "Puter assistant unavailable; check browser internet access.";
+        if (statusEl) statusEl.textContent = "Offline";
+        return;
+    }
+
     var countdown = 30;
+    window.puter_request_in_flight = window.puter_request_in_flight || false;
+    window.puter_last_successful_key = window.puter_last_successful_key || "";
 
     function updateCountdown() {
         var logBox = document.querySelector("#log_output_box textarea");
@@ -161,13 +185,24 @@ async () => {
         };
         var promptStr = promptMap[persona] || promptMap["Funny"];
         var prompt = promptStr + recentLogs;
+        var requestKey = persona + "\\n" + recentLogs;
+        if (window.puter_request_in_flight || requestKey === window.puter_last_successful_key) return;
+        window.puter_request_in_flight = true;
         
         try {
             var el = document.getElementById("puter-message");
             var countdownEl = document.getElementById("puter-countdown");
             
             if (el) {
-                el.innerHTML = '<div class="load3" style="display:inline-block"><div class="loader"></div></div><span style="color: var(--color-accent); font-weight:bold;"> Fetching AI insight...</span>';
+                el.replaceChildren();
+                var spinner = document.createElement('span');
+                spinner.className = 'load3';
+                spinner.textContent = '⏳';
+                var loading = document.createElement('span');
+                loading.style.color = 'var(--color-accent)';
+                loading.style.fontWeight = 'bold';
+                loading.textContent = ' Fetching AI insight...';
+                el.append(spinner, loading);
             }
             if (countdownEl) {
                 countdownEl.innerText = "Analyzing...";
@@ -175,24 +210,28 @@ async () => {
             
             var response = await puter.ai.chat(prompt);
             
-            countdown = 30; // Reset countdown
+            countdown = 30;
+            window.puter_last_successful_key = requestKey;
             
             if (el) {
-                el.innerHTML = "";
-                var text = (typeof response === 'object' && response.message) ? response.message.content : response.toString();
+                el.replaceChildren();
+                var text = (typeof response === 'object' && response.message) ? response.message.content : String(response);
+                text = String(text);
                 var i = 0;
                 function typeWriter() {
                     if (i >= text.length) return;
                     var ch = text[i++];
-                    if (ch === '\\n') { el.innerHTML += '<br>'; }
-                    else { el.innerHTML += ch; }
+                    if (ch === '\\n') { el.appendChild(document.createElement('br')); }
+                    else { el.appendChild(document.createTextNode(ch)); }
                     setTimeout(typeWriter, ch === '.' || ch === '!' || ch === '?' ? 30 : 10);
                 }
                 typeWriter();
             }
         } catch (e) {
             console.error("Puter Error:", e);
-            countdown = 10; // Retry sooner on error
+            countdown = 10;
+        } finally {
+            window.puter_request_in_flight = false;
         }
     }
     
@@ -213,18 +252,21 @@ def parse_report_metrics(report_path):
         with open(report_path, "r") as f:
             data = json.load(f)
             
-        html = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-top: 15px;">'
+        cards_html = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-top: 15px;">'
         for k, v in data.items():
-            label = k.replace("_", " ")
-            html += f'''
+            label = html.escape(str(k).replace("_", " "))
+            value = json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v)
+            value = html.escape(value)
+            cards_html += f'''
             <div style="background: var(--background-fill-secondary); border: 1px solid var(--border-color-primary); border-radius: 8px; text-align:center; padding:1.2rem; box-shadow: var(--shadow-drop);">
-                <div style="font-size: 26px; font-weight: 800; color: var(--color-accent);">{v}</div>
+                <div style="font-size: 26px; font-weight: 800; color: var(--color-accent);">{value}</div>
                 <div style="font-size: 13px; color: var(--body-text-color-subdued); text-transform: uppercase; letter-spacing: 1px; margin-top: 5px;">{label}</div>
             </div>
             '''
-        html += '</div>'
-        return html
-    except:
+        cards_html += '</div>'
+        return cards_html
+    except (OSError, json.JSONDecodeError, TypeError, AttributeError):
+        logger.exception("Could not render report metrics from %s", report_path)
         return '<div style="color:var(--error-text-color); text-align:center;">Failed to parse report.json</div>'
 
 
@@ -271,7 +313,7 @@ def build_beautiful_link_card(url):
     
     <div style="margin-top: 15px; padding: 20px; background: var(--background-fill-secondary); border-radius: 12px; border: 1px solid var(--border-color-primary); box-shadow: var(--shadow-drop);">
       <h3 style="margin-top:0; color:var(--body-text-color);">🔥 Active Kaggle Worker</h3>
-      <p style="color:var(--body-text-color-subdued); font-size:14px; margin-bottom: 20px;">Aapka video GPU par process ho raha hai. Agar Kaggle me internet error aaye, toh niche click karein aur Settings me <b>Internet = ON</b> karein aur restart karein.</p>
+      <p style="color:var(--body-text-color-subdued); font-size:14px; margin-bottom: 20px;">Kaggle worker ka current status <b>Live Engine Logs</b> mein dekhein. Run fail ho toh yahin par error details aur agla step dikhega.</p>
       <a href="{url}" target="_blank" class="btn-101" style="display:inline-block; text-decoration: none;">
         🚀 Open Kaggle Notebook
         <svg>
@@ -295,6 +337,65 @@ def build_beautiful_link_card(url):
 # -------------------------------------------------------------------------
 # PIPELINE EXECUTION
 # -------------------------------------------------------------------------
+
+def _fingerprint_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for block in iter(lambda: source.read(4 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _write_project_manifest(project_dir, manifest):
+    path = os.path.join(project_dir, "project.json")
+    temporary_path = path + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as target:
+        json.dump(manifest, target, ensure_ascii=False, indent=2)
+    os.replace(temporary_path, path)
+
+
+def _read_project_manifest(project_dir):
+    path = os.path.join(project_dir, "project.json")
+    try:
+        with open(path, "r", encoding="utf-8") as source:
+            return json.load(source)
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError):
+        logger.exception("Could not read project manifest: %s", path)
+        return {}
+
+
+def _manifest_file(project_dir, relative_path):
+    if not isinstance(relative_path, str) or not relative_path:
+        return None
+    path = os.path.abspath(os.path.join(project_dir, relative_path))
+    try:
+        if os.path.commonpath([os.path.abspath(project_dir), path]) != os.path.abspath(project_dir):
+            return None
+    except ValueError:
+        return None
+    return path if os.path.isfile(path) else None
+
+
+def _project_output_video(project_dir):
+    manifest = _read_project_manifest(project_dir)
+    output_video = _manifest_file(project_dir, manifest.get("output_video"))
+    if output_video:
+        return output_video
+
+    # The worker currently writes this fixed filename. Do not treat the
+    # uploaded source movie as a completed output when no manifest exists.
+    for filename in ("output.mp4", "dubbed.mp4", "final.mp4"):
+        candidate = os.path.join(project_dir, filename)
+        if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+            return candidate
+    return None
+
+
+def _project_report_path(project_dir):
+    manifest = _read_project_manifest(project_dir)
+    return _manifest_file(project_dir, manifest.get("report_file")) or os.path.join(project_dir, "report.json")
 
 def start_dubbing(video_file, target_lang, speaker_detection):
     if not video_file:
@@ -326,13 +427,30 @@ def start_dubbing(video_file, target_lang, speaker_detection):
         return
         
     movie_name = os.path.splitext(os.path.basename(video_file))[0]
-    movie_name = re.sub(r'[^A-Za-z0-9_-]', '_', movie_name.replace(' ', '_'))
-    project_dir = os.path.join("projects", movie_name)
+    movie_name = re.sub(r'[^A-Za-z0-9_-]', '_', movie_name.replace(' ', '_')).strip('_') or "movie"
+    movie_name = movie_name[:64]
+    source_fingerprint = _fingerprint_file(video_file)[:12]
+    run_id = uuid.uuid4().hex[:10]
+    project_id = f"{movie_name}-{source_fingerprint}-{run_id}"
+    project_dir = os.path.join(PROJECTS_DIR, project_id)
     os.makedirs(project_dir, exist_ok=True)
     
     persisted_video = os.path.join(project_dir, os.path.basename(video_file))
     if os.path.abspath(video_file) != os.path.abspath(persisted_video):
         shutil.copy(video_file, persisted_video)
+
+    manifest = {
+        "project_id": project_id,
+        "title": movie_name,
+        "run_id": run_id,
+        "state": "processing",
+        "source_video": os.path.basename(persisted_video),
+        "target_language": target_lang,
+        "created_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "output_video": None,
+        "report_file": None,
+    }
+    _write_project_manifest(project_dir, manifest)
     
     logs = ""
     output_video_path = None
@@ -357,14 +475,13 @@ def start_dubbing(video_file, target_lang, speaker_detection):
         logs += status_update
         
         if "Pipeline finished successfully" in status_update:
-            mp4_files = glob.glob(os.path.join(project_dir, "*.mp4"))
-            for f in mp4_files:
-                if os.path.basename(f) != os.path.basename(video_file):
-                    output_video_path = f
-                    break
-            json_files = glob.glob(os.path.join(project_dir, "report.json"))
-            if json_files:
-                output_report_path = json_files[0]
+            output_video_path = _project_output_video(project_dir)
+            report_candidate = _project_report_path(project_dir)
+            output_report_path = report_candidate if os.path.isfile(report_candidate) else None
+            manifest["state"] = "success" if output_video_path else "failed_missing_output"
+            manifest["output_video"] = os.path.relpath(output_video_path, project_dir) if output_video_path else None
+            manifest["report_file"] = os.path.relpath(output_report_path, project_dir) if output_report_path else None
+            _write_project_manifest(project_dir, manifest)
                 
         yield (
             gr.update(value=logs), 
@@ -373,47 +490,142 @@ def start_dubbing(video_file, target_lang, speaker_detection):
             gr.update(value=active_url_html)
         )
 
+    if manifest["state"] == "processing":
+        manifest["state"] = "failed"
+        _write_project_manifest(project_dir, manifest)
+
 def load_project_history():
-    projects_dir = "projects"
-    if not os.path.exists(projects_dir):
+    if not os.path.exists(PROJECTS_DIR):
         return []
-    return [d for d in os.listdir(projects_dir) if os.path.isdir(os.path.join(projects_dir, d))]
+    choices = []
+    for project_id in os.listdir(PROJECTS_DIR):
+        project_dir = os.path.join(PROJECTS_DIR, project_id)
+        if not os.path.isdir(project_dir):
+            continue
+        manifest = _read_project_manifest(project_dir)
+        title = manifest.get("title") or project_id
+        created = manifest.get("created_at", "")
+        label = f"{title} · {created or project_id} · {manifest.get('state', 'legacy')}"
+        choices.append((label, project_id))
+    return sorted(choices, key=lambda item: item[1], reverse=True)
 
 def load_project_details(project_name):
     if not project_name:
         return None, parse_report_metrics(None)
         
-    project_dir = os.path.join("projects", project_name)
-    output_video = None
-    mp4_files = glob.glob(os.path.join(project_dir, "*.mp4"))
-    if mp4_files:
-        output_video = mp4_files[-1] 
-        
-    report_path = os.path.join(project_dir, "report.json")
+    project_dir = os.path.join(PROJECTS_DIR, os.path.basename(project_name))
+    output_video = _project_output_video(project_dir)
+
+    report_path = _project_report_path(project_dir)
     if not os.path.exists(report_path):
         report_path = None
         
     return output_video, parse_report_metrics(report_path)
 
+class _DataBlob(ctypes.Structure):
+    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
+
+
+def _dpapi_transform(data, protect):
+    if os.name != "nt":
+        raise RuntimeError("Secure API-hash storage currently requires Windows DPAPI.")
+    raw = data if isinstance(data, bytes) else data.encode("utf-8")
+    buffer = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
+    source = _DataBlob(len(raw), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)))
+    destination = _DataBlob()
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    local_free = kernel32.LocalFree
+    local_free.argtypes = [ctypes.c_void_p]
+    local_free.restype = ctypes.c_void_p
+
+    if protect:
+        transform = crypt32.CryptProtectData
+        transform.argtypes = [ctypes.POINTER(_DataBlob), wintypes.LPCWSTR,
+                              ctypes.POINTER(_DataBlob), ctypes.c_void_p,
+                              ctypes.c_void_p, wintypes.DWORD,
+                              ctypes.POINTER(_DataBlob)]
+        transform.restype = wintypes.BOOL
+        succeeded = transform(ctypes.byref(source), "T_Dubber Telegram API hash",
+                              None, None, None, 0x1, ctypes.byref(destination))
+        description = None
+    else:
+        transform = crypt32.CryptUnprotectData
+        description = wintypes.LPWSTR()
+        transform.argtypes = [ctypes.POINTER(_DataBlob), ctypes.POINTER(wintypes.LPWSTR),
+                              ctypes.POINTER(_DataBlob), ctypes.c_void_p,
+                              ctypes.c_void_p, wintypes.DWORD,
+                              ctypes.POINTER(_DataBlob)]
+        transform.restype = wintypes.BOOL
+        succeeded = transform(ctypes.byref(source), ctypes.byref(description),
+                              None, None, None, 0x1, ctypes.byref(destination))
+    if not succeeded:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return ctypes.string_at(destination.pbData, destination.cbData)
+    finally:
+        local_free(ctypes.cast(destination.pbData, ctypes.c_void_p))
+        if description:
+            local_free(ctypes.cast(description, ctypes.c_void_p))
+
+
+def _protect_api_hash(api_hash):
+    if not api_hash:
+        return ""
+    encrypted = _dpapi_transform(api_hash, protect=True)
+    return "dpapi:v1:" + base64.b64encode(encrypted).decode("ascii")
+
+
+def _unprotect_api_hash(value):
+    if not value:
+        return ""
+    if not value.startswith("dpapi:v1:"):
+        raise ValueError("Telegram API hash is not stored in the protected format.")
+    encrypted = base64.b64decode(value.removeprefix("dpapi:v1:"), validate=True)
+    return _dpapi_transform(encrypted, protect=False).decode("utf-8")
+
+
+def _write_tg_config(data):
+    temporary_path = CONFIG_PATH + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as target:
+        json.dump(data, target, ensure_ascii=False, indent=2)
+    os.replace(temporary_path, CONFIG_PATH)
+
+
 def load_tg_config():
-    if os.path.exists("config.json"):
-        with open("config.json", "r") as f:
-            try:
-                data = json.load(f)
-                return data.get("api_id", ""), data.get("api_hash", ""), data.get("phone", ""), data.get("channel", "")
-            except:
-                pass
-    return "", "", "", ""
+    if not os.path.exists(CONFIG_PATH):
+        return "", "", "", ""
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as source:
+            data = json.load(source)
+        protected_hash = data.get("api_hash_protected", "")
+        if protected_hash:
+            api_hash = _unprotect_api_hash(protected_hash)
+        else:
+            # Migrate an old plaintext config as soon as it is read.
+            api_hash = data.get("api_hash", "")
+            if api_hash:
+                data["api_hash_protected"] = _protect_api_hash(api_hash)
+                data.pop("api_hash", None)
+                _write_tg_config(data)
+        return data.get("api_id", ""), api_hash, data.get("phone", ""), data.get("channel", "")
+    except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        logger.exception("Could not load Telegram settings from %s", CONFIG_PATH)
+        return "", "", "", ""
+
 
 def save_tg_config(api_id, api_hash, phone, channel):
-    with open("config.json", "w") as f:
-        json.dump({
+    try:
+        _write_tg_config({
             "api_id": api_id,
-            "api_hash": api_hash,
+            "api_hash_protected": _protect_api_hash(api_hash),
             "phone": phone,
-            "channel": channel
-        }, f)
-    return "✅ Settings saved successfully!"
+            "channel": channel,
+        })
+        return "✅ Settings saved; API hash is encrypted for this Windows account."
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.exception("Could not save Telegram settings")
+        return f"❌ Settings could not be saved securely: {exc}"
 
 def do_telegram_upload(video_file):
     if not video_file:
@@ -424,7 +636,7 @@ def do_telegram_upload(video_file):
         return "❌ Settings missing! Save configuration in the Telegram Setup tab first."
         
     try:
-        if not os.path.exists("telegram_uploader_session.session"):
+        if not os.path.exists(SESSION_PATH + ".session"):
             return "❌ Session file not found! Pehle terminal mein `python telegram_uploader.py` chalao."
             
         link = upload_to_telegram(video_file, api_id, api_hash, phone, channel)
@@ -443,13 +655,17 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
     gr.Markdown(
         """
         # 🎬 Tarun Dubber AI
-        ### Professional Cloud-GPU Accelerated Movie Dubbing Pipeline
+        ### Movie dubbing on Kaggle GPU with a local Homura translation model
         """
     )
     
     with gr.Tabs():
         # --- TAB 1: Studio Workspace ---
         with gr.Tab("🎬 Studio Workspace"):
+            gr.Markdown(
+                "**No external API key needed.** Translation runs on the Kaggle GPU with Index-Homura; "
+                "the first run may take longer while the model downloads. Your Kaggle worker link appears in the status panel."
+            )
             with gr.Row():
                 with gr.Column(scale=1):
                     with gr.Group():
@@ -464,7 +680,7 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
                 
                 with gr.Column(scale=2):
                     status_output = gr.Textbox(
-                        label="Live Engine Logs", 
+                        label="Live Progress & Kaggle Worker Link", 
                         lines=15, 
                         interactive=False, 
                         max_lines=20,

@@ -5,9 +5,12 @@ import telethon.sync
 from tg_up.client.tg_upload_client import TelegramUploadClient
 from tg_up.upload_files import File
 
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+SESSION_PATH = os.path.join(APP_DIR, "telegram_uploader_session")
+
 def upload_to_telegram(file_path, api_id, api_hash, phone, channel_username):
     # Initialize the client. This will use the existing 'telegram_uploader_session.session' file.
-    client = TelegramUploadClient('telegram_uploader_session', int(api_id), api_hash)
+    client = TelegramUploadClient(SESSION_PATH, int(api_id), api_hash)
     
     # We call start with phone so if session doesn't exist, it will prompt OTP in terminal
     client.start(phone=phone)
@@ -40,6 +43,6 @@ if __name__ == '__main__':
     channel = input("Enter your Channel Username (e.g. @tgwebcloud1): ").strip()
     
     print("\nInitializing Telegram client...")
-    client = TelegramUploadClient('telegram_uploader_session', api_id, api_hash)
+    client = TelegramUploadClient(SESSION_PATH, api_id, api_hash)
     client.start(phone=phone)
     print("Session created successfully! You can now use the UI.")

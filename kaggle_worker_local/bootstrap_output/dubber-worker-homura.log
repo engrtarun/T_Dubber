@@ -1,0 +1,97 @@
+[{"stream_name":"stderr","time":9.937909644,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
+,{"stream_name":"stderr","time":9.938040521,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
+,{"stream_name":"stderr","time":9.938049798,"data":"0.00s - to python to disable frozen modules.\n"}
+,{"stream_name":"stderr","time":9.93805505,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
+,{"stream_name":"stderr","time":10.849309029,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
+,{"stream_name":"stderr","time":10.849375283,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
+,{"stream_name":"stderr","time":10.849384503,"data":"0.00s - to python to disable frozen modules.\n"}
+,{"stream_name":"stderr","time":10.849389908,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
+,{"stream_name":"stderr","time":12.900037479,"data":"Traceback (most recent call last):\n"}
+,{"stream_name":"stderr","time":12.900067259,"data":"  File \"\u003cstring\u003e\", line 1, in \u003cmodule\u003e\n"}
+,{"stream_name":"stderr","time":12.900074464,"data":"  File \"/usr/local/lib/python3.12/dist-packages/papermill/execute.py\", line 131, in execute_notebook\n"}
+,{"stream_name":"stderr","time":12.900120649,"data":"    raise_for_execution_errors(nb, output_path)\n"}
+,{"stream_name":"stderr","time":12.900242388,"data":"  File \"/usr/local/lib/python3.12/dist-packages/papermill/execute.py\", line 251, in raise_for_execution_errors\n"}
+,{"stream_name":"stderr","time":12.900413252,"data":"    raise error\n"}
+,{"stream_name":"stderr","time":12.900883643,"data":"papermill.exceptions.PapermillExecutionError: \n"}
+,{"stream_name":"stderr","time":12.900901728000001,"data":"---------------------------------------------------------------------------\n"}
+,{"stream_name":"stderr","time":12.900919134,"data":"Exception encountered at \"In [1]\":\n"}
+,{"stream_name":"stderr","time":12.900932326,"data":"---------------------------------------------------------------------------\n"}
+,{"stream_name":"stderr","time":12.900937476,"data":"HTTPError                                 Traceback (most recent call last)\n"}
+,{"stream_name":"stderr","time":12.900942004000001,"data":"/usr/local/lib/python3.12/dist-packages/kaggle_web_client.py in make_post_request(self, data, endpoint, timeout)\n"}
+,{"stream_name":"stderr","time":12.900947081,"data":"     45         try:\n"}
+,{"stream_name":"stderr","time":12.900951589,"data":"---\u003e 46             with urllib.request.urlopen(req, timeout=timeout) as response:\n"}
+,{"stream_name":"stderr","time":12.900956649,"data":"     47                 response_json = json.loads(response.read())\n"}
+,{"stream_name":"stderr","time":12.900961499,"data":"\n"}
+,{"stream_name":"stderr","time":12.900965856,"data":"/usr/lib/python3.12/urllib/request.py in urlopen(url, data, timeout, cafile, capath, cadefault, context)\n"}
+,{"stream_name":"stderr","time":12.90097076,"data":"    214         opener = _opener\n"}
+,{"stream_name":"stderr","time":12.900975402,"data":"--\u003e 215     return opener.open(url, data, timeout)\n"}
+,{"stream_name":"stderr","time":12.900980258,"data":"    216 \n"}
+,{"stream_name":"stderr","time":12.900984694,"data":"\n"}
+,{"stream_name":"stderr","time":12.900989129,"data":"/usr/lib/python3.12/urllib/request.py in open(self, fullurl, data, timeout)\n"}
+,{"stream_name":"stderr","time":12.900994048,"data":"    520             meth = getattr(processor, meth_name)\n"}
+,{"stream_name":"stderr","time":12.900998769,"data":"--\u003e 521             response = meth(req, response)\n"}
+,{"stream_name":"stderr","time":12.901021774,"data":"    522 \n"}
+,{"stream_name":"stderr","time":12.901026636,"data":"\n"}
+,{"stream_name":"stderr","time":12.901030746,"data":"/usr/lib/python3.12/urllib/request.py in http_response(self, request, response)\n"}
+,{"stream_name":"stderr","time":12.901035417,"data":"    629         if not (200 \u003c= code \u003c 300):\n"}
+,{"stream_name":"stderr","time":12.901040189,"data":"--\u003e 630             response = self.parent.error(\n"}
+,{"stream_name":"stderr","time":12.901044683,"data":"    631                 'http', request, response, code, msg, hdrs)\n"}
+,{"stream_name":"stderr","time":12.901049451,"data":"\n"}
+,{"stream_name":"stderr","time":12.90105386,"data":"/usr/lib/python3.12/urllib/request.py in error(self, proto, *args)\n"}
+,{"stream_name":"stderr","time":12.901058632,"data":"    558             args = (dict, 'default', 'http_error_default') + orig_args\n"}
+,{"stream_name":"stderr","time":12.901063438,"data":"--\u003e 559             return self._call_chain(*args)\n"}
+,{"stream_name":"stderr","time":12.901068089,"data":"    560 \n"}
+,{"stream_name":"stderr","time":12.901072450000001,"data":"\n"}
+,{"stream_name":"stderr","time":12.901076715,"data":"/usr/lib/python3.12/urllib/request.py in _call_chain(self, chain, kind, meth_name, *args)\n"}
+,{"stream_name":"stderr","time":12.901099531,"data":"    491             func = getattr(handler, meth_name)\n"}
+,{"stream_name":"stderr","time":12.901104131,"data":"--\u003e 492             result = func(*args)\n"}
+,{"stream_name":"stderr","time":12.901108974,"data":"    493             if result is not None:\n"}
+,{"stream_name":"stderr","time":12.901112529,"data":"\n"}
+,{"stream_name":"stderr","time":12.901116846,"data":"/usr/lib/python3.12/urllib/request.py in http_error_default(self, req, fp, code, msg, hdrs)\n"}
+,{"stream_name":"stderr","time":12.901121919,"data":"    638     def http_error_default(self, req, fp, code, msg, hdrs):\n"}
+,{"stream_name":"stderr","time":12.901126393,"data":"--\u003e 639         raise HTTPError(req.full_url, code, msg, hdrs, fp)\n"}
+,{"stream_name":"stderr","time":12.901130835,"data":"    640 \n"}
+,{"stream_name":"stderr","time":12.901135353,"data":"\n"}
+,{"stream_name":"stderr","time":12.901139349,"data":"HTTPError: HTTP Error 400: Bad Request\n"}
+,{"stream_name":"stderr","time":12.901143796,"data":"\n"}
+,{"stream_name":"stderr","time":12.901148014,"data":"The above exception was the direct cause of the following exception:\n"}
+,{"stream_name":"stderr","time":12.901152696,"data":"\n"}
+,{"stream_name":"stderr","time":12.901158203,"data":"ConnectionError                           Traceback (most recent call last)\n"}
+,{"stream_name":"stderr","time":12.901163056,"data":"/tmp/ipykernel_16/1503935703.py in \u003ccell line: 0\u003e()\n"}
+,{"stream_name":"stderr","time":12.901168098,"data":"      7 try:\n"}
+,{"stream_name":"stderr","time":12.901172441,"data":"----\u003e 8     OPENAI_API_KEY = UserSecretsClient().get_secret(\"OPENAI_API_KEY\")\n"}
+,{"stream_name":"stderr","time":12.901177455,"data":"      9     if not OPENAI_API_KEY:\n"}
+,{"stream_name":"stderr","time":12.901182136,"data":"\n"}
+,{"stream_name":"stderr","time":12.901186471,"data":"/usr/local/lib/python3.12/dist-packages/kaggle_secrets.py in get_secret(self, label)\n"}
+,{"stream_name":"stderr","time":12.901191363,"data":"     63         }\n"}
+,{"stream_name":"stderr","time":12.901195771,"data":"---\u003e 64         response_json = self.web_client.make_post_request(request_body, self.GET_USER_SECRET_BY_LABEL_ENDPOINT)\n"}
+,{"stream_name":"stderr","time":12.901205143,"data":"     65         if 'secret' not in response_json:\n"}
+,{"stream_name":"stderr","time":12.901209583,"data":"\n"}
+,{"stream_name":"stderr","time":12.901214132,"data":"/usr/local/lib/python3.12/dist-packages/kaggle_web_client.py in make_post_request(self, data, endpoint, timeout)\n"}
+,{"stream_name":"stderr","time":12.901219136,"data":"     57                     'Timeout error trying to communicate with service. Please ensure internet is on.') from e\n"}
+,{"stream_name":"stderr","time":12.901224153,"data":"---\u003e 58             raise ConnectionError(\n"}
+,{"stream_name":"stderr","time":12.901228674,"data":"     59                 'Connection error trying to communicate with service.') from e\n"}
+,{"stream_name":"stderr","time":12.901233232,"data":"\n"}
+,{"stream_name":"stderr","time":12.901237658,"data":"ConnectionError: Connection error trying to communicate with service.\n"}
+,{"stream_name":"stderr","time":12.901242549,"data":"\n"}
+,{"stream_name":"stderr","time":12.901246970999999,"data":"The above exception was the direct cause of the following exception:\n"}
+,{"stream_name":"stderr","time":12.901251721,"data":"\n"}
+,{"stream_name":"stderr","time":12.901256045,"data":"RuntimeError                              Traceback (most recent call last)\n"}
+,{"stream_name":"stderr","time":12.901260931,"data":"/tmp/ipykernel_16/1503935703.py in \u003ccell line: 0\u003e()\n"}
+,{"stream_name":"stderr","time":12.901265836,"data":"     16     with open(\"/kaggle/working/report.json\", \"w\", encoding=\"utf-8\") as report_file:\n"}
+,{"stream_name":"stderr","time":12.901271281,"data":"     17         json.dump({\"Status\": \"Failed\", \"Target_Language\": \"Hindi\", \"Output_File\": \"Missing\"}, report_file)\n"}
+,{"stream_name":"stderr","time":12.901277171,"data":"---\u003e 18     raise RuntimeError(secret_message) from secret_error\n"}
+,{"stream_name":"stderr","time":12.901281983,"data":"     19 os.environ[\"OPENAI_API_KEY\"] = OPENAI_API_KEY\n"}
+,{"stream_name":"stderr","time":12.901286881,"data":"     20 os.environ[\"OPENAI_BASE_URL\"] = \"http://localhost:8000/v1\"\n"}
+,{"stream_name":"stderr","time":12.901292015,"data":"\n"}
+,{"stream_name":"stderr","time":12.901297093,"data":"RuntimeError: Kaggle Secret OPENAI_API_KEY is missing or not attached. Add it under this notebook's Add-ons \u003e Secrets.\n"}
+,{"stream_name":"stderr","time":12.901300696,"data":"\n"}
+,{"stream_name":"stderr","time":16.026015374,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":16.02611084,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":16.253457854,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":16.253490388,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":17.080966662,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to notebook\n"}
+,{"stream_name":"stderr","time":17.510194761,"data":"[NbConvertApp] Writing 21167 bytes to __notebook__.ipynb\n"}
+,{"stream_name":"stderr","time":21.018231079,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to html\n"}
+,{"stream_name":"stderr","time":22.221838787,"data":"[NbConvertApp] Writing 312776 bytes to __results__.html\n"}
+]
