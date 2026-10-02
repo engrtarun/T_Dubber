@@ -5,16 +5,30 @@ import sys
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 SESSION_PATH = os.path.join(APP_DIR, "telegram_uploader_session")
 
-class FileChunkIO:
+import io
+class FileChunkIO(io.IOBase):
     def __init__(self, filepath, offset, length, chunk_name):
+        import time
         self.filepath = filepath
         self.offset = offset
         self.length = length
         self.name = chunk_name
-        self.f = open(filepath, 'rb')
+        self.size = length
+        self._size = length
+        
+        # Retry mechanism for Windows Defender / Antivirus locks
+        max_retries = 10
+        for attempt in range(max_retries):
+            try:
+                self.f = open(filepath, 'rb')
+                break
+            except PermissionError as e:
+                if attempt == max_retries - 1:
+                    raise e
+                time.sleep(2)
+                
         self.f.seek(offset)
         self.read_bytes = 0
-        self.size = length
 
     def read(self, size=-1):
         if self.read_bytes >= self.length:
@@ -37,6 +51,9 @@ class FileChunkIO:
 
     def tell(self):
         return self.read_bytes
+
+    def __len__(self):
+        return self.length
         
     def close(self):
         self.f.close()
