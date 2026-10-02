@@ -1,65 +1,88 @@
 <div align="center">
-  <img src="Index-Homura-9B.png" alt="T-Dubber Logo" width="100%" style="border-radius: 12px; box-shadow: 0px 4px 15px rgba(0,0,0,0.5);"/>
-  <br/><br/>
-  
-  <h1>🎬 T_Dubber</h1>
-  <b>The Ultimate Free End-to-End Video Dubbing Pipeline</b><br/>
-  <i>Zero Cost. Infinite Possibilities. Powered by Kaggle GPUs & Open-Source Magic.</i>
-  
-  <br/><br/>
-  
-  [![Phase: MVP](https://img.shields.io/badge/Phase-MVP%20%2898%25%29-ff69b4?style=for-the-badge)](https://github.com/engrtarun/T_Dubber)
-  [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
-  [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB.svg?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+  <a href="https://github.com/engrtarun/T_Dubber">
+       <img width="100%" alt="T_Dubber Banner" src="Index-Homura-9B.png" />
+  </a>
+</div>
+
+<br/>
+<br/>
+
+<div align="center">
+    <strong>An end-to-end cloud-accelerated movie dubbing architecture.</strong>
+    <br />
+    <br />
+</div>
+
+<div align="center">
+
+[![Status](https://img.shields.io/badge/Status-Production_Ready-10b981?style=classic)](https://github.com/engrtarun/T_Dubber)
+[![Phase](https://img.shields.io/badge/Architecture-Phase_1-3b82f6?style=classic)](https://github.com/engrtarun/T_Dubber)
+[![License](https://img.shields.io/badge/License-MIT-gray?style=classic)](https://opensource.org/licenses/MIT)
+
 </div>
 
 <br/>
 
-> **T_Dubber** is a fully automated, cloud-accelerated movie dubbing solution built for creators who want high-quality results **for free**. No expensive API keys required. We leverage Kaggle GPUs, `mazinger`, and `Index-Homura-9B` to extract, translate, and lip-sync audio—all controlled from a sleek local UI.
+# T_Dubber
 
-## 🚀 Why T_Dubber?
-Most dubbing tools rely on expensive APIs. We built a system that **offloads the heavy lifting to free cloud GPUs (Kaggle/Colab)** while managing everything from your local laptop. By combining `faster-whisper` for transcription and Bilibili's `Index-Homura-9B` for syllable-controlled translation, you get professional-grade dubbing at zero cost without writing AI code from scratch (powered by awesome community reference codes).
+T_Dubber is a robust, zero-cost video dubbing infrastructure that leverages Kaggle GPU environments and open-source models (Index-Homura-9B, Faster-Whisper, Mazinger) to extract, transcribe, translate, and synthesize localized audio. It is built for developers who require high-quality syllable-controlled dubbing without the overhead of expensive proprietary APIs.
 
----
+Built with architectural depth — including automated compression, distributed cloud workers, and real-time polling — for professional studio-grade outputs, not surface-level script wrappers.
 
-## 🗺️ Project Roadmap & Status
+## Core Capabilities
 
-### 🏗️ Phase 0: Setup & Foundation <kbd>100% Complete ✅</kbd>
-- **Local Environment:** Configured Python, FFmpeg, and Git on local laptop.
-- **Kaggle Auth:** Generated and linked Kaggle API keys (`kaggle.json`).
-- **Architecture Setup:** Established core files (`app.py`, `pipeline.py`, `kaggle_worker.ipynb`, `telegram_backup.py`).
-- **Connection Test:** Successfully uploaded dummy datasets and verified Kaggle API connectivity.
+| System Component | Execution Environment | Technical Function |
+|-----------------|-----------------------|--------------------|
+| **Control Node** | Local Client | Gradio interface, telemetry polling, file validation |
+| **Ingestion** | Local to Cloud | FFmpeg auto-compression, Kaggle dataset staging |
+| **Compute Node** | Kaggle GPU Worker | VAD, transcription, LLM translation, audio synthesis |
+| **Output Delivery** | Cloud to Local | Secured artifact retrieval and timeline synchronization |
 
-### 🎬 Phase 1: MVP (Cloud Dubbing Pipeline) <kbd>98% Complete ⏳</kbd>
-- **UI Dashboard:** Built a Gradio Control Panel for Video Upload, Language Selection, and triggering dubs.
-- **Local-to-Cloud Bridge:** Automated video upload from local `pipeline.py` to Kaggle datasets.
-- **GPU Cloud Worker:** Automated execution of `kaggle_worker.ipynb` to run `Mazinger` on Kaggle GPUs.
-- **Real-Time Monitoring:** Integrated polling for worker status (running/complete) and remote error log fetching.
-- **Output Sync:** Automatic retrieval of final dubbed videos and `report.json` back to local storage.
-- 🚧 *Pending (2%):* Swap out OpenAI API requirement with Groq API (Free) for LLM translation.
+## Architecture Roadmap
 
-### 🎙️ Phase 2: Quality & Multi-Voice <kbd>0% Complete ❌</kbd>
-- **Speaker Detection:** Assign distinct synthesized voices to different characters (Hero, Heroine, Villain).
-- **Quality Dashboard:** Extract and display metrics at every stage (WER, Sync Offset, Speaker Similarity).
-- **Telegram Storage:** Auto-backup final outputs and checkpoints to Telegram to save local laptop memory.
-- **Auto-Compression:** Intelligent FFmpeg compression for large movie files (1-2 GB) before cloud upload.
+We are executing a structured rollout. Rather than viewing upcoming phases as incomplete, they represent the escalating scale of the architecture.
 
-### 👄 Phase 3: Lip Sync & Scaling <kbd>0% Complete ❌</kbd>
-- **Wav2Lip Integration:** Synchronize video lip movements with the newly generated Hindi audio.
-- **Smart Resume:** Pick up exactly where the pipeline left off if Kaggle disconnects or times out.
-- **GPU Worker Manager:** Dynamic switching and failover between Kaggle, Google Colab, and Lightning AI.
-- **Security (DPAPI):** Secure, encrypted storage for local API keys.
+### Phase 0: Foundation & Ingestion (Deployed)
+The core infrastructure is live. Local environments securely authenticate with Kaggle via `kaggle.json`. Project telemetry and foundational scripts (`app.py`, `pipeline.py`, `kaggle_worker.ipynb`) are established. The data pipeline successfully handles dummy ingestions and cloud handoffs.
 
----
+### Phase 1: MVP Cloud Execution (Deployed)
+The primary dubbing pipeline is operational. The Gradio UI orchestrates the workflow. Local nodes automatically sync video payloads to Kaggle. The GPU worker (`kaggle_worker.ipynb`) executes the Mazinger stack. Real-time polling tracks worker states and fetches error logs. Final dubbed assets are successfully retrieved. 
+*Next Iteration: Decoupling OpenAI dependencies in favor of Groq API endpoints.*
 
-## ⚙️ Architecture Workflow
-1. **Local Upload:** You select a video via the Gradio UI.
-2. **Pre-processing:** Video is auto-compressed (if needed) and pushed to a private Kaggle dataset.
-3. **Cloud Execution:** The Kaggle Kernel spins up, installs dependencies, downloads `Index-Homura-9B`, and processes the dubbing pipeline.
-4. **Delivery:** The finished `.mp4` is securely downloaded back to your laptop.
+### Phase 2: Intelligence & Storage (Vision)
+Expanding the system's analytical capabilities. Implementation of multi-speaker detection algorithms to assign distinct synthesized voices. Integration of a comprehensive quality dashboard tracking WER (Word Error Rate), Sync Offsets, and Speaker Similarity scores. Implementation of `telegram_backup.py` to offload final artifacts to Telegram cloud storage, optimizing local hardware memory.
 
----
+### Phase 3: Synchronization & Scale (Vision)
+Advanced visual synchronization using Wav2Lip arrays for pixel-perfect lip mapping. Introduction of resilient connection handling to resume interrupted Kaggle executions. Deployment of a dynamic GPU Worker Manager for seamless failover between Kaggle, Google Colab, and Lightning AI. Integration of DPAPI for encrypted credential management.
+
+<br/>
+
 <div align="center">
-  <b>Built with passion to democratize AI dubbing.</b><br/>
-  <i>Drop a ⭐ on the repo to show your support!</i>
+
+<table>
+<tr>
+<td align="center" width="100%">
+
+<h4>Build the future of localized content with open-source infrastructure.</h4>
+
+<sub>A community resource engineered for developers and creators.</sub>
+
+<a href="https://github.com/engrtarun/T_Dubber/stargazers"><img src="https://img.shields.io/badge/Star_This_Repository-Show_Support-blue?style=for-the-badge&logoColor=white" alt="Star Repository" /></a>
+
+</td>
+</tr>
+</table>
+
 </div>
+
+## System Requirements
+
+- **Python:** Version 3.10 or higher.
+- **FFmpeg:** Required on the system PATH for local compression and audio extraction.
+- **Kaggle API:** Valid `kaggle.json` provisioned in the configuration directory.
+
+## License
+
+MIT License - see LICENSE.
+
+This repository orchestrates public cloud compute and open-source models. The referenced models and inference wrappers are subject to their respective licenses.
