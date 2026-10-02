@@ -1,0 +1,37 @@
+[{"stream_name":"stderr","time":6.472020088,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
+,{"stream_name":"stderr","time":6.472064076,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
+,{"stream_name":"stderr","time":6.47206898,"data":"0.00s - to python to disable frozen modules.\n"}
+,{"stream_name":"stderr","time":6.472072386,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
+,{"stream_name":"stderr","time":7.026995357,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
+,{"stream_name":"stderr","time":7.027020782,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
+,{"stream_name":"stderr","time":7.027024208,"data":"0.00s - to python to disable frozen modules.\n"}
+,{"stream_name":"stderr","time":7.027026742,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
+,{"stream_name":"stderr","time":8.26352702,"data":"Traceback (most recent call last):\n"}
+,{"stream_name":"stderr","time":8.263550958,"data":"  File \"\u003cstring\u003e\", line 1, in \u003cmodule\u003e\n"}
+,{"stream_name":"stderr","time":8.263556167,"data":"  File \"/usr/local/lib/python3.12/dist-packages/papermill/execute.py\", line 131, in execute_notebook\n"}
+,{"stream_name":"stderr","time":8.26368902,"data":"    raise_for_execution_errors(nb, output_path)\n"}
+,{"stream_name":"stderr","time":8.263702985,"data":"  File \"/usr/local/lib/python3.12/dist-packages/papermill/execute.py\", line 251, in raise_for_execution_errors\n"}
+,{"stream_name":"stderr","time":8.263895381,"data":"    raise error\n"}
+,{"stream_name":"stderr","time":8.264041723,"data":"papermill.exceptions.PapermillExecutionError: \n"}
+,{"stream_name":"stderr","time":8.264049599,"data":"---------------------------------------------------------------------------\n"}
+,{"stream_name":"stderr","time":8.264053151,"data":"Exception encountered at \"In [1]\":\n"}
+,{"stream_name":"stderr","time":8.264056969,"data":"---------------------------------------------------------------------------\n"}
+,{"stream_name":"stderr","time":8.26406138,"data":"FileNotFoundError                         Traceback (most recent call last)\n"}
+,{"stream_name":"stderr","time":8.26406586,"data":"/tmp/ipykernel_24/2167848434.py in \u003ccell line: 0\u003e()\n"}
+,{"stream_name":"stderr","time":8.264069365,"data":"     14 mazinger_candidates = [p.parent for p in mazinger_candidates if p.parent.name.lower() == \"mazinger\"]\n"}
+,{"stream_name":"stderr","time":8.264072891,"data":"     15 if not mazinger_candidates:\n"}
+,{"stream_name":"stderr","time":8.264076206,"data":"---\u003e 16     raise FileNotFoundError(\"Bundled Mazinger source is missing from the Kaggle dataset. Re-upload the dataset containing mazinger/pyproject.toml.\")\n"}
+,{"stream_name":"stderr","time":8.264080136,"data":"     17 mazinger_path = str(mazinger_candidates[0])\n"}
+,{"stream_name":"stderr","time":8.264083273,"data":"     18 print(f\"Installing bundled Mazinger source: {mazinger_path}\")\n"}
+,{"stream_name":"stderr","time":8.264086793,"data":"\n"}
+,{"stream_name":"stderr","time":8.264090935,"data":"FileNotFoundError: Bundled Mazinger source is missing from the Kaggle dataset. Re-upload the dataset containing mazinger/pyproject.toml.\n"}
+,{"stream_name":"stderr","time":8.264094598,"data":"\n"}
+,{"stream_name":"stderr","time":10.294812011,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":10.294839368,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":10.435308353,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":10.435332067,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":11.061912765,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to notebook\n"}
+,{"stream_name":"stderr","time":11.352902642,"data":"[NbConvertApp] Writing 10726 bytes to __notebook__.ipynb\n"}
+,{"stream_name":"stderr","time":13.711348207,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to html\n"}
+,{"stream_name":"stderr","time":14.499978972,"data":"[NbConvertApp] Writing 298303 bytes to __results__.html\n"}
+]

@@ -1,0 +1,37 @@
+[{"stream_name":"stderr","time":8.695220296,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
+,{"stream_name":"stderr","time":8.695286753,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
+,{"stream_name":"stderr","time":8.695293123999999,"data":"0.00s - to python to disable frozen modules.\n"}
+,{"stream_name":"stderr","time":8.695296864,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
+,{"stream_name":"stderr","time":9.385388302,"data":"0.00s - Debugger warning: It seems that frozen modules are being used, which may\n"}
+,{"stream_name":"stderr","time":9.385420262,"data":"0.00s - make the debugger miss breakpoints. Please pass -Xfrozen_modules=off\n"}
+,{"stream_name":"stderr","time":9.38542752,"data":"0.00s - to python to disable frozen modules.\n"}
+,{"stream_name":"stderr","time":9.385434881,"data":"0.00s - Note: Debugging will proceed. Set PYDEVD_DISABLE_FILE_VALIDATION=1 to disable this validation.\n"}
+,{"stream_name":"stderr","time":10.951882054,"data":"Traceback (most recent call last):\n"}
+,{"stream_name":"stderr","time":10.951910791,"data":"  File \"\u003cstring\u003e\", line 1, in \u003cmodule\u003e\n"}
+,{"stream_name":"stderr","time":10.951916033,"data":"  File \"/usr/local/lib/python3.12/dist-packages/papermill/execute.py\", line 131, in execute_notebook\n"}
+,{"stream_name":"stderr","time":10.952896081,"data":"    raise_for_execution_errors(nb, output_path)\n"}
+,{"stream_name":"stderr","time":10.952914374,"data":"  File \"/usr/local/lib/python3.12/dist-packages/papermill/execute.py\", line 251, in raise_for_execution_errors\n"}
+,{"stream_name":"stderr","time":10.952919003,"data":"    raise error\n"}
+,{"stream_name":"stderr","time":10.952922404,"data":"papermill.exceptions.PapermillExecutionError: \n"}
+,{"stream_name":"stderr","time":10.952926215,"data":"---------------------------------------------------------------------------\n"}
+,{"stream_name":"stderr","time":10.952930154,"data":"Exception encountered at \"In [1]\":\n"}
+,{"stream_name":"stderr","time":10.952934475,"data":"---------------------------------------------------------------------------\n"}
+,{"stream_name":"stderr","time":10.952938637,"data":"FileNotFoundError                         Traceback (most recent call last)\n"}
+,{"stream_name":"stderr","time":10.952943091,"data":"/tmp/ipykernel_23/647143336.py in \u003ccell line: 0\u003e()\n"}
+,{"stream_name":"stderr","time":10.95294717,"data":"     18 archive_candidates = list(Path(\"/kaggle/input\").rglob(\"mazinger_source.zip\"))\n"}
+,{"stream_name":"stderr","time":10.952951059,"data":"     19 if not archive_candidates:\n"}
+,{"stream_name":"stderr","time":10.952954531,"data":"---\u003e 20     raise FileNotFoundError(\"mazinger_source.zip is missing from Kaggle input; re-upload the dataset with the root-level source archive.\")\n"}
+,{"stream_name":"stderr","time":10.952958673,"data":"     21 mazinger_extract_path = Path(\"/kaggle/working/mazinger\")\n"}
+,{"stream_name":"stderr","time":10.95296243,"data":"     22 if mazinger_extract_path.exists():\n"}
+,{"stream_name":"stderr","time":10.952966036,"data":"\n"}
+,{"stream_name":"stderr","time":10.952969359,"data":"FileNotFoundError: mazinger_source.zip is missing from Kaggle input; re-upload the dataset with the root-level source archive.\n"}
+,{"stream_name":"stderr","time":10.952973099,"data":"\n"}
+,{"stream_name":"stderr","time":13.438701132,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":13.438746475,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":13.61610352,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":13.616128555,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":14.28712329,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to notebook\n"}
+,{"stream_name":"stderr","time":14.610551434,"data":"[NbConvertApp] Writing 14942 bytes to __notebook__.ipynb\n"}
+,{"stream_name":"stderr","time":17.193664008,"data":"[NbConvertApp] Converting notebook __notebook__.ipynb to html\n"}
+,{"stream_name":"stderr","time":18.110672458,"data":"[NbConvertApp] Writing 317072 bytes to __results__.html\n"}
+]
