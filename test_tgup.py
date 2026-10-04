@@ -32,7 +32,8 @@ import telegram_uploader as tu  # noqa: E402
 
 
 def _binary():
-    return tgup_bridge.find_binary()
+    cmd = tgup_bridge.get_base_command()
+    return cmd if cmd else None
 
 
 def _needs_binary(test):
@@ -115,7 +116,7 @@ class TestPlanAgreement(unittest.TestCase):
             chunk = 1024 * 1024
             proc = subprocess.run(
                 [
-                    str(binary), "plan",
+                    *binary, "plan",
                     "--file", str(source),
                     "--chunk-size", str(chunk),
                     "--plan-out", str(Path(work) / "plan.json"),
@@ -155,7 +156,7 @@ class TestPlanAgreement(unittest.TestCase):
             chunk = 1024 * 1024
             proc = subprocess.run(
                 [
-                    str(binary), "plan",
+                    *binary, "plan",
                     "--file", str(source),
                     "--chunk-size", str(chunk),
                     "--plan-out", str(Path(work) / "plan.json"),

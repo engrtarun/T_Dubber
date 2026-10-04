@@ -276,37 +276,15 @@ def should_use_go_upload(
     use_go: bool = True,
 ) -> tuple:
     """Decide the upload engine. Returns (use_go_bool, reason_str).
-
-    SPEED POLICY (keep in sync with telegram_uploader._try_go_upload):
-    * tgup IFF: caller opted in AND binary runnable AND the file splits into
-      >=2 parts AND the channel is public (@name). Multiple parts are the whole
-      point: one part is one connection, and one connection is the rate the
-      Telethon path already achieves.
-    * Everything else -> Telethon: correctness first, speed second.
+    
+    Now attempts Go for ALL files unconditionally as requested,
+    falling back to Telethon only if Go fails.
     """
     if not use_go:
         return False, "caller did not opt into the Go path (use_go=False)"
     if not binary_runnable():
         return False, "tgup is not runnable here; Telethon fallback"
-    try:
-        total = size if size > 0 else 0
-        parts = len(plan_parts_py(total, chunk_size)) if total else 0
-    except ValueError:
-        return False, "unplannable file; Telethon will raise the real error"
-    if parts < GO_UPLOAD_MIN_PARTS:
-        return False, (
-            f"single-part file ({parts} part); Telethon, because one part is "
-            "one connection and gains nothing"
-        )
-    name = (channel or "").strip().lstrip("@")
-    if not name or not _PUBLIC_CHANNEL_RE.fullmatch(name):
-        return False, "private/numeric channel; Telethon owns tg:// links"
-    if thumbnail_path:
-        return False, "thumbnail requested; Telethon owns the artwork path"
-    return True, (
-        f"multi-part ({parts} parts) public channel; "
-        f"tgup over {GO_UPLOAD_DEFAULT_CONCURRENCY} connections"
-    )
+    return True, "Attempting Go upload unconditionally for maximum speed"
 
 
 def upload_via_go(

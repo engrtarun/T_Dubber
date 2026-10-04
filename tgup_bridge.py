@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Callable
 
 ROOT = Path(__file__).resolve().parent
-TGUP_DIR = ROOT / "tgup"
+TGUP_DIR = ROOT
 BINARY_NAMES = ("tgup.exe", "tgup")
 
 
@@ -49,8 +49,8 @@ BINARY_NAMES = ("tgup.exe", "tgup")
 # ---------------------------------------------------------------------------
 
 
-def find_binary() -> Path | None:
-    """Return the tgup binary if one is present and runnable, else None.
+def get_base_command() -> list[str]:
+    """Return the base command to run tgup.
 
     TGUP_BIN is authoritative when set. Falling back to a search would mean an
     override could point at nothing and still silently run a different binary,
@@ -59,32 +59,49 @@ def find_binary() -> Path | None:
     override = os.environ.get("TGUP_BIN", "").strip()
     if override:
         candidate = Path(override)
-        return candidate if candidate.is_file() else None
+        if candidate.is_file():
+            return [str(candidate)]
 
     for name in BINARY_NAMES:
         candidate = TGUP_DIR / name
         if candidate.is_file():
-            return candidate
+            return [str(candidate)]
         local = ROOT / name
         if local.is_file():
-            return local
+            return [str(local)]
 
     on_path = shutil.which("tgup")
-    return Path(on_path) if on_path else None
+    if on_path:
+        return [str(on_path)]
+    
+    # Fallback to Go source if no exe is found (useful for web apps)
+    go_bin = shutil.which("go")
+    if not go_bin:
+        local_go = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Go" / "bin" / "go.exe"
+        if local_go.is_file():
+            go_bin = str(local_go)
+            
+    if go_bin and (ROOT / "main.go").is_file():
+        return [go_bin, "run", "."]
+        
+    return []
 
 
-def binary_version(binary: Path) -> str | None:
+def binary_version(base_cmd: list[str]) -> str | None:
     """Ask the binary for its help text; None means it will not run.
 
     Both streams are read because a usage error prints to stderr and an
     explicit "help" prints to stdout. Only a real run failure yields None.
     """
+    if not base_cmd:
+        return None
     try:
         proc = subprocess.run(
-            [str(binary), "help"],
+            [*base_cmd, "help"],
             capture_output=True,
             timeout=30,
             creationflags=_no_window(),
+            cwd=str(ROOT),
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -214,16 +231,16 @@ def run_command(
     This is the version the app uses: it must not block the UI thread, and it
     must surface progress while a multi-gigabyte transfer is in flight.
     """
-    binary = find_binary()
-    if binary is None:
-        raise FileNotFoundError("tgup binary not found")
+    base_cmd = get_base_command()
+    if not base_cmd:
+        raise FileNotFoundError("tgup binary or go source not found")
 
     proc = subprocess.Popen(
-        [str(binary), *args],
+        [*base_cmd, *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         stdin=subprocess.PIPE if stdin_text else subprocess.DEVNULL,
-        cwd=str(binary.parent),
+        cwd=str(ROOT),
         creationflags=_no_window(),
     )
     if stdin_text:
@@ -304,8 +321,7 @@ def upload(
         "upload",
         "--file", str(file),
         "--channel", channel,
-        "--api-id", str(api_id),
-        "--api-hash", api_hash,
+        "--credentials-stdin",
         "--concurrency", str(max(1, int(concurrency))),
     ]
     if phone:
@@ -321,8 +337,9 @@ def upload(
     if thumbnail:
         args += ["--thumbnail", str(thumbnail)]
 
+    creds_json = json.dumps({"api_id": api_id, "api_hash": api_hash}) + "\n"
     returncode, _stdout, human = run_command(
-        args, on_progress=on_progress, on_human=on_human
+        args, on_progress=on_progress, stdin_text=creds_json, on_human=on_human
     )
     return _result_from(result_out, returncode, human, on_human)
 
@@ -343,8 +360,7 @@ def fetch(
         "fetch",
         "--link", link,
         "--dest", str(dest),
-        "--api-id", str(api_id),
-        "--api-hash", api_hash,
+        "--credentials-stdin",
         "--concurrency", str(max(1, int(concurrency))),
     ]
     if not verify:
@@ -352,7 +368,8 @@ def fetch(
     if result_out:
         args += ["--result-out", str(result_out)]
 
-    returncode, _stdout, human = run_command(args, on_progress=on_progress)
+    creds_json = json.dumps({"api_id": api_id, "api_hash": api_hash}) + "\n"
+    returncode, _stdout, human = run_command(args, on_progress=on_progress, stdin_text=creds_json)
     return _result_from(result_out, returncode, human, None)
 
 
@@ -371,8 +388,7 @@ def bench(
     args = [
         "bench",
         "--channel", channel,
-        "--api-id", str(api_id),
-        "--api-hash", api_hash,
+        "--credentials-stdin",
         "--size", str(max(1, int(size_mb)) * 1024 * 1024),
         "--concurrency", levels,
     ]
@@ -381,7 +397,8 @@ def bench(
     if result_out:
         args += ["--result-out", str(result_out)]
 
-    returncode, _stdout, human = run_command(args, on_human=on_human)
+    creds_json = json.dumps({"api_id": api_id, "api_hash": api_hash}) + "\n"
+    returncode, _stdout, human = run_command(args, on_human=on_human, stdin_text=creds_json)
     return {
         "ok": returncode == 0,
         "returncode": returncode,
@@ -440,9 +457,9 @@ def _last_error(human: str) -> str:
 def check() -> dict:
     """Report whether the Go path can run at all. Used by doctor.ps1 and the UI."""
     override = os.environ.get("TGUP_BIN", "").strip()
-    binary = find_binary()
-    if binary is None:
-        reason = "no tgup binary; build it with tgup\\build.ps1"
+    base_cmd = get_base_command()
+    if not base_cmd:
+        reason = "no tgup binary or go source found"
         if override:
             # An override pointing at nothing is a different mistake from a
             # missing build, and worth saying so rather than falling back.
@@ -450,24 +467,24 @@ def check() -> dict:
         return {
             "runnable": False,
             "reason": reason,
-            "expected_at": str(TGUP_DIR / BINARY_NAMES[0]),
+            "expected_at": str(ROOT / BINARY_NAMES[0]),
         }
-    version = binary_version(binary)
+    version = binary_version(base_cmd)
     if version is None:
         return {
             "runnable": False,
             "reason": (
-                f"{binary.name} exists but will not start; Smart App Control may be "
+                f"{base_cmd} exists but will not start; Smart App Control may be "
                 "blocking it"
             ),
-            "path": str(binary),
+            "path": str(base_cmd),
         }
     return {
         "runnable": True,
-        "path": str(binary),
+        "path": str(base_cmd),
         "session": session_ready(),
         "needs_login": needs_login(),
-        "size_mb": round(binary.stat().st_size / (1024 * 1024), 2),
+        "size_mb": round(Path(base_cmd[-1]).stat().st_size / (1024 * 1024), 2) if Path(base_cmd[-1]).exists() else 0.0,
     }
 
 

@@ -795,13 +795,12 @@ def upload_file_detailed(
     chunk_size: int = CHUNK_SIZE,
     on_journal=None,
     thumbnail_path: str = None,
-    # SPEED POLICY params (AI/dev note): app.py passes use_go=True so
-    # multi-part public-channel files go parallel via Go; library default
-    # stays False so tests/scripts keep the Telethon path unless they opt in.
+    # SPEED POLICY params (AI/dev note):
+    # As per user request, Go path is now the default everywhere for max speed.
     # go_concurrency 3..8 maps straight to `tgup upload --concurrency`.
     # For machine-level speed see boost.ps1 / start-boosted.ps1 (Windows).
-    use_go: bool = False,
-    go_concurrency: int = 3,
+    use_go: bool = True,
+    go_concurrency: int = 0, # 0 means auto-tune
 ) -> dict:
     """Upload any file to Telegram and return a full archival description.
 
@@ -821,6 +820,9 @@ def upload_file_detailed(
     video it is metadata rather than a visible image; it still travels with the
     file and is preserved on download.
     """
+    if go_concurrency <= 0:
+        import auto_tuner
+        go_concurrency = auto_tuner.get_optimal_concurrency(channel, api_id, api_hash)
     from telethon.errors import FloodWaitError
     from telethon.tl.types import DocumentAttributeFilename
 

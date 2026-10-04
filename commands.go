@@ -11,30 +11,48 @@ import (
 	"time"
 )
 
-// credentialFlags are shared by every command that talks to Telegram.
 type credentialFlags struct {
-	apiID   *int
-	apiHash *string
-	phone   *string
+	apiID          *int
+	apiHash        *string
+	phone          *string
+	stdinCreds     *bool
 }
 
 func addCredentialFlags(fs *flag.FlagSet) credentialFlags {
 	return credentialFlags{
-		apiID:   fs.Int("api-id", 0, "Telegram API id"),
-		apiHash: fs.String("api-hash", "", "Telegram API hash"),
-		phone:   fs.String("phone", "", "phone with country code; first run only"),
+		apiID:      fs.Int("api-id", 0, "Telegram API id"),
+		apiHash:    fs.String("api-hash", "", "Telegram API hash"),
+		phone:      fs.String("phone", "", "phone with country code; first run only"),
+		stdinCreds: fs.Bool("credentials-stdin", false, "Read api_id and api_hash from stdin as JSON"),
 	}
 }
 
 func (c credentialFlags) resolve(out *credentials) error {
-	if c.apiID == nil || *c.apiID == 0 {
-		return errors.New("--api-id is required")
+	if c.stdinCreds != nil && *c.stdinCreds {
+		reader := bufio.NewReader(os.Stdin)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read credentials from stdin: %v", err)
+		}
+		var creds struct {
+			APIID   int    `json:"api_id"`
+			APIHash string `json:"api_hash"`
+		}
+		if err := jsonUnmarshal([]byte(line), &creds); err != nil {
+			return fmt.Errorf("failed to parse JSON credentials: %v", err)
+		}
+		out.apiID = creds.APIID
+		out.apiHash = creds.APIHash
+	} else {
+		if c.apiID == nil || *c.apiID == 0 {
+			return errors.New("--api-id is required or use --credentials-stdin")
+		}
+		if c.apiHash == nil || *c.apiHash == "" {
+			return errors.New("--api-hash is required or use --credentials-stdin")
+		}
+		out.apiID = *c.apiID
+		out.apiHash = *c.apiHash
 	}
-	if c.apiHash == nil || *c.apiHash == "" {
-		return errors.New("--api-hash is required")
-	}
-	out.apiID = *c.apiID
-	out.apiHash = *c.apiHash
 	out.phone = ""
 	if c.phone != nil {
 		out.phone = strings.TrimSpace(*c.phone)
