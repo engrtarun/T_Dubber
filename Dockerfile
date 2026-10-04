@@ -81,6 +81,25 @@ ARG UBUNTU_TAG=22.04
 #   metadata for docker.io/library/rust:stable-bookworm: not found
 ARG RUST_PACK_IMAGE=rust:1-bookworm
 
+# Rust target triple for the static musl builds. Defined ONCE because the name
+# appears in the `rustup target add`, in three `cargo build --target`, in three
+# output paths and in six `COPY --from` paths across two stages -- twelve places
+# that all have to agree. Spelling it out literally in twelve places is exactly
+# how a wrong name survives this long.
+#
+# The triple is `x86_64-unknown-linux-musl`, NOT `x86_64-unknown-musl`. There is
+# no bare `x86_64-unknown-musl` target in Rust at all. Checked against the
+# official channel manifests for 1.60, 1.70, 1.75, 1.80, 1.85, 1.90, 1.95, 1.98
+# and 1.99: the short form is absent from every one, and
+# `x86_64-unknown-linux-musl` is present with `available = true` in every one.
+# rustup reports that as a missing target rather than as a typo:
+#
+#   error: toolchain '1.99.0-x86_64-unknown-linux-gnu' does not support target
+#   'x86_64-unknown-musl'
+#
+# So this stage has never built, in any release, for the whole life of the file.
+ARG MUSL_TARGET=x86_64-unknown-linux-musl
+
 # Ubuntu 22.04 is deliberate, not lazy: its default python3 IS 3.10, which is
 # byte-for-byte the interpreter your Kaggle kernel already uses. Matching it
 # removes an entire class of "works on Kaggle, breaks locally" failures.
@@ -131,7 +150,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 # .srt/.ass) and havaldar_core (the telemetry daemon) build in ONE stage, so
 # the cargo registry cache is fetched once and shared by all three crates.
 #
-# WHY x86_64-unknown-musl, NOT the default gnu target: Kaggle kernels run
+# WHY the musl target, NOT the default gnu target: Kaggle kernels run
 # Ubuntu 22.04 (glibc 2.35) while this builder is Debian bookworm (glibc
 # 2.36). A gnu-target binary linked here would demand GLIBC_2.36 symbols on
 # Kaggle and die with a version error -- discovered 20 minutes into a run.
@@ -143,10 +162,17 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 # needs to compile its C amalgamation against musl headers.
 FROM ${RUST_PACK_IMAGE} AS rust-arsenal
 
+# Re-declared inside the stage: an ARG defined before the first FROM is in scope
+# only for FROM lines. Without this line ${MUSL_TARGET} would expand to nothing,
+# `cargo build --target ""` would quietly fall back to the host target, and the
+# build would sail on until it failed much later as a baffling static-link
+# assertion instead of erroring here.
+ARG MUSL_TARGET
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
         musl-tools \
     && rm -rf /var/lib/apt/lists/* \
-    && rustup target add x86_64-unknown-musl
+    && rustup target add "${MUSL_TARGET}"
 
 WORKDIR /arsenal
 
@@ -159,26 +185,35 @@ WORKDIR /arsenal
 #   2. `ldd` FAILS on it. ldd exits 0 for a dynamic binary and 1 for a
 #      static one, so `if ldd ...; then exit 1; fi` is the static assertion.
 # Wrong link = red build HERE, not a dead session on Kaggle.
+#
+# `timeout` bounds assertion 2. Modern glibc ldd inspects the ELF headers rather
+# than executing the file, so a static binary just yields "not a dynamic
+# executable" and exit 1. But ldd works by setting LD_TRACE_LOADED_OBJECTS and
+# running the binary, and only the dynamic loader intercepts that -- so on a
+# genuinely static binary the program would really run. For havaldar_core that
+# means booting the telemetry daemon inside a Docker build and hanging until the
+# job times out. The timeout caps that worst case at 10 seconds instead of 45
+# minutes and does not change the pass/fail outcome either way.
 COPY stitcher/ ./stitcher/
 RUN cd stitcher && \
-    cargo build --release --target x86_64-unknown-musl && \
-    B=./target/x86_64-unknown-musl/release/stitcher && \
+    cargo build --release --target "${MUSL_TARGET}" && \
+    B="./target/${MUSL_TARGET}/release/stitcher" && \
     "$B" 2>&1 | grep -qi "usage" && \
-    if ldd "$B" > /dev/null 2>&1; then echo "ERROR: $B is not static" >&2; exit 1; fi
+    if timeout 10 ldd "$B" > /dev/null 2>&1; then echo "ERROR: $B is not static" >&2; exit 1; fi
 
 COPY subtitle_forge/ ./subtitle_forge/
 RUN cd subtitle_forge && \
-    cargo build --release --target x86_64-unknown-musl && \
-    B=./target/x86_64-unknown-musl/release/subtitle_forge && \
+    cargo build --release --target "${MUSL_TARGET}" && \
+    B="./target/${MUSL_TARGET}/release/subtitle_forge" && \
     "$B" --version | grep -qi "subtitle_forge" && \
-    if ldd "$B" > /dev/null 2>&1; then echo "ERROR: $B is not static" >&2; exit 1; fi
+    if timeout 10 ldd "$B" > /dev/null 2>&1; then echo "ERROR: $B is not static" >&2; exit 1; fi
 
 COPY havaldar_core/ ./havaldar_core/
 RUN cd havaldar_core && \
-    cargo build --release --target x86_64-unknown-musl && \
-    B=./target/x86_64-unknown-musl/release/havaldar_core && \
+    cargo build --release --target "${MUSL_TARGET}" && \
+    B="./target/${MUSL_TARGET}/release/havaldar_core" && \
     "$B" --help | grep -qi "havaldar" && \
-    if ldd "$B" > /dev/null 2>&1; then echo "ERROR: $B is not static" >&2; exit 1; fi
+    if timeout 10 ldd "$B" > /dev/null 2>&1; then echo "ERROR: $B is not static" >&2; exit 1; fi
 
 
 # =============================================================================
@@ -210,7 +245,7 @@ RUN CXX="$(command -v g++-12 || command -v g++ || echo g++)" \
         -DCMAKE_EXE_LINKER_FLAGS="-static" && \
     cmake --build build --config Release -j"$(nproc)" && \
     ./build/normalizer --help 2>&1 | grep -q "Usage" && \
-    if ldd build/normalizer > /dev/null 2>&1; then \
+    if timeout 10 ldd build/normalizer > /dev/null 2>&1; then \
         echo "ERROR: build/normalizer is not static" >&2; exit 1; \
     fi
 
@@ -287,6 +322,11 @@ print('cuda available:', torch.cuda.is_available())"
 # STAGE 3 — "MISSION CONTROL"  ·  the runtime you actually ship
 # =============================================================================
 FROM ${CUDA_IMAGE} AS runtime
+
+# Needed by the three COPY lines below, which pull the musl binaries out of
+# rust-arsenal by target directory name. Without this the paths would expand to
+# /arsenal/stitcher/target//release/stitcher and fail with a bare "not found".
+ARG MUSL_TARGET
 
 LABEL org.opencontainers.image.title="T_Dubber Worker" \
       org.opencontainers.image.description="AI video dubbing pipeline worker: vLLM + faster-whisper + FFmpeg + native arsenal (tgup, stitcher, normalizer, subtitle_forge, havaldar_core)" \
@@ -456,9 +496,9 @@ RUN groupadd -g ${APP_UID} ${APP_USER} 2>/dev/null || true && \
 # Nothing here -- and nothing in the HEALTHCHECK below -- ever EXECUTES
 # havaldar_core: starting it would boot the telemetry HTTP daemon. Presence
 # checks only.
-COPY --from=rust-arsenal /arsenal/stitcher/target/x86_64-unknown-musl/release/stitcher            /usr/local/bin/stitcher
-COPY --from=rust-arsenal /arsenal/subtitle_forge/target/x86_64-unknown-musl/release/subtitle_forge /usr/local/bin/subtitle_forge
-COPY --from=rust-arsenal /arsenal/havaldar_core/target/x86_64-unknown-musl/release/havaldar_core   /usr/local/bin/havaldar_core
+COPY --from=rust-arsenal /arsenal/stitcher/target/${MUSL_TARGET}/release/stitcher            /usr/local/bin/stitcher
+COPY --from=rust-arsenal /arsenal/subtitle_forge/target/${MUSL_TARGET}/release/subtitle_forge /usr/local/bin/subtitle_forge
+COPY --from=rust-arsenal /arsenal/havaldar_core/target/${MUSL_TARGET}/release/havaldar_core   /usr/local/bin/havaldar_core
 COPY --from=cpp-forge    /src/build/normalizer                            /usr/local/bin/normalizer
 RUN chmod 755 /usr/local/bin/stitcher /usr/local/bin/normalizer \
               /usr/local/bin/subtitle_forge /usr/local/bin/havaldar_core
@@ -523,12 +563,16 @@ CMD ["bash"]
 # telemetry daemon -- so every invocation below is the non-starting one.
 FROM debian:bookworm-slim AS pack-manifest
 
+# Same reason as in the runtime stage: the COPY paths below name the musl target
+# directory.
+ARG MUSL_TARGET
+
 WORKDIR /pack/bin
 
 COPY --from=go-transporter /out/tgup                                         ./tgup
-COPY --from=rust-arsenal   /arsenal/stitcher/target/x86_64-unknown-musl/release/stitcher            ./stitcher
-COPY --from=rust-arsenal   /arsenal/subtitle_forge/target/x86_64-unknown-musl/release/subtitle_forge ./subtitle_forge
-COPY --from=rust-arsenal   /arsenal/havaldar_core/target/x86_64-unknown-musl/release/havaldar_core   ./havaldar_core
+COPY --from=rust-arsenal   /arsenal/stitcher/target/${MUSL_TARGET}/release/stitcher            ./stitcher
+COPY --from=rust-arsenal   /arsenal/subtitle_forge/target/${MUSL_TARGET}/release/subtitle_forge ./subtitle_forge
+COPY --from=rust-arsenal   /arsenal/havaldar_core/target/${MUSL_TARGET}/release/havaldar_core   ./havaldar_core
 COPY --from=cpp-forge      /src/build/normalizer                             ./normalizer
 
 RUN set -eu; \
@@ -551,7 +595,7 @@ RUN set -eu; \
     } > /pack/MANIFEST.txt; \
     sha256sum tgup stitcher normalizer subtitle_forge havaldar_core > /pack/SHA256SUMS; \
     for b in tgup stitcher normalizer subtitle_forge havaldar_core; do \
-        if ldd "$b" > /dev/null 2>&1; then echo "ERROR: $b is not static" >&2; exit 1; fi; \
+        if timeout 10 ldd "$b" > /dev/null 2>&1; then echo "ERROR: $b is not static" >&2; exit 1; fi; \
     done; \
     cat /pack/MANIFEST.txt
 
