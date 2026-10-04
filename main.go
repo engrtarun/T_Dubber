@@ -565,7 +565,9 @@ func openPool(ctx context.Context, cred credentials, channel string, count int, 
 				if err := ensureAuthorized(ctx, client, "", in); err != nil {
 					return err
 				}
-				entry.sender = message.NewSender(tg.NewClient(client))
+				api := tg.NewClient(client)
+				entry.sender = message.NewSender(api).
+					WithUploader(newTunedUploader(api))
 				entry.peer = entry.sender.Resolve(trimAt(channel))
 				report(nil)
 				// Stay connected for as long as the caller needs it.

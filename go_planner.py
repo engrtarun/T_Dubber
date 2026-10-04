@@ -1,8 +1,9 @@
 """Bridge to the Go uploader, tgup.
 
 This is an adapter, not a second implementation. Everything real lives in
-``tgup/tgup.exe`` (built from ``tgup/*.go`` via ``tgup\\build.ps1``) and in
-``tgup_bridge.py``, which knows how to find it, run it, and read its output.
+``tgup.exe`` (built from the Go sources at the repo root via ``build.ps1``)
+and in ``tgup_bridge.py``, which knows how to find it, run it, and read its
+output.
 
 Why it exists at all, and what it is honest about
 -------------------------------------------------
@@ -54,7 +55,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tgup_bridge  # noqa: E402
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-TGUP_DIR = os.path.join(APP_DIR, "tgup")
+# tgup.exe lives at the repo root: build.ps1 runs `go build -o tgup.exe .`
+# and tgup_bridge looks for it there too. The old <root>\tgup value pointed
+# at a directory that does not exist, so writing the plan file there always
+# failed and the Go planner silently fell back to Python on every call.
+# tgup_bridge.TGUP_DIR is the same location, kept in one place.
+TGUP_DIR = str(tgup_bridge.TGUP_DIR)
 
 DEFAULT_CHUNK_SIZE = 1900 * 1024 * 1024
 
@@ -74,12 +80,25 @@ _PUBLIC_CHANNEL_RE = re.compile(r"^[A-Za-z0-9_]{4,}$")
 
 
 def go_binary() -> str:
-    """Path to tgup.exe, or "" when it is not available."""
+    """A path proving tgup is usable, or "" when it is not.
+
+    tgup_bridge.get_base_command() is the single source of truth for finding
+    tgup: TGUP_BIN override, tgup.exe next to the sources, PATH, then the
+    run_go.ps1 source conductor. The previous tgup_bridge.find_binary() call
+    no longer exists; it raised AttributeError on every use, which is why the
+    Go pre-hash cross-check never executed -- build_plan() swallowed the
+    exception and quietly fell back to Python each time.
+
+    In source-only mode the first element is powershell.exe (the conductor
+    running `go run .`), not tgup.exe. Callers that need the binary itself
+    should check tgup_bridge.BINARY_NAMES; what every caller here actually
+    asks is "can the Go planner run", and the conductor answers yes.
+    """
     override = os.environ.get("T_DUBBER_GO_BIN") or os.environ.get("TGUP_BIN")
     if override and os.path.isfile(override):
         return override
-    found = tgup_bridge.find_binary()
-    return str(found) if found else ""
+    base = tgup_bridge.get_base_command()
+    return str(base[0]) if base else ""
 
 
 def binary_present() -> bool:
@@ -98,7 +117,7 @@ def status() -> dict:
     runnable = bool(report.get("runnable"))
     reason = report.get("reason", "")
     if not present and not reason:
-        reason = "not built. Run tgup\\build.ps1, or set TGUP_BIN to a prebuilt binary."
+        reason = "not built. Run build.ps1, or set TGUP_BIN to a prebuilt binary."
     elif not runnable and "Smart App Control" not in reason:
         reason = (
             "built but blocked from running by a Windows application-control "
@@ -172,7 +191,7 @@ def build_plan_go(path: str, chunk_size: int = DEFAULT_CHUNK_SIZE) -> dict:
     """
     binary = go_binary()
     if not binary:
-        raise RuntimeError("tgup is not built. Run tgup\\build.ps1.")
+        raise RuntimeError("tgup is not built. Run build.ps1.")
     if not binary_runnable():
         raise RuntimeError(status()["reason"] or "tgup is not runnable here.")
 

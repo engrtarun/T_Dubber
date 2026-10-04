@@ -14,6 +14,9 @@ import (
 
 	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/telegram/message/styling"
+	// Aliased because this file declares the type `uploader`; an import named
+	// `uploader` would redeclare it in the package block.
+	gotdupload "github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 )
 
@@ -66,6 +69,44 @@ func newUploader(
 	}
 }
 
+// MTProto upload tuning, and why both values exist.
+//
+// gotd's defaults are 128 KB parts with one goroutine per upload. Its
+// automatic part-size growth only runs when the total size is known, and
+// tgup streams byte ranges through FromReader, whose total is -1 -- so growth
+// never happened. A 1.85 GB part therefore went out as ~15,200 sequential
+// upload.saveBigFilePart RPCs, one at a time. At a 110 ms round trip a single
+// 128 KB RPC in flight is a hard ceiling near 1.16 MB/s per connection: the
+// exact throttle the architecture review measured. Bigger parts remove the
+// RPC count; threads remove the one-at-a-time wait.
+const (
+	// uploadPartSize is Telegram's maximum part size (it divides
+	// constant.UploadMaxPartSize exactly), hence the fewest RPCs that can
+	// carry the bytes: 4x fewer than the default for the same file.
+	uploadPartSize = 512 * 1024
+
+	// uploadThreads is how many parts of one file may be in flight on one
+	// connection. Three keeps ~1.5 MB on the wire per connection, well above
+	// the ~404 KB bandwidth-delay product of the target link, while staying
+	// inside Telegram's per-method flood limits.
+	uploadThreads = 3
+)
+
+// newTunedUploader builds the gotd Uploader every tgup connection sends
+// with. main.go installs it once per connection, at sender creation, so the
+// configuration is fixed before any upload can race with it.
+//
+// FromReader stays the read path deliberately: gotd's bigLoop reads the
+// stream sequentially in one goroutine and only the RPC dispatch fans out to
+// the worker goroutines, so io.LimitReader over a single file handle cannot
+// interleave, and memory stays a pool of partSize buffers rather than the
+// whole part.
+func newTunedUploader(raw *tg.Client) *gotdupload.Uploader {
+	return gotdupload.NewUploader(raw).
+		WithPartSize(uploadPartSize).
+		WithThreads(uploadThreads)
+}
+
 // sendPart streams one part to Telegram over one connection.
 //
 // The promise callback is gotd/td's documented way to send a file: it receives
@@ -102,7 +143,17 @@ func (u *uploader) sendPart(ctx context.Context, c *conn, p Part) (StoredPart, e
 
 	promise := message.Upload(
 		func(ctx context.Context, up message.Uploader) (tg.InputFileClass, error) {
-			// LimitReader keeps the stream inside this part's byte range.
+			// LimitReader keeps the stream inside this part's byte range, so
+			// memory stays flat no matter how large the part is. The
+			// chunking itself is the connection's configured uploader
+			// (newTunedUploader): 512 KB parts, three in flight, instead of
+			// gotd's 128 KB/one-at-a-time defaults.
+			//
+			// FromPath is deliberately NOT used: this part is a byte range
+			// of a split file, and FromPath would re-send the entire source
+			// file for every part -- N times the bytes and the wrong
+			// content per message. It would only be correct for a file with
+			// exactly one part.
 			return up.FromReader(ctx, entry.Name, io.LimitReader(file, p.Size))
 		})
 
