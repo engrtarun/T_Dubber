@@ -24,9 +24,14 @@ on:
     paths-ignore:
       # Rebuilding five binaries because a README changed wastes runner minutes.
       # Remove this filter if you would rather always rebuild.
+      #
+      # NOTE: this workflow file must NOT be listed here. Listing it means a
+      # commit whose ONLY change is build-native.yml does not trigger a run at
+      # all -- so fixing the workflow appears to do nothing, which is a very
+      # confusing way to spend an afternoon. Doc-only paths are safe to skip;
+      # the workflow's own definition is not.
       - '**/*.md'
       - 'docs/**'
-      - '.github/workflows/build-native.yml'
   pull_request:
     paths:
       - 'stitcher/**'
@@ -107,32 +112,40 @@ jobs:
             havaldar_core -> target
           cache-on-failure: true
 
-      # Cargo.lock is what makes a build reproducible. The .gitignore in
-      # stitcher/ and subtitle_forge/ currently excludes it, so each run resolves
-      # dependencies fresh -- a new patch release can change behaviour or fail
-      # the build with no commit to blame. Generating it here makes the cached
-      # builds deterministic even while it is ignored. Commit the lockfiles and
-      # this step becomes a no-op you can delete.
-      - name: Resolve dependency lockfiles
+      # Cargo.lock is committed for all three crates now, so there is nothing to
+      # resolve. The `cargo generate-lockfile` step that used to live here was
+      # actively harmful, not merely redundant: it re-resolves every dependency
+      # to the newest version each manifest allows, throwing away the pinned
+      # versions the lockfile exists to protect. A new patch release on any
+      # transitive dependency could then change behaviour, or break the build,
+      # with no commit to blame.
+      #
+      # This step just proves the lockfiles are present, so their absence fails
+      # with a clear message instead of a confusing `--locked` error later.
+      - name: Verify committed lockfiles
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           foreach ($crate in @("stitcher", "subtitle_forge", "havaldar_core")) {
-            Push-Location $crate
-            Write-Host "--- cargo generate-lockfile: $crate"
-            cargo generate-lockfile
-            Pop-Location
+            $lock = Join-Path $crate "Cargo.lock"
+            if (-not (Test-Path $lock)) {
+              throw "$lock is missing. It must be committed -- the crates are built with --locked."
+            }
+            Write-Host ("  ok: {0} ({1:N0} bytes)" -f $lock, (Get-Item $lock).Length)
           }
 
-      # `--locked` is deliberately NOT used: the lockfiles are generated in the
-      # previous step and are not committed, so --locked fails on a fresh crate.
+      # `--locked` is now safe and correct: it turns "someone edited a manifest
+      # without re-locking" into a loud failure at the crate that caused it,
+      # rather than a silent dependency upgrade inside a build that is supposed
+      # to be reproducible.
       - name: Build Rust binaries (release)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           foreach ($crate in @("stitcher", "subtitle_forge", "havaldar_core")) {
             Push-Location $crate
-            Write-Host "=== cargo build --release: $crate ==="
-            cargo build --release
+            Write-Host "=== cargo build --release --locked: $crate ==="
+            cargo build --release --locked
             $exe = "target\release\$crate.exe"
             # A missing binary is otherwise a silent failure: the upload step
             # would just ship three files instead of four.
@@ -147,21 +160,67 @@ jobs:
       # missing DLL, a bad subsystem -- passes the build and then fails on your
       # machine, where you have no toolchain to debug it with.
       #
+      # These three tools do NOT share a command-line interface, so a uniform
+      # `--version` probe is wrong for one of them:
+      #
+      #   subtitle_forge, havaldar_core   clap 4 derive -- `--version` works
+      #   stitcher                        NO clap dependency at all; it
+      #                                   hand-rolls env::args() and treats
+      #                                   EVERY argument as a timeline path, so
+      #                                   `--version` makes it try to open a
+      #                                   file literally named "--version" and
+      #                                   exit 2.
+      #
+      # That is not cosmetic. GitHub appends `exit $LASTEXITCODE` to every pwsh
+      # step, so the last native command's exit code becomes the step's. Bare
+      # `stitcher` prints its usage line and exits 1 BY DESIGN, so probing every
+      # binary with `--version` and then running stitcher bare failed this step
+      # with "Process completed with exit code 1" while all three binaries were
+      # in fact built and working.
+      #
+      # So the assertion is per-tool, and the step ends with an explicit exit 0.
+      #
       # `stitcher` is invoked bare on purpose: running `havaldar_core` bare
       # would BOOT its telemetry daemon and hang the job.
       - name: Smoke-test the Rust binaries
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
-          foreach ($crate in @("stitcher", "subtitle_forge", "havaldar_core")) {
-            $exe = ".\$crate\target\release\$crate.exe"
-            Write-Host "=== $exe --version ==="
-            & $exe --version
-            Write-Host "  exit code: $LASTEXITCODE"
+
+          $probes = @(
+            @{ crate = "stitcher";       argv = @();          expect = "usage" },
+            @{ crate = "subtitle_forge"; argv = @("--version"); expect = "subtitle_forge" },
+            @{ crate = "havaldar_core";  argv = @("--version"); expect = "havaldar_core" }
+          )
+
+          $problems = @()
+          foreach ($probe in $probes) {
+            $exe = ".\$($probe.crate)\target\release\$($probe.crate).exe"
+            if (-not (Test-Path $exe)) {
+              $problems += "$($probe.crate): not found at $exe"
+              continue
+            }
+
+            # Splat with @argv, NOT @(...): `@(...)` is an array subexpression
+            # and would pass the array itself as one single argument.
+            $argv = $probe.argv
+            $out = (& $exe @argv 2>&1 | Out-String)
+            $code = $LASTEXITCODE
+            $say = (($out -split "\r?\n") | Where-Object { $_.Trim() } | Select-Object -First 1)
+
+            Write-Host ("  {0,-16} exit={1,-4} {2}" -f $probe.crate, $code, $say)
+
+            if ($out -notmatch [regex]::Escape($probe.expect)) {
+              $problems += "$($probe.crate): expected '$($probe.expect)' in its output"
+            }
           }
-          Write-Host "=== stitcher.exe with no args (expect a usage line) ==="
-          & .\stitcher\target\release\stitcher.exe 2>&1 | Select-Object -First 5
-          Write-Host "  exit code: $LASTEXITCODE"
+
+          if ($problems.Count -gt 0) {
+            foreach ($p in $problems) { Write-Host "SMOKE FAIL: $p" }
+            throw "Rust binary smoke test failed ($($problems.Count) problem(s))"
+          }
+          Write-Host "all three Rust binaries start and identify themselves"
+          exit 0
 
       - name: Build normalizer.exe with CMake
         shell: pwsh
@@ -175,12 +234,40 @@ jobs:
           if (-not (Test-Path $exe)) { throw "normalizer.exe was not produced" }
           Write-Host ("  -> {0}  {1:N0} bytes" -f $exe, (Get-Item $exe).Length)
 
+      # Same trap as the Rust smoke test, one step further down. A usage error is the
+      # CORRECT response to no arguments, so a non-zero exit here is expected
+      # behaviour rather than a build failure -- but the bare native call was the
+      # last command in the step, so GitHub's appended `exit $LASTEXITCODE` turned
+      # normalizer's own usage exit code into a red step. Assert that it starts
+      # and prints usage instead, then exit 0 explicitly.
+      #
+      # The path is resolved rather than hardcoded: the build step above already
+      # has to cope with a single-config generator writing straight to build/ and
+      # a multi-config one writing build/$cfg/, so this must accept both.
       - name: Smoke-test normalizer.exe
         shell: pwsh
         run: |
-          Write-Host "=== normalizer.exe (no args: expect usage, exit 2) ==="
-          & .\cpp_accelerator\build\Release\normalizer.exe
-          Write-Host "  exit code: $LASTEXITCODE"
+          $ErrorActionPreference = "Continue"
+
+          $candidates = @(
+            "cpp_accelerator\build\Release\normalizer.exe",
+            "cpp_accelerator\build\normalizer.exe"
+          )
+          $exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $exe) {
+            throw "normalizer.exe not found. Looked in: $($candidates -join ', ')"
+          }
+
+          $out = (& $exe 2>&1 | Out-String)
+          $code = $LASTEXITCODE
+          $say = (($out -split "\r?\n") | Where-Object { $_.Trim() } | Select-Object -First 1)
+          Write-Host ("  normalizer       exit={0,-4} {1}" -f $code, $say)
+
+          if ($out -notmatch "(?i)usage") {
+            throw "normalizer.exe did not print a usage line. Output was: $out"
+          }
+          Write-Host "normalizer starts and prints usage"
+          exit 0
 
       - name: Stamp build time
         id: now
@@ -292,6 +379,12 @@ jobs:
 
       # Buildx local cache, so the Rust and C++ compiles are not redone on every
       # push. Keyed on the Dockerfile plus every source tree feeding the arsenal.
+      #
+      # This cache only works because the build step below passes the matching
+      # --cache-from/--cache-to pair. Saving a path that no build command ever
+      # names produces a green cache restore that restores nothing: the key
+      # still hits, the layers still miss, and the saving looks like it is
+      # working. Both halves have to be edited together or neither helps.
       - name: Cache Docker layers
         uses: actions/cache@v4
         with:
@@ -310,16 +403,48 @@ jobs:
       #
       # `--load` is deliberately NOT used: it would materialise the scratch
       # image in the runner's daemon for no benefit.
+      #
+      # `set -e` is deliberately NOT used around the build. A `--progress=plain`
+      # log for five compilers is thousands of lines, so when a build breaks the
+      # reason is long scrolled off the top of the collapsed step -- which is why
+      # this failure looked mysterious. The log is teed to a file and its tail,
+      # plus the Dockerfile stage headers, are printed on failure, so the next
+      # run names the stage that broke without anyone downloading logs.
       - name: Build and export the pack (type=local)
         run: |
-          set -euo pipefail
+          set -uo pipefail
           rm -rf pack
-          docker buildx build \
-            --target pack-exporter \
-            --output type=local,dest=./pack \
-            --progress=plain \
-            --metadata-file /tmp/buildmeta.json \
-            .
+
+          args=(
+            buildx build
+            --target pack-exporter
+            --output type=local,dest=./pack
+            --progress=plain
+            --metadata-file /tmp/buildmeta.json
+          )
+          # Only offer the importer when the restore actually produced a
+          # directory; pointing --cache-from at a missing path is an error on
+          # some buildx versions and a warning on others.
+          if [ -d /tmp/.buildx-cache ]; then
+            args+=(--cache-from type=local,src=/tmp/.buildx-cache)
+          else
+            echo "no local buildx cache present; building cold"
+          fi
+          args+=(--cache-to type=local,dest=/tmp/.buildx-cache,mode=max)
+
+          docker "${args[@]}" . 2>&1 | tee /tmp/pack-build.log
+          rc=${PIPESTATUS[0]}
+
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::pack build failed (docker buildx exit $rc)"
+            echo "----- Dockerfile stage headers seen in this build -----"
+            grep -nE '^#[0-9]+ \[|^#[0-9]+ (FROM|DONE|CACHED)|--- (Stage|STAGE)' /tmp/pack-build.log | tail -n 30 || true
+            echo "----- last 60 lines of the build log -----"
+            tail -n 60 /tmp/pack-build.log
+            echo "----- end of build log -----"
+            exit "$rc"
+          fi
+          echo "pack build succeeded"
 
       # pack-manifest already runs each binary and asserts it is static via ldd.
       # This re-verifies the EXPORTED bytes, because `type=local` writes a plain
