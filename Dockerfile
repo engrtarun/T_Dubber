@@ -282,6 +282,7 @@ RUN if [ "$WITH_RUST" = "1" ]; then \
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" --no-modify-path; \
         chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"; \
+        touch /usr/local/cargo/.rust-present; \
         rustc --version; cargo --version; \
     fi
 
@@ -342,11 +343,14 @@ ENV OPENAI_BASE_URL=http://127.0.0.1:8000/v1 \
 # Liveness: every tool the pipeline claims to need, actually importable/executable.
 # Runs in ~4s. A broken layer fails the container immediately instead of letting
 # a Kaggle run die 20 minutes in with a cryptic ImportError.
+# The Rust check is gated on the marker file rather than `command -v cargo`, so a
+# deliberately slimmed `--build-arg WITH_RUST=0` image is not reported unhealthy
+# for the one tool you asked it not to install.
 HEALTHCHECK --interval=30s --timeout=8s --start-period=90s --retries=3 \
     CMD ffmpeg -version > /dev/null 2>&1 || exit 1; \
         python -c "import torch, vllm, faster_whisper" > /dev/null 2>&1 || exit 1; \
         command -v tgup > /dev/null 2>&1 || exit 1; \
-        command -v cargo   > /dev/null 2>&1 || exit 1; \
+        { [ ! -f /usr/local/cargo/.rust-present ] || command -v cargo > /dev/null 2>&1; } || exit 1; \
         exit 0
 
 # tini as PID 1: signal forwarding to vLLM's engine subprocesses + zombie reaping.

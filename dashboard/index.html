@@ -792,7 +792,7 @@ const S = {
   mode:"demo", paused:false,
   url:"", poll:1500, fails:0, timer:null,
   pctShown:0, pctTarget:0,
-  logs:[], seen:0, series:[], seriesT:[]
+  logs:[], seen:0, seenIds:new Set(), series:[], seriesT:[]
 };
 
 /* ============================ DOM scaffolding ============================ */
@@ -863,13 +863,19 @@ function render(snap){
   setText($("mLang"), p.target_language || "—");
 
   /* ---- hero: Chop & Drop ---- */
-  const total = clamp(Math.round(num(pr.chunk_count, 0)), 0, 999);
+  // Distinguish three cases that all look like "0" after coercion:
+  //   chunk_count === 0            -> the worker genuinely has no chunks yet
+  //   chunk_count unparseable      -> ignore the field, keep what we drew
+  //   chunk_count absent           -> ignore the field, keep what we drew
+  // Only the first may clear the rail; conflating them makes one malformed
+  // poll wipe a correct picture.
+  const have = rail.children.length;
+  const rawTotal = num(pr.chunk_count, NaN);
+  const totalKnown = Number.isFinite(rawTotal);
+  const total = totalKnown ? clamp(Math.round(rawTotal), 0, 999) : have;
   const index = clamp(Math.round(num(pr.chunk_index, 0)), 0, Math.max(total, 1));
 
-  // Rebuild the rail only when the denominator actually changes. A garbage
-  // chunk_count must never blank a rail we already drew.
-  const have = rail.children.length;
-  if (total > 0 && total !== have) buildRail(total);
+  if (totalKnown && total !== have) buildRail(total);
 
   setText($("chunkCur"), pad2(index));
   setText($("chunkTot"), `/ ${pad2(total)}`);
@@ -985,17 +991,31 @@ function render(snap){
   ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
 
   /* ---- event stream ---- */
-  // Live endpoints send a cumulative tail; we append only what we have not
-  // seen. If the producer trims that buffer (length drops below our cursor)
-  // rebase instead of waiting forever for indices that no longer exist.
-  const incoming = snap.log || [];
-  if (incoming.length < S.seen) S.seen = 0;
-  for (let i = S.seen; i < incoming.length; i++){
-    const l = incoming[i];
-    const item = typeof l === "string" ? { level:"info", msg:l } : (l || {});
-    pushLog(item.level || "info", item.msg ?? "");
+  // Producers may send a *bounded, reordered* buffer rather than a growing one.
+  // When entries carry a stable `id` we de-duplicate on that, which is correct
+  // whether the server appends, trims from the front, or re-sorts. Positions
+  // are only used as a fallback for older payloads that have no id.
+  const incoming = Array.isArray(snap.log) ? snap.log : [];
+  const hasIds = incoming.some(l => l && typeof l === "object" && l.id != null);
+  if (hasIds){
+    for (const l of incoming){
+      const item = (typeof l === "string") ? { level:"info", msg:l } : (l || {});
+      const key = String(item.id);
+      if (S.seenIds.has(key)) continue;
+      S.seenIds.add(key);
+      pushLog(item.level || "info", item.msg ?? "");
+    }
+    // Keep the dedupe set bounded; the console is trimmed to 220 lines anyway.
+    if (S.seenIds.size > 600) S.seenIds = new Set([...S.seenIds].slice(-300));
+  } else {
+    if (incoming.length < S.seen) S.seen = 0;   // producer trimmed: rebase
+    for (let i = S.seen; i < incoming.length; i++){
+      const l = incoming[i];
+      const item = (typeof l === "string") ? { level:"info", msg:l } : (l || {});
+      pushLog(item.level || "info", item.msg ?? "");
+    }
+    S.seen = incoming.length;
   }
-  S.seen = incoming.length;
   if (snap.note) pushLog("info", snap.note);
 
   /* ---- throughput series ---- */
@@ -1402,10 +1422,10 @@ function setMode(mode){
   $("btnDemo").setAttribute("aria-pressed", String(mode === "demo"));
   $("btnLive").setAttribute("aria-pressed", String(mode === "live"));
   if (mode === "live"){ startPoll(); toast("Live link engaged"); }
-  else { clearInterval(S.timer); S.timer = null; S.series.length = 0; S.seen = 0; toast("Demo link engaged"); }
+  else { clearInterval(S.timer); S.timer = null; S.series.length = 0; S.seen = 0; S.seenIds = new Set(); toast("Demo link engaged"); }
 }
 function startPoll(){
-  clearInterval(S.timer); S.fails = 0; S.seen = 0; S.series.length = 0;
+  clearInterval(S.timer); S.fails = 0; S.seen = 0; S.seenIds = new Set(); S.series.length = 0;
   poll();
   S.timer = setInterval(poll, S.poll);
 }
@@ -1486,25 +1506,27 @@ addEventListener("resize", sizeSpark, { passive:true });
 
   pushLog("info", "Mission Control online — awaiting worker telemetry");
 
+  const params = new URLSearchParams(location.search);
+  const forced = (params.get("mode") || "").toLowerCase();
+  const seek = parseFloat(params.get("seek"));
+
   // ?seek=N parks the demo at a given second, frozen and fully populated.
   // Useful for reproducible status screenshots and bug reports:
   //   dashboard/index.html?seek=26.2   -> mid Chop & Drop, chunk 3 of 7
-  const seek = parseFloat(new URLSearchParams(location.search).get("seek"));
   if (Number.isFinite(seek)){
     S.mode = "demo";
     // Walk the timeline for its LOGS and a coarse throughput history, but
     // render exactly once at the end. Calling render() per step would append
     // one sparkline sample and one log line per step and bury the real data.
     for (let t = 0, i = 0; t <= Math.max(0, seek); t += 0.1, i++){
-      if (i % 5 === 0) pushSeries(DEMO.snapAt(t).metrics.uplink_mbps);
       while (demoEvt < DEMO.events.length && DEMO.events[demoEvt][0] <= t){
         const e = DEMO.events[demoEvt++]; pushLog(e[1], e[2]);
       }
     }
     S.series.length = 0;
     render(DEMO.snapAt(seek));
-    // Replay the coarse series with real spacing so the sparkline is not flat.
-    for (let t = 0, i = 0; t <= Math.max(0, seek); t += 0.5, i++)
+    // Replay a coarse series so the sparkline is not flat.
+    for (let t = 0; t <= Math.max(0, seek); t += 0.5)
       S.series.push({ t, v: num(DEMO.snapAt(t).metrics.uplink_mbps, 0) });
     setText($("sparkPeak"), `peak ${Math.max(0, ...S.series.map(s => s.v)).toFixed(2)} MB/s · ${S.series.length} samples`);
     demoT = seek;
@@ -1514,6 +1536,23 @@ addEventListener("resize", sizeSpark, { passive:true });
     setPaused(true, true);            // silent: no toast on load
     toast(`Parked at ${seek.toFixed(1)}s — press Space to run`);
     return;
+  }
+
+  // Served over http(s) means dashboard_server.py is hosting us, so probe its
+  // own endpoint and engage Live automatically — no clicking, no typing. A page
+  // opened straight off disk (file://) keeps the Demo link.
+  if (/^https?:$/.test(location.protocol)){
+    const probe = params.get("api") || "api/status";
+    fetch(probe, { cache:"no-store", headers:{ Accept:"application/json" } })
+      .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(() => {
+        S.url = new URL(probe, location.href).href;
+        $("inpUrl").value = S.url;
+        if (forced !== "demo") setMode("live");
+      })
+      .catch(() => { if (forced !== "demo") toast("No API here — running the Demo link"); });
+  } else if (forced === "live"){
+    openSheet();
   }
 
   let prev = performance.now();

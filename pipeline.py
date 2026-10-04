@@ -9,6 +9,7 @@ import uuid
 import hashlib
 import glob
 import zipfile
+import sys
 from pathlib import Path
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -16,6 +17,162 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 # Force Kaggle CLI to use the local folder containing kaggle.json
 local_kaggle_dir = os.path.join(APP_DIR, "kaggle_paperWork")
 os.environ["KAGGLE_CONFIG_DIR"] = local_kaggle_dir
+
+# ---------------------------------------------------------------------------
+# Stage telemetry -- SQLITE_ROLLOUT.md, Phase 2
+# ---------------------------------------------------------------------------
+# Until now the only writer of `pipeline_stages` was test_db.py, so the table
+# stayed empty and the dashboard had nothing real to show. This block is the
+# missing writer.
+#
+# Three rules govern everything below, in priority order:
+#
+#   1. Telemetry must never break a run. A dub can be hours of GPU time and a
+#      hundred retries. Losing one because SQLite was momentarily locked, or
+#      because the `projects` row was missing, would be absurd. Every database
+#      call is wrapped, and any failure degrades to one line on stderr.
+#   2. Telemetry must never lie. Only the stages this module actually performs
+#      are written (1-7). Stage 0 (Resolve) happens in app.py before
+#      run_pipeline is ever called, and stage 8 (Transport) belongs to the
+#      Telegram uploader. Recording "skipped" for either would put a false
+#      statement in the database, so those two are deliberately left alone.
+#   3. Every transition is written twice -- "running" first, then the terminal
+#      state. db.record_stage only sets started_at on the "running" insert; its
+#      ON CONFLICT clause does not update that column, so a stage that skipped
+#      straight to "success" would keep a NULL started_at forever.
+#
+# The import is guarded because app.py does `from pipeline import run_pipeline`
+# at module scope: if db.py were unimportable, an unguarded import here would
+# take down the whole Gradio app, not just the telemetry.
+try:
+    import db
+    _DB_IMPORT_ERROR = None
+except Exception as _exc:  # pragma: no cover - telemetry is not load-bearing
+    db = None
+    _DB_IMPORT_ERROR = _exc
+
+# Canonical stage rail, matching the [STAGE:n] markers yielded below.
+STAGE_NAMES = {
+    0: "Resolve",
+    1: "Compress",
+    2: "Bundle",
+    3: "Dataset",
+    4: "Kernel",
+    5: "GPU Worker",
+    6: "Download",
+    7: "Verify",
+    8: "Transport",
+}
+
+# The stages run_pipeline()/reattach_to_kernel() genuinely perform.
+OWNED_STAGES = (1, 2, 3, 4, 5, 6, 7)
+
+_MAX_MESSAGE = 500
+_MAX_ERROR = 2000
+_TEL_WARN_LIMIT = 5
+
+_tel_started = {}   # (project_id, stage) -> time.monotonic() at "running"
+_tel_ready = set()  # project ids confirmed to exist in `projects`
+_tel_warned = 0
+
+
+def _tel_warn(reason):
+    """Report a telemetry problem on stderr, at most a handful of times.
+
+    stderr rather than the yielded log stream on purpose: these lines carry no
+    [STAGE:n] marker, and the generator's contract is to report pipeline
+    progress, not the health of the progress reporter.
+    """
+    global _tel_warned
+    if _tel_warned >= _TEL_WARN_LIMIT:
+        return
+    _tel_warned += 1
+    suffix = " (further telemetry warnings suppressed)" if _tel_warned == _TEL_WARN_LIMIT else ""
+    sys.stderr.write(f"[pipeline] stage telemetry: {reason}{suffix}\n")
+
+
+def _tel_truncate(text, limit):
+    if text is None:
+        return None
+    text = str(text).strip()
+    if not text:
+        return None
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _tel_ensure_project(project_id, manifest):
+    """Guarantee a `projects` row exists so the stage foreign key resolves.
+
+    app.py writes that row before calling run_pipeline, so this is a safety net
+    for the paths that do not: a first write whose database half failed, or a
+    reattach to a project created before this process booted.
+
+    db.upsert_project is destructive on conflict -- it clears title,
+    output_video, report_file and completed_at -- so it is only ever called
+    after confirming the row really is absent. That check is what keeps this
+    from being a data-loss bug.
+    """
+    if not manifest or project_id in _tel_ready:
+        return
+    try:
+        if db.get_project(project_id) is not None:
+            _tel_ready.add(project_id)
+            return
+        payload = dict(manifest)
+        payload["project_id"] = project_id
+        payload.setdefault("status", "processing")
+        db.upsert_project(payload)
+        _tel_ready.add(project_id)
+    except Exception as exc:
+        _tel_warn(f"could not create the projects row for {project_id}: {exc}")
+
+
+def track_stage(project_id, stage_number, status, message=None, error=None,
+                manifest=None, duration_sec=None):
+    """Record one stage transition. Returns True on success, never raises.
+
+    ``status`` is "running", "success" or "failed". ``duration_sec`` is measured
+    from the matching "running" call when it is not supplied, which is what
+    feeds db.timing_estimates() and therefore the dashboard's ETA.
+    """
+    if db is None:
+        _tel_warn(f"db unavailable ({_DB_IMPORT_ERROR}); stage {stage_number} not recorded")
+        return False
+
+    stage_number = int(stage_number)
+    name = STAGE_NAMES.get(stage_number, f"Stage {stage_number}")
+    key = (project_id, stage_number)
+    now = time.monotonic()
+
+    if status == "running":
+        _tel_started[key] = now
+    elif duration_sec is None and key in _tel_started:
+        duration_sec = round(now - _tel_started.pop(key), 3)
+
+    try:
+        _tel_ensure_project(project_id, manifest)
+        db.record_stage(
+            project_id,
+            stage_number,
+            name,
+            status,
+            message=_tel_truncate(message, _MAX_MESSAGE),
+            error=_tel_truncate(error, _MAX_ERROR),
+            duration_sec=duration_sec,
+        )
+        return True
+    except Exception as exc:
+        _tel_warn(f"{project_id} stage {stage_number} {status} not recorded: {exc}")
+        # Forget the cached state so a later stage retries from scratch rather
+        # than inheriting a half-finished attempt.
+        _tel_started.pop(key, None)
+        _tel_ready.discard(project_id)
+        return False
+
+
+def project_id_for(project_dir):
+    """The projects.id for a project directory (its basename)."""
+    return os.path.basename(os.path.abspath(project_dir))
 
 def run_cmd(cmd):
     """Run a subprocess with UTF-8-safe output capture on Windows and Linux."""
@@ -51,16 +208,25 @@ def _collect_kernel_logs(project_dir):
     return "", None
 
 
-def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seconds=30):
+def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seconds=30,
+                     stage_number=5, manifest=None):
     """Poll a Kaggle kernel until it finishes, yielding progress lines.
 
     Returns ``{"success": bool, "network_error": bool, "status": str}``. This is
     deliberately a separate generator so :func:`reattach_to_kernel` can reuse
     the exact same logic -- when a browser tab closes or the PC reboots, the
     work is still running on Kaggle and we need to pick the thread back up.
+
+    ``stage_number`` and ``manifest`` exist purely for the telemetry writer and
+    both have defaults, so existing call sites keep working unchanged.
     """
     status_cmd = ["python", "-m", "kaggle", "kernels", "status", kernel_id]
     output_cmd = ["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir]
+
+    project_id = project_id_for(project_dir)
+    track_stage(project_id, stage_number, "running",
+                message=f"Waiting on Kaggle worker {kernel_id} (timeout {int(timeout / 3600)}h)",
+                manifest=manifest)
 
     start_time = time.time()
     last_report = 0
@@ -69,6 +235,9 @@ def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seco
         elapsed = time.time() - start_time
         if elapsed > timeout:
             yield f"[{stage}] ❌ Timeout: Worker did not finish within {int(timeout / 3600)} hours.\n"
+            track_stage(project_id, stage_number, "failed",
+                        message=f"Timed out after {int(elapsed)}s",
+                        error=f"Kaggle worker did not finish within {int(timeout / 3600)} hours")
             return {"success": False, "network_error": False, "status": "timeout"}
 
         result = run_cmd(status_cmd)
@@ -77,6 +246,9 @@ def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seco
 
         if "complete" in lowered:
             yield f"[{stage}] ✅ Kaggle execution completed!\n"
+            track_stage(project_id, stage_number, "success",
+                        message=f"Kaggle execution completed in {int(elapsed)}s",
+                        manifest=manifest)
             return {"success": True, "network_error": False, "status": "complete"}
 
         if "error" in lowered or "cancel" in lowered:
@@ -97,10 +269,18 @@ def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seco
                     "could not resolve host" in content.lower()
                     or "network is unreachable" in content.lower()
                 )
+                track_stage(project_id, stage_number, "failed",
+                            message="Kaggle execution failed or was cancelled",
+                            error=content[-_MAX_ERROR:], manifest=manifest)
                 return {"success": False, "network_error": network_error, "status": "error"}
             yield f"[{stage}] ❌ No error log or .log file found in {project_dir}\n"
             if (result.stderr or result.stdout):
                 yield f"[{stage}] Kaggle CLI said:\n{(result.stderr or result.stdout).strip()[-1200:]}\n"
+            cli_said = (result.stderr or result.stdout or "").strip()
+            track_stage(project_id, stage_number, "failed",
+                        message="Kaggle execution failed; no worker log was downloaded",
+                        error=cli_said or "Kaggle reported an error but produced no log",
+                        manifest=manifest)
             return {"success": False, "network_error": False, "status": "error"}
 
         # Report at most once a minute so the log stays readable on long jobs.
@@ -121,17 +301,24 @@ def reattach_to_kernel(project_dir, kernel_id, timeout=10 * 60 * 60, poll_second
     kernel id and wait again. Yields the same ``[STAGE:X]`` log lines as a live
     run, then hands off to the output download.
     """
+    project_id = project_id_for(project_dir)
+    manifest = {"title": project_id, "status": "processing", "kernel_id": kernel_id}
+    tel_manifest = manifest
+
     yield "[STAGE:5] ♻️ Reattaching to the Kaggle worker...\n"
     yield f"[STAGE:5] ☁️ Your PC going offline does not stop Kaggle; the job is still running there.\n"
     yield f"[STAGE:5] 🔗 Worker URL: https://www.kaggle.com/code/{kernel_id}\n"
 
     outcome = yield from _wait_for_kernel(
-        kernel_id, project_dir, timeout=timeout, stage="STAGE:5", poll_seconds=poll_seconds
+        kernel_id, project_dir, timeout=timeout, stage="STAGE:5", poll_seconds=poll_seconds,
+        stage_number=5, manifest=tel_manifest,
     )
     if not outcome["success"]:
         return outcome
 
     yield "[STAGE:6] ⬇️ Downloading final outputs from Kaggle...\n"
+    track_stage(project_id, 6, "running", message="Downloading Kaggle outputs",
+                manifest=tel_manifest)
     output_cmd = ["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir]
     yield f"[STAGE:6] Executing: {' '.join(output_cmd)}\n"
     run_cmd(output_cmd)
@@ -142,18 +329,31 @@ def reattach_to_kernel(project_dir, kernel_id, timeout=10 * 60 * 60, poll_second
         if os.path.getsize(f) > 0
     ]
     if mp4_files:
+        track_stage(project_id, 6, "success",
+                    message=f"Downloaded {len(mp4_files)} file(s) from Kaggle",
+                    manifest=tel_manifest)
         stale = os.path.join(project_dir, "error_log.txt")
         if os.path.isfile(stale):
             os.remove(stale)
         biggest = max(mp4_files, key=lambda f: os.path.getsize(f))
         yield f"[STAGE:7] 🎉 Pipeline finished successfully! Output: {os.path.basename(biggest)}"
+        track_stage(project_id, 7, "success",
+                    message=f"Verified output {os.path.basename(biggest)}",
+                    manifest=tel_manifest)
         outcome["output_video"] = biggest
     else:
+        track_stage(project_id, 6, "success",
+                    message="Downloaded Kaggle outputs (no video present)",
+                    manifest=tel_manifest)
         content, _source = _collect_kernel_logs(project_dir)
         if content:
             yield f"[STAGE:7] ❌ Worker Error Log:\n{content[-2500:]}\n"
         else:
             yield "[STAGE:7] ❌ Worker reported success but produced no video.\n"
+        track_stage(project_id, 7, "failed",
+                    message="Worker reported success but produced no video",
+                    error=content[-_MAX_ERROR:] if content else "No output video and no worker log",
+                    manifest=tel_manifest)
     return outcome
 
 
@@ -166,8 +366,26 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     ``backup_link`` is the Telegram archive link created before this run
     started. It travels with the job so the worker records it in its report and
     a finished dub can always be traced back to its archive.
+
+    Every stage transition is mirrored into the ``pipeline_stages`` table via
+    :func:`track_stage`, so the dashboard can show real progress instead of
+    guessing. Those writes are strictly best-effort: a database problem logs to
+    stderr and never interrupts the run.
     """
+    project_id = project_id_for(project_dir)
+    manifest = {
+        "title": source_title or os.path.splitext(os.path.basename(video_path or project_id))[0] or project_id,
+        "source_video": os.path.basename(video_path) if video_path else None,
+        "source_url": source_url,
+        "source_size": source_size,
+        "target_language": target_lang,
+        "speaker_detection": bool(speaker_detection),
+        "telegram_backup": backup_link,
+        "status": "processing",
+    }
+
     yield "[STAGE:1] 🚀 Starting Kaggle pipeline...\n"
+    track_stage(project_id, 1, "running", message="Starting Kaggle pipeline", manifest=manifest)
 
     if backup_link:
         yield f"[STAGE:1] ☁️ Telegram backup on file: {backup_link}\n"
@@ -178,19 +396,25 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     kaggle_creds_path = os.path.join(local_kaggle_dir, "kaggle.json")
     if not os.path.exists(kaggle_creds_path):
         yield f"[STAGE:1] ❌ Error: Missing Kaggle credentials!\nCould not find kaggle.json at {kaggle_creds_path}.\n"
+        track_stage(project_id, 1, "failed", message="Missing Kaggle credentials",
+                    error=f"kaggle.json not found at {kaggle_creds_path}", manifest=manifest)
         return
-        
+
     yield "[STAGE:1] 🔍 Checking Kaggle CLI installation...\n"
     if run_cmd(["python", "-m", "kaggle", "--version"]).returncode != 0:
         yield "[STAGE:1] ❌ Error: Kaggle API CLI not installed or authenticated.\n"
+        track_stage(project_id, 1, "failed", message="Kaggle API CLI missing or unauthenticated",
+                    error="`kaggle --version` exited non-zero", manifest=manifest)
         return
-        
+
     try:
         with open(kaggle_creds_path) as kf:
             kcreds = json.load(kf)
             KAGGLE_USERNAME = kcreds.get("username", "YOUR_KAGGLE_USERNAME")
     except Exception as e:
         yield f"[STAGE:1] ❌ Error reading kaggle.json: {e}\n"
+        track_stage(project_id, 1, "failed", message="Could not read kaggle.json",
+                    error=f"{type(e).__name__}: {e}", manifest=manifest)
         return
     
     unique_id = uuid.uuid4().hex[:6]
@@ -226,6 +450,8 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     compressed_video_path = None
     if needs_compression:
         yield f"[STAGE:1] 🛠️ Video is large or >1080p ({file_size_mb:.1f}MB). Compressing to 480p...\n"
+        track_stage(project_id, 1, "running",
+                    message=f"Compressing {file_size_mb:.1f}MB source to 480p", manifest=manifest)
         compressed_video_path = os.path.join(project_dir, f"compressed_{unique_id}.mp4")
         ffmpeg_cmd = f'ffmpeg -y -i "{video_path}" -vf scale=854:480 -b:v 1M "{compressed_video_path}"'
         yield f"[STAGE:1] Executing: {ffmpeg_cmd}\n"

@@ -978,6 +978,14 @@ def list_sweeper_logs(limit: int = 100) -> list:
 def _load_channels(channels_file: str = None):
     """Read the channel roster from channels.json.
 
+    Two shapes are accepted, because the roster is edited by
+    hand and by tooling:
+        {"channels": ["@a", "@b"], "default_index": 0}   (documented)
+        ["@a", "@b", ...]                               (bare list)
+    Names are passed through exactly as written: tgup's
+    trimAt() strips a leading '@' itself, so both spellings
+    resolve to the same channel.
+
     Returns (channels, default_index). Missing or empty config is a
     deployment error, so it raises instead of silently falling back --
     an upload without a known channel would land in the wrong place.
@@ -985,19 +993,28 @@ def _load_channels(channels_file: str = None):
     path = channels_file or CHANNELS_FILE
     with open(path, "r", encoding="utf-8") as handle:
         config = json.load(handle)
+
+    default_index = 0
+    if isinstance(config, dict):
+        raw_channels = config.get("channels") or []
+        try:
+            default_index = int(config.get("default_index", 0) or 0)
+        except (TypeError, ValueError):
+            default_index = 0
+    elif isinstance(config, list):
+        raw_channels = config
+    else:
+        raw_channels = []
+
     seen: set = set()
     channels: list = []
-    for raw in config.get("channels") or []:
+    for raw in raw_channels:
         name = str(raw).strip()
         if name and name not in seen:
             seen.add(name)
             channels.append(name)
     if not channels:
         raise ValueError(f"{path} defines no channels")
-    try:
-        default_index = int(config.get("default_index", 0) or 0)
-    except (TypeError, ValueError):
-        default_index = 0
     return channels, default_index % len(channels)
 
 

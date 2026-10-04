@@ -20,6 +20,10 @@
 //!
 //! Mixing order (per output sample):
 //!   out = ducked_background + voice
+//!
+//! Any number of segments is supported, so this scales to the "dozens of
+//! WAV segments over a ducked background" case that makes the numpy path
+//! slow and memory-heavy.
 
 use std::env;
 use std::fs;

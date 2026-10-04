@@ -391,6 +391,41 @@ def test_channel_load_balancer(scratch):
     print("    6 channels rotate in order, quota enforced, failures refunded")
 
 
+def test_channels_roster_shapes(scratch):
+    print("\n[11] roster: dict shape and bare-list shape both load")
+    dict_file = os.path.join(scratch, "dict.json")
+    with open(dict_file, "w", encoding="utf-8") as handle:
+        json.dump({"channels": ["@a", "@b"], "default_index": 1}, handle)
+    list_file = os.path.join(scratch, "list.json")
+    with open(list_file, "w", encoding="utf-8") as handle:
+        json.dump(["x1", "x2", "x3"], handle)
+
+    channels, index = db._load_channels(dict_file)
+    assert channels == ["@a", "@b"] and index == 1, (channels, index)
+
+    channels, index = db._load_channels(list_file)
+    # Bare lists have no declared start, so they begin at 0.
+    assert channels == ["x1", "x2", "x3"] and index == 0, (channels, index)
+
+    # Names pass through untouched: tgup's trimAt() handles '@'.
+    bare_file = os.path.join(scratch, "bare.json")
+    with open(bare_file, "w", encoding="utf-8") as handle:
+        json.dump(["tgwebcloud1", "@tgwebcloud2"], handle)
+    channels, _ = db._load_channels(bare_file)
+    assert channels == ["tgwebcloud1", "@tgwebcloud2"], channels
+
+    # An empty roster is a deployment error, not a silent no-op.
+    empty_file = os.path.join(scratch, "empty.json")
+    with open(empty_file, "w", encoding="utf-8") as handle:
+        json.dump([], handle)
+    try:
+        db._load_channels(empty_file)
+        raise AssertionError("empty roster should raise")
+    except ValueError:
+        pass
+    print("    dict, bare list, and '@'-mixing rosters all load")
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -406,6 +441,7 @@ def main():
         test_channel_usage,
         test_sweeper_log_sync,
         test_channel_load_balancer,
+        test_channels_roster_shapes,
     ]
 
     original_db = db.DB_PATH

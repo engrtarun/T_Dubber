@@ -1,1 +1,0 @@
-Kaggle Secret OPENAI_API_KEY is missing or not attached. Add it under this notebook's Add-ons > Secrets.
