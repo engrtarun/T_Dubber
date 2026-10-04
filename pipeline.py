@@ -468,13 +468,7 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     else:
         target_upload_path = video_path
         
-    track_stage(project_id, 1, "success",
-                message=("Compressed to 480p and staged" if needs_compression and compressed_video_path
-                         else "Source staged without compression"),
-                manifest=manifest)
-    yield "[STAGE:1] ✅ Compression successful.\n" if compressed_video_path else ""
-
-    # Stage 1 covers everything from "start" through "input staged for upload".
+    # Stage 1 spans everything from "start" through "input staged for upload".
     track_stage(project_id, 1, "success",
                 message=("Compressed to 480p and staged for upload"
                          if needs_compression and compressed_video_path
@@ -690,6 +684,8 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
             project_dir,
             timeout=10 * 60 * 60,
             stage="STAGE:5",
+            stage_number=5,
+            manifest=manifest,
         )
 
         if outcome["success"]:
@@ -698,10 +694,12 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
             yield "[STAGE:5] ⚠️ Kernel failed with a network error. Waiting 60 seconds and re-pushing once...\n"
             time.sleep(60)
             continue
+        # _wait_for_kernel already recorded the failure with the worker log.
         return
 
     yield "[STAGE:6] ⬇️ Downloading final outputs from Kaggle...\n"
-    
+    track_stage(project_id, 6, "running", message="Downloading Kaggle outputs", manifest=manifest)
+
     output_cmd = ["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir]
     yield f"[STAGE:6] Executing: {' '.join(output_cmd)}\n"
     run_cmd(output_cmd)
@@ -711,11 +709,18 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     mp4_files = [f for f in glob.glob(os.path.join(project_dir, "*.mp4")) if os.path.basename(f) != original_video_basename]
     
     if mp4_files and os.path.getsize(mp4_files[0]) > 0:
+        track_stage(project_id, 6, "success",
+                    message=f"Downloaded {len(mp4_files)} file(s) from Kaggle", manifest=manifest)
         stale_error_log = os.path.join(project_dir, "error_log.txt")
         if os.path.isfile(stale_error_log):
             os.remove(stale_error_log)
+        track_stage(project_id, 7, "success",
+                    message=f"Verified output video {os.path.basename(mp4_files[0])}",
+                    manifest=manifest)
         yield f"[STAGE:7] 🎉 Pipeline finished successfully! Video saved at {os.path.basename(mp4_files[0])} and report saved locally."
     else:
+        track_stage(project_id, 6, "success",
+                    message="Downloaded Kaggle outputs (no video present)", manifest=manifest)
         # Worker said 'complete' but output is missing — this is NOT a success.
         # Download and display the actual error log from Kaggle.
         yield "[STAGE:7] ⚠️ Worker reported 'complete' but output video is missing or empty. Fetching error logs...\n"
@@ -740,7 +745,13 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
             yield f"[STAGE:7] 💡 FIX: Open https://www.kaggle.com/code/{kernel_id} → Settings → Enable Internet → Re-run the notebook manually.\n"
         else:
             yield f"[STAGE:7] 💡 FIX: An error occurred in the execution. Please check the logs above or open https://www.kaggle.com/code/{kernel_id} to debug.\n"
-        
+
+        track_stage(project_id, 7, "failed",
+                    message="Worker reported 'complete' but no output video was produced",
+                    error=err_content[-_MAX_ERROR:] if err_content
+                          else "No error_log.txt and no .log/.txt files were downloaded",
+                    manifest=manifest)
+
     # Clean up local temporary compressed files after upload is done
     if compressed_video_path and os.path.exists(compressed_video_path):
         try:
