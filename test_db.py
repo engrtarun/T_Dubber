@@ -52,7 +52,7 @@ def test_schema_and_stats(scratch):
     expected = {
         "projects", "telegram_archives", "telegram_parts", "media_metadata",
         "pipeline_stages", "quality_metrics", "run_errors", "voice_samples",
-        "speakers", "job_queue",
+        "speakers", "job_queue", "kaggle_sweeper_logs", "channel_daily_quota",
     }
     assert expected <= tables, f"missing: {expected - tables}"
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
@@ -305,6 +305,92 @@ def test_channel_usage(scratch):
     ))
 
 
+def test_sweeper_log_sync(scratch):
+    print("\n[9] sweeper: JSONL audit trail drains into the database")
+    audit_file = os.path.join(scratch, "space_sweeper_audit.jsonl")
+    entries = [
+        {"ts": "2026-10-03T03:00:01+00:00", "action": "delete",
+         "kind": "dataset", "ref": "engrtarun/dubbing-input-001",
+         "title": "Dubbing input 001", "bytes": 2_000_000_000},
+        {"ts": "2026-10-03T03:00:02+00:00", "action": "delete",
+         "kind": "kernel", "ref": "engrtarun/worker-homura-001",
+         "title": "worker-homura run", "bytes": 500_000},
+        # Torn line (e.g. sweeper was mid-append) must be preserved.
+        '{"ts": "2026-10-03T03:00:03+00:00", "action": "delete", "kind":',
+    ]
+    with open(audit_file, "w", encoding="utf-8") as handle:
+        for entry in entries:
+            handle.write(json.dumps(entry) + "\n" if isinstance(entry, dict) else entry + "\n")
+
+    summary = db.sync_sweeper_logs(audit_file)
+    assert summary == {"inserted": 2, "duplicates": 0, "kept_lines": 1}, summary
+
+    logs = db.list_sweeper_logs()
+    assert len(logs) == 2, logs
+    assert logs[0]["ref"] == "engrtarun/worker-homura-001"  # newest first
+    assert logs[1]["bytes_freed"] == 2_000_000_000
+    assert db.stats()["sweeper_logs"] == 2
+
+    # A second sync of the same data must be a no-op, not a double count.
+    with open(audit_file, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entries[0]) + "\n")
+    summary = db.sync_sweeper_logs(audit_file)
+    assert summary["inserted"] == 0 and summary["duplicates"] == 1, summary
+    assert db.stats()["sweeper_logs"] == 2
+
+    # The torn line survives in the file for the next pass.
+    with open(audit_file, "r", encoding="utf-8") as handle:
+        leftover = handle.read()
+    assert "action" in leftover and "engrtarun" not in leftover, leftover
+    print(f"    drained 2 entries, idempotent re-sync, 1 torn line kept")
+
+
+def test_channel_load_balancer(scratch):
+    print("\n[10] balancer: round robin with a 50 GB-style daily quota")
+    channels_file = os.path.join(scratch, "channels.json")
+    with open(channels_file, "w", encoding="utf-8") as handle:
+        json.dump({"channels": ["@tgwebcloud1", "@tgwebcloud2", "@tgwebcloud3"],
+                   "strategy": "round_robin", "default_index": 0}, handle)
+
+    original_quota = db.CHANNEL_DAILY_QUOTA_MB
+    db.CHANNEL_DAILY_QUOTA_MB = 100  # 100 MB keeps the test fast
+    original_channels = db.CHANNELS_FILE
+    db.CHANNELS_FILE = channels_file
+    try:
+        # Fresh day starts at default_index and walks the roster in order.
+        assert db.get_next_telegram_channel(40, channels_file, day="2026-01-01") == "@tgwebcloud1"
+        assert db.get_next_telegram_channel(40, channels_file, day="2026-01-01") == "@tgwebcloud2"
+        assert db.get_next_telegram_channel(40, channels_file, day="2026-01-01") == "@tgwebcloud3"
+        # Wraps around: cloud1 has 40 MB used, 40 more still fits under 100.
+        assert db.get_next_telegram_channel(40, channels_file, day="2026-01-01") == "@tgwebcloud1"
+
+        # cloud1 is at 80 MB; 30 MB does not fit, so the balancer
+        # skips it and lands on the next channel with room.
+        assert db.get_next_telegram_channel(30, channels_file, day="2026-01-01") == "@tgwebcloud2"
+
+        # Fill every channel to the ceiling; the balancer must refuse
+        # rather than oversubscribe a channel.
+        db.get_next_telegram_channel(20, channels_file, day="2026-01-01")  # cloud3 -> 60
+        db.get_next_telegram_channel(30, channels_file, day="2026-01-01")  # cloud2 -> 100
+        db.get_next_telegram_channel(20, channels_file, day="2026-01-01")  # cloud3 -> 80
+        db.get_next_telegram_channel(20, channels_file, day="2026-01-01")  # cloud1 -> 100
+        db.get_next_telegram_channel(20, channels_file, day="2026-01-01")  # cloud3 -> 100
+        assert db.get_next_telegram_channel(1, channels_file, day="2026-01-01") is None
+
+        # A new day resets every quota; an oversized video is never placed.
+        assert db.get_next_telegram_channel(40, channels_file, day="2026-01-02") == "@tgwebcloud1"
+        assert db.get_next_telegram_channel(101, channels_file, day="2026-01-02") is None
+
+        # A failed upload gives its quota back.
+        db.release_channel_quota("@tgwebcloud1", 40, day="2026-01-02")
+        status = {row["channel"]: row for row in db.channel_quota_status(day="2026-01-02")}
+        assert status["@tgwebcloud1"]["used_mb"] == 0.0, status
+    finally:
+        db.CHANNEL_DAILY_QUOTA_MB = original_quota
+        db.CHANNELS_FILE = original_channels
+    print("    6 channels rotate in order, quota enforced, failures refunded")
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -318,6 +404,8 @@ def main():
         test_concurrent_writers,
         test_migrate_existing_projects,
         test_channel_usage,
+        test_sweeper_log_sync,
+        test_channel_load_balancer,
     ]
 
     original_db = db.DB_PATH
