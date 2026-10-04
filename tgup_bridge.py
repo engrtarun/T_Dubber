@@ -1,0 +1,499 @@
+"""Drive the Go uploader (tgup) from Python, and fall back to Telethon.
+
+Why this exists
+---------------
+Telemetry on the target machine showed a single-stream upload settling at
+2.06 MB/s against a 3.76 MB/s uplink with a 110 ms round trip. That is 55% of
+the link, and the shortfall is arithmetic: carrying 3.76 MB/s across a 110 ms
+round trip needs roughly 404 KB in flight, and one connection only keeps about
+232 KB.
+
+No language fixes a TCP window. Several sockets do. tgup opens one MTProto
+connection per part in flight -- same auth key, so one login covers all of them
+-- which puts several windows in flight at once. That is the whole experiment.
+
+What this module is careful about
+---------------------------------
+Uploading must never depend on the Go binary existing. Every failure mode here
+-- no toolchain, no binary, Smart App Control blocking it, a first run that has
+no tgup session yet, a bad login, a network error -- is reported and answered
+with ``fallback_reason`` set. The caller then uses Telethon, which is the
+original, working path. Nothing in the Python pipeline changes.
+
+The Go binary uses its own session file (``tgup.session``) because the storage
+format is gotd's, not Telethon's. The first run therefore asks for a login code
+once; after that the session is reused.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable
+
+ROOT = Path(__file__).resolve().parent
+TGUP_DIR = ROOT / "tgup"
+BINARY_NAMES = ("tgup.exe", "tgup")
+
+
+# ---------------------------------------------------------------------------
+# Discovery
+# ---------------------------------------------------------------------------
+
+
+def find_binary() -> Path | None:
+    """Return the tgup binary if one is present and runnable, else None.
+
+    TGUP_BIN is authoritative when set. Falling back to a search would mean an
+    override could point at nothing and still silently run a different binary,
+    which is the kind of surprise that costs an afternoon.
+    """
+    override = os.environ.get("TGUP_BIN", "").strip()
+    if override:
+        candidate = Path(override)
+        return candidate if candidate.is_file() else None
+
+    for name in BINARY_NAMES:
+        candidate = TGUP_DIR / name
+        if candidate.is_file():
+            return candidate
+        local = ROOT / name
+        if local.is_file():
+            return local
+
+    on_path = shutil.which("tgup")
+    return Path(on_path) if on_path else None
+
+
+def binary_version(binary: Path) -> str | None:
+    """Ask the binary for its help text; None means it will not run.
+
+    Both streams are read because a usage error prints to stderr and an
+    explicit "help" prints to stdout. Only a real run failure yields None.
+    """
+    try:
+        proc = subprocess.run(
+            [str(binary), "help"],
+            capture_output=True,
+            timeout=30,
+            creationflags=_no_window(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = (proc.stdout or b"").decode("utf-8", "replace")
+    text += (proc.stderr or b"").decode("utf-8", "replace")
+    if "tgup" in text and proc.returncode in (0, 2):
+        return text
+    return None
+
+
+def _no_window() -> int:
+    """Keep a console window from flashing on Windows."""
+    if sys.platform != "win32":
+        return 0
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+# ---------------------------------------------------------------------------
+# Result types
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TransferProgress:
+    """One progress line emitted by tgup on stderr."""
+
+    event: str = ""
+    part: int = 0
+    part_count: int = 0
+    bytes_done: int = 0
+    bytes_total: int = 0
+    rate: float = 0.0
+    message: str = ""
+
+    @classmethod
+    def from_json(cls, line: str) -> "TransferProgress | None":
+        line = line.strip()
+        if not line.startswith("{"):
+            return None
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        if "event" not in data:
+            return None
+        return cls(
+            event=data.get("event", ""),
+            part=int(data.get("part", 0)),
+            part_count=int(data.get("part_count", 0)),
+            bytes_done=int(data.get("bytes", 0)),
+            bytes_total=int(data.get("total", 0)),
+            rate=float(data.get("bytes_per_sec", 0)),
+            message=data.get("message", ""),
+        )
+
+
+@dataclass
+class GoUploadResult:
+    """Outcome of a tgup run, shaped like the Python uploader's own result."""
+
+    ok: bool = False
+    used_go: bool = False
+    fallback_reason: str = ""
+    error: str = ""
+    message_link: str = ""
+    message_id: int = 0
+    filename: str = ""
+    channel: str = ""
+    total_size: int = 0
+    chunk_count: int = 0
+    concurrency: int = 0
+    elapsed_sec: float = 0.0
+    bytes_per_sec: float = 0.0
+    source_sha256: str = ""
+    parts: list = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, data: dict) -> "GoUploadResult":
+        return cls(
+            ok=bool(data.get("ok", False)),
+            used_go=True,
+            error=data.get("error", ""),
+            message_link=data.get("message_link", ""),
+            message_id=int(data.get("message_id", 0)),
+            filename=data.get("filename", ""),
+            channel=data.get("channel", ""),
+            total_size=int(data.get("total_size", 0)),
+            chunk_count=int(data.get("chunk_count", 0)),
+            concurrency=int(data.get("concurrency", 0)),
+            elapsed_sec=float(data.get("elapsed_sec", 0)),
+            bytes_per_sec=float(data.get("bytes_per_sec", 0)),
+            source_sha256=data.get("source_sha256", ""),
+            parts=data.get("parts", []) or [],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Session status
+# ---------------------------------------------------------------------------
+
+
+def session_ready() -> bool:
+    """True when tgup already holds a usable session."""
+    return (TGUP_DIR / "tgup.session").is_file()
+
+
+def needs_login() -> bool:
+    """True when the first run will ask the user for a login code."""
+    return not session_ready()
+
+
+# ---------------------------------------------------------------------------
+# The runner
+# ---------------------------------------------------------------------------
+
+
+def run_command(
+    args: list[str],
+    *,
+    timeout: float = 0.0,
+    on_progress: Callable[[TransferProgress], None] | None = None,
+    stdin_text: str = "",
+    on_human: Callable[[str], None] | None = None,
+) -> tuple[int, str, str]:
+    """Run tgup, calling on_progress as each line arrives. Returns the result.
+
+    This is the version the app uses: it must not block the UI thread, and it
+    must surface progress while a multi-gigabyte transfer is in flight.
+    """
+    binary = find_binary()
+    if binary is None:
+        raise FileNotFoundError("tgup binary not found")
+
+    proc = subprocess.Popen(
+        [str(binary), *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.PIPE if stdin_text else subprocess.DEVNULL,
+        cwd=str(binary.parent),
+        creationflags=_no_window(),
+    )
+    if stdin_text:
+        try:
+            proc.stdin.write(stdin_text.encode("utf-8"))
+            proc.stdin.close()
+        except (OSError, BrokenPipeError):
+            pass
+
+    human: list[str] = []
+    errors: list[BaseException] = []
+
+    def drain() -> None:
+        assert proc.stderr is not None
+        try:
+            for raw in proc.stderr:
+                text = raw.decode("utf-8", "replace")
+                progress = TransferProgress.from_json(text)
+                if progress is None:
+                    line = text.rstrip("\n")
+                    human.append(line)
+                    if on_human is not None:
+                        try:
+                            on_human(line)
+                        except Exception:
+                            pass
+                    continue
+                if on_progress is not None:
+                    try:
+                        on_progress(progress)
+                    except Exception:
+                        # A broken display must never abort a live transfer.
+                        pass
+        except BaseException as exc:  # noqa: BLE001 - reported, not swallowed
+            errors.append(exc)
+
+    reader = threading.Thread(target=drain, name="tgup-stderr", daemon=True)
+    reader.start()
+
+    stdout = ""
+    if proc.stdout is not None:
+        stdout = proc.stdout.read().decode("utf-8", "replace")
+
+    try:
+        returncode = proc.wait(timeout=timeout or None)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        returncode = -1
+        human.append(f"tgup timed out after {timeout:.0f}s")
+    reader.join(timeout=30)
+
+    return returncode, stdout, "\n".join(human)
+
+
+# ---------------------------------------------------------------------------
+# High-level entry points
+# ---------------------------------------------------------------------------
+
+
+def upload(
+    *,
+    file: str | os.PathLike,
+    channel: str,
+    api_id: int,
+    api_hash: str,
+    phone: str = "",
+    concurrency: int = 3,
+    plan_in: str = "",
+    plan_out: str = "",
+    result_out: str = "",
+    caption: str = "",
+    thumbnail: str = "",
+    on_progress: Callable[[TransferProgress], None] | None = None,
+    on_human: Callable[[str], None] | None = None,
+) -> GoUploadResult:
+    """Upload a file with tgup, returning a result shaped like Python's own."""
+    args = [
+        "upload",
+        "--file", str(file),
+        "--channel", channel,
+        "--api-id", str(api_id),
+        "--api-hash", api_hash,
+        "--concurrency", str(max(1, int(concurrency))),
+    ]
+    if phone:
+        args += ["--phone", phone]
+    if plan_in:
+        args += ["--plan-in", str(plan_in)]
+    if plan_out:
+        args += ["--plan-out", str(plan_out)]
+    if result_out:
+        args += ["--result-out", str(result_out)]
+    if caption:
+        args += ["--caption", caption]
+    if thumbnail:
+        args += ["--thumbnail", str(thumbnail)]
+
+    returncode, _stdout, human = run_command(
+        args, on_progress=on_progress, on_human=on_human
+    )
+    return _result_from(result_out, returncode, human, on_human)
+
+
+def fetch(
+    *,
+    link: str,
+    dest: str,
+    api_id: int,
+    api_hash: str,
+    concurrency: int = 4,
+    result_out: str = "",
+    verify: bool = True,
+    on_progress: Callable[[TransferProgress], None] | None = None,
+) -> GoUploadResult:
+    """Restore an archive with tgup."""
+    args = [
+        "fetch",
+        "--link", link,
+        "--dest", str(dest),
+        "--api-id", str(api_id),
+        "--api-hash", api_hash,
+        "--concurrency", str(max(1, int(concurrency))),
+    ]
+    if not verify:
+        args.append("--verify=false")
+    if result_out:
+        args += ["--result-out", str(result_out)]
+
+    returncode, _stdout, human = run_command(args, on_progress=on_progress)
+    return _result_from(result_out, returncode, human, None)
+
+
+def bench(
+    *,
+    channel: str,
+    api_id: int,
+    api_hash: str,
+    phone: str = "",
+    size_mb: int = 48,
+    levels: str = "1,2,3,4",
+    result_out: str = "",
+    on_human: Callable[[str], None] | None = None,
+) -> dict:
+    """Measure single-stream vs concurrent throughput against Telegram."""
+    args = [
+        "bench",
+        "--channel", channel,
+        "--api-id", str(api_id),
+        "--api-hash", api_hash,
+        "--size", str(max(1, int(size_mb)) * 1024 * 1024),
+        "--concurrency", levels,
+    ]
+    if phone:
+        args += ["--phone", phone]
+    if result_out:
+        args += ["--result-out", str(result_out)]
+
+    returncode, _stdout, human = run_command(args, on_human=on_human)
+    return {
+        "ok": returncode == 0,
+        "returncode": returncode,
+        "log": human,
+        "rows": _read_json(result_out) if result_out else {},
+    }
+
+
+def _result_from(
+    result_out: str,
+    returncode: int,
+    human: str,
+    on_human: Callable[[str], None] | None,
+) -> GoUploadResult:
+    """Prefer the binary's own result file; fall back to its exit status."""
+    data = _read_json(result_out) if result_out else {}
+    if data:
+        result = GoUploadResult.from_json(data)
+        if returncode != 0 and result.ok:
+            result.ok = False
+            result.error = result.error or f"tgup exited {returncode}"
+        return result
+
+    result = GoUploadResult(used_go=True, ok=False)
+    result.error = _last_error(human) or f"tgup exited {returncode} without a result file"
+    return result
+
+
+def _read_json(path: str) -> dict:
+    if not path:
+        return {}
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+_ERROR_LINE = re.compile(r"(upload failed|fetch failed|bench failed|error)\s*:?\s*(.+)$")
+
+
+def _last_error(human: str) -> str:
+    """Pull the most useful line out of tgup's human output.
+
+    The last failure wins: when several parts fail in one run, the final line
+    is the one the operator needs, not the first casualty.
+    """
+    found = ""
+    for line in human.splitlines():
+        match = _ERROR_LINE.search(line)
+        if match:
+            found = match.group(2).strip()
+    return found
+
+
+def check() -> dict:
+    """Report whether the Go path can run at all. Used by doctor.ps1 and the UI."""
+    override = os.environ.get("TGUP_BIN", "").strip()
+    binary = find_binary()
+    if binary is None:
+        reason = "no tgup binary; build it with tgup\\build.ps1"
+        if override:
+            # An override pointing at nothing is a different mistake from a
+            # missing build, and worth saying so rather than falling back.
+            reason = f"TGUP_BIN points at {override}, which is not a file"
+        return {
+            "runnable": False,
+            "reason": reason,
+            "expected_at": str(TGUP_DIR / BINARY_NAMES[0]),
+        }
+    version = binary_version(binary)
+    if version is None:
+        return {
+            "runnable": False,
+            "reason": (
+                f"{binary.name} exists but will not start; Smart App Control may be "
+                "blocking it"
+            ),
+            "path": str(binary),
+        }
+    return {
+        "runnable": True,
+        "path": str(binary),
+        "session": session_ready(),
+        "needs_login": needs_login(),
+        "size_mb": round(binary.stat().st_size / (1024 * 1024), 2),
+    }
+
+
+def _self_test() -> int:
+    """Run the checks that do not need the network."""
+    status = check()
+    print(json.dumps(status, indent=2))
+
+    if not status.get("runnable"):
+        return 1
+
+    # parseTGLink logic is duplicated in Go; make sure the two agree on the
+    # shapes a user is likely to paste.
+    binary = Path(status["path"])
+    proc = subprocess.run(
+        [str(binary), "plan", "--file", __file__],
+        capture_output=True,
+        creationflags=_no_window(),
+    )
+    if proc.returncode != 0:
+        print("plan on a known-good file failed:", proc.stderr.decode("utf-8", "replace"))
+        return 1
+
+    print("tgup self-test passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_self_test())

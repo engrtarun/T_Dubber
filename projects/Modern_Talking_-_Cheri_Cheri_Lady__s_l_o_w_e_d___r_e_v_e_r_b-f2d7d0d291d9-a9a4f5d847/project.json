@@ -1,0 +1,16 @@
+{
+  "project_id": "Modern_Talking_-_Cheri_Cheri_Lady__s_l_o_w_e_d___r_e_v_e_r_b-f2d7d0d291d9-a9a4f5d847",
+  "title": "Modern_Talking_-_Cheri_Cheri_Lady__s_l_o_w_e_d___r_e_v_e_r_b",
+  "run_id": "a9a4f5d847",
+  "state": "processing",
+  "source_video": "Modern_Talking_-_Cheri_Cheri_Lady_s_l_o_w_e_d_r_e_v_e_r_b.mp4",
+  "source_url": "https://youtu.be/P5NObyXGmfw?list=RDbG7smpvM0ao",
+  "source_kind": "web",
+  "target_language": "Hindi",
+  "speaker_detection": true,
+  "created_at": "2026-10-03T22:18:16+05:30",
+  "telegram_backup": "https://t.me/tgwebcloud1/11",
+  "kernel_id": null,
+  "output_video": null,
+  "report_file": null
+}

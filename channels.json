@@ -1,0 +1,11 @@
+{
+  "channels": [
+    "@tgwebcloud1",
+    "@tgwebcloud2",
+    "@tgwebcloud3",
+    "@tgwebcloud4",
+    "@tgwebcloud5"
+  ],
+  "strategy": "round_robin",
+  "default_index": 0
+}

@@ -1,0 +1,14 @@
+# Local client for T_Dubber.
+# The Kaggle GPU worker installs its own (much heavier) stack separately.
+
+gradio>=6.0
+telethon>=1.34
+yt-dlp>=2026.3.17
+kaggle>=2.0
+
+# Local dubbing / upload helpers (telegram_backup.py still imports requests).
+requests>=2.31
+
+# Runtime tools that are NOT pip-installable and must be on PATH:
+#   ffmpeg / ffprobe   - compression, voice-sample extraction, muxing
+#   kaggle CLI config  - kaggle_paperWork/kaggle.json (never commit it)

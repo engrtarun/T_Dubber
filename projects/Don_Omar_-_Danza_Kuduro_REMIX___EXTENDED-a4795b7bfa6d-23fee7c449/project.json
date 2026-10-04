@@ -1,0 +1,16 @@
+{
+  "project_id": "Don_Omar_-_Danza_Kuduro_REMIX___EXTENDED-a4795b7bfa6d-23fee7c449",
+  "title": "Don_Omar_-_Danza_Kuduro_REMIX___EXTENDED",
+  "run_id": "23fee7c449",
+  "state": "processing",
+  "source_video": "Don_Omar_-_Danza_Kuduro_REMIX_EXTENDED.mp4",
+  "source_url": "https://youtu.be/BeAo2v31sWE?list=RDvRjaGgDsWSo",
+  "source_kind": "web",
+  "target_language": "Hindi",
+  "speaker_detection": true,
+  "created_at": "2026-10-03T21:34:33+05:30",
+  "telegram_backup": null,
+  "kernel_id": null,
+  "output_video": null,
+  "report_file": null
+}

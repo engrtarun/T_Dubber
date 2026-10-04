@@ -1,6 +1,7 @@
-import os
+﻿import os
 import time
 import json
+import datetime
 import subprocess
 import shutil
 import re
@@ -31,17 +32,149 @@ def run_cmd(cmd):
         cmd, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=child_env
     )
 
-def sanitize_name(name):
-    """Replaces spaces and invalid characters with underscores."""
-    return re.sub(r'[^A-Za-z0-9_-]', '_', name.replace(' ', '_'))
+def kernel_id_for(username):
+    """The single reusable private worker notebook for this Kaggle account."""
+    return f"{username}/dubber-worker-homura"
 
-def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
+
+def _collect_kernel_logs(project_dir):
+    """Read whatever the Kaggle output download left behind, newest wins."""
+    for path in [os.path.join(project_dir, "error_log.txt")] + sorted(
+        glob.glob(os.path.join(project_dir, "*.log"))
+    ):
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                    return handle.read(), path
+            except OSError:
+                continue
+    return "", None
+
+
+def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seconds=30):
+    """Poll a Kaggle kernel until it finishes, yielding progress lines.
+
+    Returns ``{"success": bool, "network_error": bool, "status": str}``. This is
+    deliberately a separate generator so :func:`reattach_to_kernel` can reuse
+    the exact same logic -- when a browser tab closes or the PC reboots, the
+    work is still running on Kaggle and we need to pick the thread back up.
+    """
+    status_cmd = ["python", "-m", "kaggle", "kernels", "status", kernel_id]
+    output_cmd = ["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir]
+
+    start_time = time.time()
+    last_report = 0
+
+    while True:
+        elapsed = time.time() - start_time
+        if elapsed > timeout:
+            yield f"[{stage}] ❌ Timeout: Worker did not finish within {int(timeout / 3600)} hours.\n"
+            return {"success": False, "network_error": False, "status": "timeout"}
+
+        result = run_cmd(status_cmd)
+        status_text = (result.stdout or "") + (result.stderr or "")
+        lowered = status_text.lower()
+
+        if "complete" in lowered:
+            yield f"[{stage}] ✅ Kaggle execution completed!\n"
+            return {"success": True, "network_error": False, "status": "complete"}
+
+        if "error" in lowered or "cancel" in lowered:
+            yield f"[{stage}] ❌ Kaggle execution failed or was cancelled.\n"
+            yield f"[{stage}] ⬇️ Downloading Kaggle logs for debugging...\n"
+            for attempt in range(3):
+                if attempt:
+                    yield f"[{stage}] ⏳ Kaggle outputs are not ready; retrying log download ({attempt + 1}/3).\n"
+                    time.sleep(8)
+                run_cmd(output_cmd)
+                if _collect_kernel_logs(project_dir)[0]:
+                    break
+
+            content, source = _collect_kernel_logs(project_dir)
+            if content:
+                yield f"[{stage}] ❌ Error Details (from {os.path.basename(source)}):\n{content[-2000:]}\n"
+                network_error = (
+                    "could not resolve host" in content.lower()
+                    or "network is unreachable" in content.lower()
+                )
+                return {"success": False, "network_error": network_error, "status": "error"}
+            yield f"[{stage}] ❌ No error log or .log file found in {project_dir}\n"
+            if (result.stderr or result.stdout):
+                yield f"[{stage}] Kaggle CLI said:\n{(result.stderr or result.stdout).strip()[-1200:]}\n"
+            return {"success": False, "network_error": False, "status": "error"}
+
+        # Report at most once a minute so the log stays readable on long jobs.
+        if elapsed - last_report >= 60:
+            last_report = elapsed
+            yield (
+                f"[{stage}] 🔄 Worker still processing on Kaggle... "
+                f"(elapsed {int(elapsed // 60)}m {int(elapsed % 60)}s)\n"
+            )
+        time.sleep(poll_seconds)
+
+
+def reattach_to_kernel(project_dir, kernel_id, timeout=10 * 60 * 60, poll_seconds=30):
+    """Resume monitoring a Kaggle worker that was already submitted.
+
+    This is the PC-died case. The kernel keeps running on Kaggle regardless of
+    the user's machine, so all that is needed is to point this at the same
+    kernel id and wait again. Yields the same ``[STAGE:X]`` log lines as a live
+    run, then hands off to the output download.
+    """
+    yield "[STAGE:5] ♻️ Reattaching to the Kaggle worker...\n"
+    yield f"[STAGE:5] ☁️ Your PC going offline does not stop Kaggle; the job is still running there.\n"
+    yield f"[STAGE:5] 🔗 Worker URL: https://www.kaggle.com/code/{kernel_id}\n"
+
+    outcome = yield from _wait_for_kernel(
+        kernel_id, project_dir, timeout=timeout, stage="STAGE:5", poll_seconds=poll_seconds
+    )
+    if not outcome["success"]:
+        return outcome
+
+    yield "[STAGE:6] ⬇️ Downloading final outputs from Kaggle...\n"
+    output_cmd = ["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir]
+    yield f"[STAGE:6] Executing: {' '.join(output_cmd)}\n"
+    run_cmd(output_cmd)
+
+    mp4_files = [
+        f
+        for f in glob.glob(os.path.join(project_dir, "*.mp4"))
+        if os.path.getsize(f) > 0
+    ]
+    if mp4_files:
+        stale = os.path.join(project_dir, "error_log.txt")
+        if os.path.isfile(stale):
+            os.remove(stale)
+        biggest = max(mp4_files, key=lambda f: os.path.getsize(f))
+        yield f"[STAGE:7] 🎉 Pipeline finished successfully! Output: {os.path.basename(biggest)}"
+        outcome["output_video"] = biggest
+    else:
+        content, _source = _collect_kernel_logs(project_dir)
+        if content:
+            yield f"[STAGE:7] ❌ Worker Error Log:\n{content[-2500:]}\n"
+        else:
+            yield "[STAGE:7] ❌ Worker reported success but produced no video.\n"
+    return outcome
+
+
+def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
+                 backup_link=None, source_url=None, source_title=None, source_size=None):
     """
     Orchestrator function (Generator) using Kaggle API to push the job to a cloud GPU.
     Yields status logs incrementally with [STAGE:X] markers for the UI stepper.
+
+    ``backup_link`` is the Telegram archive link created before this run
+    started. It travels with the job so the worker records it in its report and
+    a finished dub can always be traced back to its archive.
     """
     yield "[STAGE:1] 🚀 Starting Kaggle pipeline...\n"
-    
+
+    if backup_link:
+        yield f"[STAGE:1] ☁️ Telegram backup on file: {backup_link}\n"
+    if source_url:
+        yield f"[STAGE:1] 🔗 Source resolved from: {source_url}\n"
+
+
     kaggle_creds_path = os.path.join(local_kaggle_dir, "kaggle.json")
     if not os.path.exists(kaggle_creds_path):
         yield f"[STAGE:1] ❌ Error: Missing Kaggle credentials!\nCould not find kaggle.json at {kaggle_creds_path}.\n"
@@ -114,8 +247,16 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
     # Pass the UI's selected target through the versioned input dataset. The
     # worker must not silently dub every project into a hard-coded language.
     job_config_path = os.path.join(dataset_dir, "dub_job.json")
+    job_config = {
+        "target_language": target_lang,
+        "telegram_backup": backup_link,
+        "source_url": source_url,
+        "source_title": source_title,
+        "source_size_bytes": source_size,
+        "requested_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
     with open(job_config_path, "w", encoding="utf-8") as config_file:
-        json.dump({"target_language": target_lang}, config_file, ensure_ascii=False, indent=2)
+        json.dump(job_config, config_file, ensure_ascii=False, indent=2)
     
     # Task 3: Ensure no .git directory in dataset folder
     git_dir = os.path.join(dataset_dir, ".git")
@@ -235,7 +376,7 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
     kmeta_path = os.path.join(kernel_dir, "kernel-metadata.json")
     # Keep one private notebook so its configuration persists between video runs.
     kernel_slug = "dubber-worker-homura"
-    kernel_id = f"{KAGGLE_USERNAME}/{kernel_slug}"
+    kernel_id = kernel_id_for(KAGGLE_USERNAME)
     
     if os.path.exists(kmeta_path):
         with open(kmeta_path, "r") as f:
@@ -273,83 +414,25 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection):
                     continue
             return
             
-        yield f"[STAGE:5] ⏳ Waiting for Kaggle Worker to complete...\n"
-        
+        yield "[STAGE:5] ⏳ Waiting for Kaggle Worker to complete...\n"
+
         # Feature films can take several hours on a free shared GPU.
         # Kaggle remains the hard upper bound and reports failure sooner.
-        timeout = 10 * 60 * 60
-        start_time = time.time()
-        
-        status_cmd = ["python", "-m", "kaggle", "kernels", "status", kernel_id]
-        
-        kernel_success = False
-        kernel_failed_with_network_error = False
-        
-        # Task 1 & 2: Real polling loop
-        while True:
-            elapsed = time.time() - start_time
-            if elapsed > timeout:
-                yield "[STAGE:5] ❌ Timeout: Worker did not finish within 10 hours.\n"
-                return
-                
-            res = run_cmd(status_cmd)
-            status_text = res.stdout.lower() + res.stderr.lower()
-            
-            if "complete" in status_text:
-                yield "[STAGE:5] ✅ Kaggle execution completed!\n"
-                kernel_success = True
-                break
-            elif "error" in status_text or "cancel" in status_text:
-                yield "[STAGE:5] ❌ Kaggle execution failed or was cancelled!\n"
-                yield "[STAGE:5] ⬇️ Downloading Kaggle logs for debugging...\n"
-                output_cmd = ["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir]
-                output_result = None
-                for output_attempt in range(3):
-                    if output_attempt:
-                        yield f"[STAGE:5] ⏳ Kaggle outputs are not ready; retrying log download ({output_attempt + 1}/3).\n"
-                        time.sleep(8)
-                    output_result = run_cmd(output_cmd)
-                    downloaded_logs = (
-                        os.path.isfile(os.path.join(project_dir, "error_log.txt"))
-                        or bool(glob.glob(os.path.join(project_dir, "*.log")))
-                    )
-                    if downloaded_logs:
-                        break
-                
-                error_log_path = os.path.join(project_dir, "error_log.txt")
-                err_content = ""
-                if os.path.exists(error_log_path):
-                    with open(error_log_path, "r") as f:
-                        err_content = f.read()
-                else:
-                    log_files = glob.glob(os.path.join(project_dir, "*.log"))
-                    if log_files:
-                        with open(log_files[0], "r") as f:
-                            err_content = f.read()
-                            
-                if err_content:
-                    yield f"[STAGE:5] ❌ Error Details:\n{err_content[-2000:]}\n"
-                    if "could not resolve host" in err_content.lower() or "network is unreachable" in err_content.lower():
-                        kernel_failed_with_network_error = True
-                else:
-                    yield f"[STAGE:5] ❌ No error log or .log file found in {project_dir}\n"
-                    if output_result and (output_result.stderr or output_result.stdout):
-                        cli_error = (output_result.stderr or output_result.stdout).strip()
-                        yield f"[STAGE:5] Kaggle output download message:\n{cli_error[-1200:]}\n"
-                break
-            
-            yield f"[STAGE:5] 🔄 Worker is still processing... (Elapsed: {int(elapsed/60)}m {int(elapsed%60)}s)\n"
-            time.sleep(30)
-            
-        if kernel_success:
+        outcome = yield from _wait_for_kernel(
+            kernel_id,
+            project_dir,
+            timeout=10 * 60 * 60,
+            stage="STAGE:5",
+        )
+
+        if outcome["success"]:
             break
-        elif kernel_failed_with_network_error and kernel_attempt == 0:
+        if outcome["network_error"] and kernel_attempt == 0:
             yield "[STAGE:5] ⚠️ Kernel failed with a network error. Waiting 60 seconds and re-pushing once...\n"
             time.sleep(60)
             continue
-        else:
-            return
-        
+        return
+
     yield "[STAGE:6] ⬇️ Downloading final outputs from Kaggle...\n"
     
     output_cmd = ["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir]
