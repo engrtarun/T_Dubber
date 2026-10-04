@@ -1,0 +1,48 @@
+{
+  "file_path": "C:\\Users\\pocot\\Music\\T_Dubber\\projects\\_inbox\\20261004_221538\\Full_Song_Pehla_Pyaar_Kabir_Singh_Shahid_Kapoor_Kiara_Adva.mp4",
+  "filename": "Full_Song_Pehla_Pyaar_Kabir_Singh_Shahid_Kapoor_Kiara_Adva.mp4",
+  "size": 18043007,
+  "state": "complete",
+  "parts": [
+    {
+      "part": 1,
+      "name": "Full_Song_Pehla_Pyaar_Kabir_Singh_Shahid_Kapoor_Kiara_Adva.mp4",
+      "offset": 0,
+      "size": 18043007,
+      "sha256": "53ccc2f189dee1413d3aae5395664d8a8337395649c2465012208535fb3d35cd",
+      "message_id": 14,
+      "link": "https://t.me/tgwebcloud1/14"
+    }
+  ],
+  "updated_at": 1791132441.1896234,
+  "message_id": 14,
+  "message_link": "https://t.me/tgwebcloud1/14",
+  "channel": "@tgwebcloud1",
+  "manifest": {
+    "tg_dubber_manifest": 2,
+    "filename": "Full_Song_Pehla_Pyaar_Kabir_Singh_Shahid_Kapoor_Kiara_Adva.mp4",
+    "size": 18043007,
+    "chunk_size": 1992294400,
+    "chunked": false,
+    "chunk_count": 1,
+    "channel": "@tgwebcloud1",
+    "source_path": "C:\\Users\\pocot\\Music\\T_Dubber\\projects\\_inbox\\20261004_221538\\Full_Song_Pehla_Pyaar_Kabir_Singh_Shahid_Kapoor_Kiara_Adva.mp4",
+    "thumbnail_path": null,
+    "caption": "🎬 Full Song: Pehla Pyaar | Kabir Singh | Shahid Kapoor, Kiara Advani | Armaan Malik | Vishal Mishra\n👤 T-Series · ⏱ 4m 32s · 🎥 720p · 💾 17.21 MB\n🔗 https://www.youtube.com/watch?v=B7SkAq_94J8\n#T_Dubber #youtube #t_series #4min #720p",
+    "created_at": "2026-10-04T22:17:21+0530",
+    "app": "T_Dubber",
+    "parts": [
+      {
+        "part": 1,
+        "name": "Full_Song_Pehla_Pyaar_Kabir_Singh_Shahid_Kapoor_Kiara_Adva.mp4",
+        "offset": 0,
+        "size": 18043007,
+        "sha256": "53ccc2f189dee1413d3aae5395664d8a8337395649c2465012208535fb3d35cd",
+        "message_id": 14,
+        "link": "https://t.me/tgwebcloud1/14"
+      }
+    ]
+  },
+  "chunked": false,
+  "chunk_count": 1
+}

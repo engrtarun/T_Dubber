@@ -26,6 +26,22 @@
 //
 //      Exit codes: 0 = success, 1 = runtime error, 2 = bad usage.
 //
+//  Choosing the threshold (read this before shipping a voice track)
+//  ----------------------------------------------------------------
+//  The gate is *hard and per-sample*: every individual sample quieter than
+//  noise_threshold is silenced -- which also silences the instants where a
+//  loud signal crosses zero, because a zero crossing dips below any threshold
+//  by definition. At 0.02 that is harmless (a sub-millisecond cut at speech
+//  levels), and it is the behaviour the pipeline spec asks for: "zero out
+//  samples below the threshold", reproducible byte for byte for the audit
+//  trail. A hysteresis gate -- open at T, close at T/2 behind a release ramp --
+//  would remove that artifact entirely, and is deliberately not implemented.
+//
+//  Practical rules for dubbed speech:
+//      * keep the threshold far below program level: 0.01 .. 0.03 (-40 ..
+//        -30 dBFS) is the useful band; 0.10 (-20 dBFS) starts to chew.
+//      * if quiet passages tick, lower the threshold -- not the gain.
+//
 //  Why it is written this way
 //  --------------------------
 //  * Manual RIFF parsing. The WAV container is a 12-byte RIFF preamble plus a
@@ -549,8 +565,9 @@ void print_usage(std::ostream& os) {
        << "  input_wav        16-bit PCM WAV to read (1..8 channels, any sample rate)\n"
        << "  output_wav       16-bit PCM WAV to write (parent directories are created)\n"
        << "  noise_threshold  gate threshold as a fraction of full scale, 0.0 .. 1.0;\n"
-       << "                   samples quieter than it are zeroed. 0.0 disables the gate\n"
-       << "                   (0.02 = -34 dBFS = typical room-hiss removal)\n"
+       << "                   each sample quieter than it is zeroed (hard, per-sample --\n"
+       << "                   keep it well below program level, 0.01 .. 0.03 for speech).\n"
+       << "                   0.0 disables the gate (0.02 = -34 dBFS = hiss removal)\n"
        << "  target_gain      linear gain multiplier (2.0 = +6 dB, 0.5 = -6 dB);\n"
        << "                   output saturates at the 16-bit rails instead of wrapping\n"
        << "\n"

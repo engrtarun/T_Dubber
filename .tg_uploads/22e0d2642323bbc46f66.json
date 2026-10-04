@@ -1,0 +1,48 @@
+{
+  "file_path": "C:\\Users\\pocot\\Music\\T_Dubber\\projects\\_inbox\\20261004_080128\\Powfu_-_death_bed_coffee_for_your_head_Official_Video_ft._beabadoobee.mp4",
+  "filename": "Powfu_-_death_bed_coffee_for_your_head_Official_Video_ft._beabadoobee.mp4",
+  "size": 14248758,
+  "state": "complete",
+  "parts": [
+    {
+      "part": 1,
+      "name": "Powfu_-_death_bed_coffee_for_your_head_Official_Video_ft._beabadoobee.mp4",
+      "offset": 0,
+      "size": 14248758,
+      "sha256": "57f041dc5299837f35e04610692a5683c252be84249b0d08d7ee9b3bcc2b440b",
+      "message_id": 13,
+      "link": "https://t.me/tgwebcloud1/13"
+    }
+  ],
+  "updated_at": 1791081126.4976373,
+  "message_id": 13,
+  "message_link": "https://t.me/tgwebcloud1/13",
+  "channel": "@tgwebcloud1",
+  "manifest": {
+    "tg_dubber_manifest": 2,
+    "filename": "Powfu_-_death_bed_coffee_for_your_head_Official_Video_ft._beabadoobee.mp4",
+    "size": 14248758,
+    "chunk_size": 1992294400,
+    "chunked": false,
+    "chunk_count": 1,
+    "channel": "@tgwebcloud1",
+    "source_path": "C:\\Users\\pocot\\Music\\T_Dubber\\projects\\_inbox\\20261004_080128\\Powfu_-_death_bed_coffee_for_your_head_Official_Video_ft._beabadoobee.mp4",
+    "thumbnail_path": null,
+    "caption": "🎬 Powfu - death bed (coffee for your head) (Official Video) ft. beabadoobee\n👤 Powfu · ⏱ 2m 54s · 🎥 720p · 💾 13.59 MB\n🔗 https://www.youtube.com/watch?v=jJPMnTXl63E\n#T_Dubber #youtube #powfu #2min #720p",
+    "created_at": "2026-10-04T08:02:06+0530",
+    "app": "T_Dubber",
+    "parts": [
+      {
+        "part": 1,
+        "name": "Powfu_-_death_bed_coffee_for_your_head_Official_Video_ft._beabadoobee.mp4",
+        "offset": 0,
+        "size": 14248758,
+        "sha256": "57f041dc5299837f35e04610692a5683c252be84249b0d08d7ee9b3bcc2b440b",
+        "message_id": 13,
+        "link": "https://t.me/tgwebcloud1/13"
+      }
+    ]
+  },
+  "chunked": false,
+  "chunk_count": 1
+}

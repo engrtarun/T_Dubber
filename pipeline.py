@@ -468,6 +468,19 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     else:
         target_upload_path = video_path
         
+    track_stage(project_id, 1, "success",
+                message=("Compressed to 480p and staged" if needs_compression and compressed_video_path
+                         else "Source staged without compression"),
+                manifest=manifest)
+    yield "[STAGE:1] ✅ Compression successful.\n" if compressed_video_path else ""
+
+    # Stage 1 covers everything from "start" through "input staged for upload".
+    track_stage(project_id, 1, "success",
+                message=("Compressed to 480p and staged for upload"
+                         if needs_compression and compressed_video_path
+                         else "Source staged for upload without compression"),
+                manifest=manifest)
+
     shutil.copy(target_upload_path, os.path.join(dataset_dir, video_filename))
 
     # Pass the UI's selected target through the versioned input dataset. The
@@ -490,7 +503,9 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         shutil.rmtree(git_dir)
     
     yield "[STAGE:2] 📦 Creating Dataset structure...\n"
-    
+    track_stage(project_id, 2, "running", message="Bundling Mazinger source and dataset metadata",
+                manifest=manifest)
+
     # Add the local mazinger source code to the dataset for offline installation
     mazinger_src = os.path.join(APP_DIR, "mazinger")
     if os.path.exists(mazinger_src):
@@ -503,6 +518,8 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     bundled_mazinger = os.path.join(dataset_dir, "mazinger", "pyproject.toml")
     if not os.path.isfile(bundled_mazinger):
         yield "[STAGE:2] ❌ Local Mazinger source was not copied into the Kaggle dataset; refusing to upload a broken worker input.\n"
+        track_stage(project_id, 2, "failed", message="Mazinger source was not bundled",
+                    error=f"{bundled_mazinger} is missing after copytree", manifest=manifest)
         return
     # Kaggle CLI's datasets create defaults to --dir-mode skip, so nested
     # directories are not uploaded. Keep an explicit ZIP at the dataset root.
@@ -529,6 +546,9 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         init_result = run_cmd(init_cmd)
         if init_result.returncode != 0:
             yield f"[STAGE:2] ❌ Could not initialize dataset metadata:\n{init_result.stderr or init_result.stdout}\n"
+            track_stage(project_id, 2, "failed", message="kaggle datasets init failed",
+                        error=(init_result.stderr or init_result.stdout or "").strip(),
+                        manifest=manifest)
             return
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
@@ -538,7 +558,13 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
 
+    track_stage(project_id, 2, "success",
+                message=f"Bundled Mazinger source and dataset metadata for {dataset_id}",
+                manifest=manifest)
+
     yield f"[STAGE:3] ☁️ Uploading video to reusable Kaggle dataset ({dataset_id})...\n"
+    track_stage(project_id, 3, "running", message=f"Uploading input dataset {dataset_id}",
+                manifest=manifest)
     status_cmd = ["python", "-m", "kaggle", "datasets", "status", dataset_id]
     status_result = run_cmd(status_cmd)
     dataset_exists = status_result.returncode == 0
@@ -584,8 +610,13 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         error_text = (last_result.stderr or last_result.stdout or "No error details returned.").strip()
         yield f"[STAGE:3] ❌ Dataset upload failed after {max_retries} attempts:\n{error_text}\n"
         yield "[STAGE:3] Kaggle did not confirm that the dataset exists. Check Kaggle service/account status, then retry; this run did not submit a worker.\n"
+        track_stage(project_id, 3, "failed",
+                    message=f"Dataset upload failed after {max_retries} attempts",
+                    error=error_text, manifest=manifest)
         return
 
+    track_stage(project_id, 3, "success",
+                message=f"Input dataset uploaded to {dataset_id}", manifest=manifest)
     yield "[STAGE:3] ✅ Upload complete.\n"
     
     # Push Kaggle Notebook (The Worker)
@@ -595,6 +626,9 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     shutil.copy(os.path.join(APP_DIR, "kaggle_worker.ipynb"), os.path.join(kernel_dir, "kaggle_worker.ipynb"))
     
     yield "[STAGE:4] ⚙️ Initializing Kaggle Worker Kernel...\n"
+    manifest["kernel_id"] = kernel_id = kernel_id_for(KAGGLE_USERNAME)
+    track_stage(project_id, 4, "running", message=f"Preparing worker kernel {kernel_id}",
+                manifest=manifest)
     k_init_cmd = ["python", "-m", "kaggle", "kernels", "init", "-p", kernel_dir]
     yield f"[STAGE:4] Executing: {' '.join(k_init_cmd)}\n"
     run_cmd(k_init_cmd)
@@ -602,7 +636,6 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     kmeta_path = os.path.join(kernel_dir, "kernel-metadata.json")
     # Keep one private notebook so its configuration persists between video runs.
     kernel_slug = "dubber-worker-homura"
-    kernel_id = kernel_id_for(KAGGLE_USERNAME)
     
     if os.path.exists(kmeta_path):
         with open(kmeta_path, "r") as f:

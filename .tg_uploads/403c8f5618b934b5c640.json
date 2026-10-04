@@ -1,0 +1,48 @@
+{
+  "file_path": "C:\\Users\\pocot\\Music\\T_Dubber\\projects\\_inbox\\20261004_074036\\5_Signs_Someone_Wants_You_To_Make_The_First_Move.mp4",
+  "filename": "5_Signs_Someone_Wants_You_To_Make_The_First_Move.mp4",
+  "size": 241978435,
+  "state": "complete",
+  "parts": [
+    {
+      "part": 1,
+      "name": "5_Signs_Someone_Wants_You_To_Make_The_First_Move.mp4",
+      "offset": 0,
+      "size": 241978435,
+      "sha256": "b42bc1549b7cc85854c99166e6d1d1b3a06bbe6ea3ae0ffe8ad74d853eb98119",
+      "message_id": 12,
+      "link": "https://t.me/tgwebcloud1/12"
+    }
+  ],
+  "updated_at": 1791080082.0191596,
+  "message_id": 12,
+  "message_link": "https://t.me/tgwebcloud1/12",
+  "channel": "@tgwebcloud1",
+  "manifest": {
+    "tg_dubber_manifest": 2,
+    "filename": "5_Signs_Someone_Wants_You_To_Make_The_First_Move.mp4",
+    "size": 241978435,
+    "chunk_size": 1992294400,
+    "chunked": false,
+    "chunk_count": 1,
+    "channel": "@tgwebcloud1",
+    "source_path": "C:\\Users\\pocot\\Music\\T_Dubber\\projects\\_inbox\\20261004_074036\\5_Signs_Someone_Wants_You_To_Make_The_First_Move.mp4",
+    "thumbnail_path": null,
+    "caption": "🎬 📍5 Signs Someone Wants You To Make The First Move\n👤 Loquacious · ⏱ 10m 37s · 🎥 720p · 💾 230.77 MB\n🔗 https://www.youtube.com/watch?v=TRkGuVizgCc\n#T_Dubber #youtube #loquacious #10min #720p",
+    "created_at": "2026-10-04T07:44:42+0530",
+    "app": "T_Dubber",
+    "parts": [
+      {
+        "part": 1,
+        "name": "5_Signs_Someone_Wants_You_To_Make_The_First_Move.mp4",
+        "offset": 0,
+        "size": 241978435,
+        "sha256": "b42bc1549b7cc85854c99166e6d1d1b3a06bbe6ea3ae0ffe8ad74d853eb98119",
+        "message_id": 12,
+        "link": "https://t.me/tgwebcloud1/12"
+      }
+    ]
+  },
+  "chunked": false,
+  "chunk_count": 1
+}
