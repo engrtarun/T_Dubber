@@ -1,0 +1,20 @@
+[package]
+name = "subtitle_forge"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Turn a faster-whisper JSON transcript into styled .srt and .ass subtitles"
+
+[[bin]]
+name = "subtitle_forge"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

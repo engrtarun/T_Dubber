@@ -1,0 +1,83 @@
+[package]
+name = "havaldar_core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Telemetry ingestion daemon for T_Dubber: memory-safe, lock-disciplined writer for t_dubber.db"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/engrtarun/T_Dubber"
+keywords = ["sqlite", "telemetry", "daemon", "dubbing"]
+categories = ["database", "web-programming::http-server"]
+
+[[bin]]
+name = "havaldar_core"
+path = "src/main.rs"
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+[dependencies]
+# axum over actix-web: axum is built directly on hyper/tokio with no runtime
+# lock-in, which matters because we also own a blocking writer thread. Actix
+# additionally forces its own single-threaded runtime model onto a service that
+# already juggles a blocking DB writer.
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio", "query"] }
+
+# rusqlite is SYNCHRONOUS by design. We never call it from an async task; all
+# DB work happens on the dedicated writer thread in db.rs. See the module docs
+# there for why `spawn_blocking` per packet was rejected in favour of a single
+# batched writer.
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+tokio = { version = "1", features = [
+    "rt-multi-thread",   # real parallelism for the accept loop
+    "macros",            # #[tokio::main]
+    "signal",            # graceful shutdown on SIGTERM/SIGINT
+    "sync",              # mpsc backpressure channel
+    "time",              # flush interval + request timeouts
+    "net",               # UDP listener
+] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive", "env"] }
+
+# Structured JSON logs to stderr. tracing's fmt layer is a dependency-light
+# alternative to hand-rolled eprintln! and gives us spans for free.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+# Percent-decode query strings without pulling in the full url crate.
+percent-encoding = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+# ---------------------------------------------------------------------------
+# Profile
+# ---------------------------------------------------------------------------
+[profile.release]
+opt-level = 3
+lto = "thin"           # measurably faster than "off", much cheaper to build than "fat"
+codegen-units = 1
+panic = "abort"        # a panic must never unwind into tokio's task scheduler
+strip = "symbols"      # smaller binary; we ship this as a Kaggle Dataset artifact
+
+# Debug builds keep the panic message and line numbers, which is the whole
+# point of a debug build.
+[profile.dev]
+panic = "unwind"
+
+# ---------------------------------------------------------------------------
+# Lints -- deny the footguns this service must not have
+# ---------------------------------------------------------------------------
+[lints.rust]
+unsafe_code = "forbid"        # "memory-safe backend" is a claim; enforce it
+
+[lints.clippy]
+unwrap_used = "warn"          # reviewed: no unwrap() in request or writer paths
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
