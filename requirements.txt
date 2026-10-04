@@ -1,10 +1,10 @@
 # Local client for T_Dubber.
 # The Kaggle GPU worker installs its own (much heavier) stack separately.
 
-gradio>=6.0
+gradio>=5.0
 telethon>=1.34
 yt-dlp>=2026.3.17
-kaggle>=2.0
+kaggle>=1.5
 
 # Local dubbing / upload helpers (telegram_backup.py still imports requests).
 requests>=2.31
