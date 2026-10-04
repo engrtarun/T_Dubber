@@ -684,6 +684,7 @@ def _try_go_upload(
     plan: list,
     chunk_size: int,
     caption,
+    thumbnail_path,
     progress_callback,
     on_journal,
     go_concurrency: int = 3,
@@ -711,7 +712,7 @@ def _try_go_upload(
     except ImportError:
         return None
     ok, reason = go_planner.should_use_go_upload(
-        size, chunk_size, channel, thumbnail_path="", use_go=True,
+        size, chunk_size, channel, thumbnail_path=thumbnail_path, use_go=True,
     )
     if not ok:
         return None
@@ -724,6 +725,7 @@ def _try_go_upload(
         result = go_planner.upload_via_go(
             file_path, api_id, api_hash, channel, phone=phone,
             concurrency=go_concurrency, chunk_size=chunk_size,
+            caption=caption, thumbnail_path=thumbnail_path
         )
     except Exception as exc:  # noqa: BLE001 - speed must never fail a run
         _emit(
@@ -883,7 +885,7 @@ def upload_file_detailed(
     if use_go:
         go_journal = _try_go_upload(
             file_path, api_id, api_hash, phone, channel, size, plan,
-            chunk_size, caption, progress_callback, on_journal,
+            chunk_size, caption, thumbnail_path, progress_callback, on_journal,
             go_concurrency=go_concurrency,
         )
         if go_journal is not None:

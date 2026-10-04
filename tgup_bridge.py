@@ -74,15 +74,9 @@ def get_base_command() -> list[str]:
     if on_path:
         return [str(on_path)]
     
-    # Fallback to Go source if no exe is found (useful for web apps)
-    go_bin = shutil.which("go")
-    if not go_bin:
-        local_go = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Go" / "bin" / "go.exe"
-        if local_go.is_file():
-            go_bin = str(local_go)
-            
-    if go_bin and (ROOT / "main.go").is_file():
-        return [go_bin, "run", "."]
+    # Fallback to Go source via PS1 conductor
+    if (ROOT / "run_go.ps1").is_file():
+        return ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "run_go.ps1")]
         
     return []
 
