@@ -151,11 +151,7 @@ async fn ingest(
     if wait {
         let outcome = state
             .writer
-            .submit_and_wait(
-                event,
-                state.queue_capacity,
-                Duration::from_millis(5_000),
-            )
+            .submit_and_wait(event, Duration::from_millis(5_000))
             .await
             .map_err(ApiError)?;
         if let Some(reason) = outcome.rejected {
@@ -173,11 +169,8 @@ async fn ingest(
         ));
     }
 
-    state
-        .writer
-        .submit(event, state.queue_capacity)
-        .await
-        .map_err(ApiError)?;
+    // Non-blocking submit: a full queue becomes a 503, not an unbounded buffer.
+    state.writer.submit(event).map_err(ApiError)?;
     let _ = state.recent.send(RecentEvent {
         project_id,
         kind,
@@ -221,11 +214,7 @@ async fn ingest_batch(
     }
 
     for ev in events {
-        state
-            .writer
-            .submit(ev, state.queue_capacity)
-            .await
-            .map_err(ApiError)?;
+        state.writer.submit(ev).map_err(ApiError)?;
     }
     Ok((
         StatusCode::ACCEPTED,
@@ -389,10 +378,10 @@ async fn handle_udp_datagram(
         crate::packet::TelemetryEvent::Log(e) => (e.project_id.clone(), "log", e.stage),
     };
 
-    state.writer.submit(event, state.queue_capacity).await?;
     // Fire-and-forget on purpose. UDP has no acknowledgement, so waiting for
     // the commit here would stall the receive loop behind the disk and could
     // cause the kernel to drop subsequent datagrams.
+    state.writer.submit(event)?;
     let _ = state.recent.send(RecentEvent {
         project_id,
         kind,

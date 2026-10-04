@@ -4,13 +4,18 @@
 #  PURPOSE
 #  -------
 #  A single, reproducible environment for the automated dubbing worker:
-#  Python AI brain (torch + vLLM + faster-whisper), FFmpeg's blades, the Go
-#  transporter (tgup), and the Rust mem-broker for audio stitching.
+#  Python AI brain (torch + vLLM + faster-whisper), FFmpeg's blades, and the
+#  native arsenal -- tgup (Go), stitcher + subtitle_forge + havaldar_core
+#  (Rust, musl-static) and normalizer (C++, static).
 #
 #  HOW TO BUILD
 #  ------------
 #    docker build -t t-dubber:1.0.0 .
 #    docker run --rm --gpus all -it t-dubber:1.0.0 bash
+#    .\build_kaggle_pack.ps1        <- the Kaggle pack: builds ONLY the
+#                                      pack-exporter target (Go/Rust/C++
+#                                      stages -- the 5 GB GPU brain is never
+#                                      pulled) and exports ./pack/ to disk.
 #
 #  THE KAGGLE CAVEAT  (read this before you expect a Dockerfile to run there)
 #  --------------------------------------------------------------------------
@@ -39,6 +44,7 @@
 #    + venv                         (already counted in torch/vLLM)
 #    + Go toolchain                 ~ 0.0 GB   (builder only)
 #    + Rust toolchain               ~ 1.5 GB   (opt-in, WITH_RUST=1)
+#    + Native arsenal (5 tools)     ~ 0.04 GB  (static; baked via 3f)
 #    ------------------------------------------
 #    TOTAL                          ~ 8.9 GB   (default)
 # =============================================================================
@@ -53,7 +59,15 @@
 # If you ever add flash-attn or a custom kernel, swap this for `-devel`.
 # -----------------------------------------------------------------------------
 ARG CUDA_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
-ARG UBUNTU_TAG=ubuntu22.04
+# Ubuntu tag for the C++ builder (stage 1c): `FROM ubuntu:${UBUNTU_TAG}` must
+# resolve to a real image, so the tag is plain 22.04 -- the same release as
+# the Kaggle kernel (glibc 2.35). The old value `ubuntu22.04` was never used
+# by any FROM line; it is not a valid image reference, which is why the
+# correction and this comment live together.
+ARG UBUNTU_TAG=22.04
+# Builder image for the Rust arsenal (stage 1b). `stable`, same philosophy as
+# RUST_TOOLCHAIN=1 below: newest stable in, MSRV surprises out.
+ARG RUST_PACK_IMAGE=rust:stable-bookworm
 
 # Ubuntu 22.04 is deliberate, not lazy: its default python3 IS 3.10, which is
 # byte-for-byte the interpreter your Kaggle kernel already uses. Matching it
@@ -96,6 +110,97 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -trimpath -ldflags="-s -w" -o /out/tgup . && \
     strip /out/tgup 2>/dev/null || true; \
     /out/tgup help > /dev/null
+
+
+# =============================================================================
+# STAGE 1b — "THE ARMORY"  ·  build the three Rust tools, statically
+# =============================================================================
+# stitcher (timeline mixing), subtitle_forge (faster-whisper JSON -> styled
+# .srt/.ass) and havaldar_core (the telemetry daemon) build in ONE stage, so
+# the cargo registry cache is fetched once and shared by all three crates.
+#
+# WHY x86_64-unknown-musl, NOT the default gnu target: Kaggle kernels run
+# Ubuntu 22.04 (glibc 2.35) while this builder is Debian bookworm (glibc
+# 2.36). A gnu-target binary linked here would demand GLIBC_2.36 symbols on
+# Kaggle and die with a version error -- discovered 20 minutes into a run.
+# The musl target links its libc in statically instead: no glibc
+# negotiation on the far side at all, which is what "static" has to mean to
+# survive the Docker -> Dataset -> Kaggle trip.
+#
+# musl-tools ships musl-gcc, which havaldar_core's bundled SQLite (rusqlite)
+# needs to compile its C amalgamation against musl headers.
+FROM ${RUST_PACK_IMAGE} AS rust-arsenal
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        musl-tools \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup target add x86_64-unknown-musl
+
+WORKDIR /arsenal
+
+# One crate per RUN: touching stitcher's sources must not recompile the
+# other two, and the crates.io download layer is shared by all three.
+#
+# Every crate RUN ends with two assertions, because a green `cargo build` is
+# not the same thing as a shippable binary:
+#   1. the binary STARTS -- its help/usage line, piped through grep;
+#   2. `ldd` FAILS on it. ldd exits 0 for a dynamic binary and 1 for a
+#      static one, so `if ldd ...; then exit 1; fi` is the static assertion.
+# Wrong link = red build HERE, not a dead session on Kaggle.
+COPY stitcher/ ./stitcher/
+RUN cd stitcher && \
+    cargo build --release --target x86_64-unknown-musl && \
+    B=./target/x86_64-unknown-musl/release/stitcher && \
+    "$B" 2>&1 | grep -qi "usage" && \
+    if ldd "$B" > /dev/null 2>&1; then echo "ERROR: $B is not static" >&2; exit 1; fi
+
+COPY subtitle_forge/ ./subtitle_forge/
+RUN cd subtitle_forge && \
+    cargo build --release --target x86_64-unknown-musl && \
+    B=./target/x86_64-unknown-musl/release/subtitle_forge && \
+    "$B" --version | grep -qi "subtitle_forge" && \
+    if ldd "$B" > /dev/null 2>&1; then echo "ERROR: $B is not static" >&2; exit 1; fi
+
+COPY havaldar_core/ ./havaldar_core/
+RUN cd havaldar_core && \
+    cargo build --release --target x86_64-unknown-musl && \
+    B=./target/x86_64-unknown-musl/release/havaldar_core && \
+    "$B" --help | grep -qi "havaldar" && \
+    if ldd "$B" > /dev/null 2>&1; then echo "ERROR: $B is not static" >&2; exit 1; fi
+
+
+# =============================================================================
+# STAGE 1c — "THE FOUNDRY"  ·  build the C++ normalizer, fully static
+# =============================================================================
+# ubuntu:${UBUNTU_TAG} = 22.04, the Kaggle kernel's release (glibc 2.35) --
+# same parity reasoning as the runtime base. gcc-12 where the archive has it
+# (complete C++20), plain g++ as the fallback; CXX is resolved at configure
+# time so CMake never sees an empty compiler variable.
+#
+# The tool links NOTHING but the C++ standard library -- no libsndfile, no
+# FFTW, see cpp_accelerator/CMakeLists.txt -- so -static is a one-flag
+# affair. CMakeLists warnings are not -Werror, so the clang->gcc warning
+# dialect difference cannot turn a warning into a failed pack.
+FROM ubuntu:${UBUNTU_TAG} AS cpp-forge
+
+RUN apt-get update && \
+    { apt-get install -y --no-install-recommends g++-12 cmake make || \
+      apt-get install -y --no-install-recommends g++ cmake make; } && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY cpp_accelerator/ ./
+
+# Same two assertions as the Rust stage: starts, and is provably static.
+RUN CXX="$(command -v g++-12 || command -v g++ || echo g++)" \
+        cmake -S . -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_EXE_LINKER_FLAGS="-static" && \
+    cmake --build build --config Release -j"$(nproc)" && \
+    ./build/normalizer --help 2>&1 | grep -q "Usage" && \
+    if ldd build/normalizer > /dev/null 2>&1; then \
+        echo "ERROR: build/normalizer is not static" >&2; exit 1; \
+    fi
 
 
 # =============================================================================
@@ -172,7 +277,7 @@ print('cuda available:', torch.cuda.is_available())"
 FROM ${CUDA_IMAGE} AS runtime
 
 LABEL org.opencontainers.image.title="T_Dubber Worker" \
-      org.opencontainers.image.description="AI video dubbing pipeline worker: vLLM + faster-whisper + FFmpeg + tgup(Go) + Rust audio stitcher" \
+      org.opencontainers.image.description="AI video dubbing pipeline worker: vLLM + faster-whisper + FFmpeg + native arsenal (tgup, stitcher, normalizer, subtitle_forge, havaldar_core)" \
       org.opencontainers.image.version="1.0.0" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.source="https://github.com/engrtarun/T_Dubber"
@@ -195,7 +300,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
     PATH="/opt/venv/bin:/usr/local/cargo/bin:${PATH}" \
     VIRTUAL_ENV=/opt/venv \
-    TGUP_BIN=/usr/local/bin/tgup
+    TGUP_BIN=/usr/local/bin/tgup \
+    STITCHER_BIN=/usr/local/bin/stitcher \
+    NORMALIZER_BIN=/usr/local/bin/normalizer
 
 # -----------------------------------------------------------------------------
 # STAGE 3a — SYSTEM PAYLOAD  (apt, one layer, lists cleaned in the same layer)
@@ -257,12 +364,14 @@ RUN chmod +x /usr/local/bin/tgup && \
 # -----------------------------------------------------------------------------
 # STAGE 3d — THE NINJA (Rust, opt-in)
 # -----------------------------------------------------------------------------
-# The brief asked for Rust for memory-safe audio stitching. To be straight with
-# you: there is no Rust in T_Dubber yet. go.mod is the only real toolchain in
-# the pipeline; the single Cargo.toml in the repo belongs to the vendored
-# Telegram-Drive Tauri app. So this stage installs the toolchain, which is what
-# actually lets you `cargo build --release` your stitcher on demand inside the
-# container without a second toolchain to install.
+# The three Rust binaries are BAKED into this image by STAGE 3f below; they
+# need no toolchain at runtime. This stage is the on-demand compiler:
+# WITH_RUST=1 (the default) installs a minimal rustup so `cargo build` still
+# works inside a running container when you are hacking on stitcher,
+# subtitle_forge or havaldar_core without a full rebuild loop.
+# (History, for honesty: this comment used to claim there was no Rust in
+# T_Dubber at all. There was -- stitcher/ had been written; it simply had
+# never been compiled. Stage 1b fixed that half, 3f ships the result.)
 #
 # --profile minimal  = no rust-docs, no clippy, no rustfmt. Full rustup is
 #                      ~1.5 GB; minimal is ~350 MB. Add the rest with
@@ -272,8 +381,9 @@ RUN chmod +x /usr/local/bin/tgup && \
 # chmod -R a+w       : the venv and any pip-installed helper need to write into
 #                     these dirs when a non-root user runs the worker.
 #
-# To bake a real Rust binary in later, add `audio_stitch/Cargo.toml` to the repo
-# and uncomment the build block — it is already wired for that.
+# Baking a Rust binary is no longer hypothetical: stage 1b compiles all
+# three crates to musl-static, and 3f copies them in. Keep this toolchain
+# for interactive rebuilds only.
 RUN if [ "$WITH_RUST" = "1" ]; then \
         set -eux; \
         RUSTUP_HOME=/usr/local/rustup; \
@@ -286,10 +396,11 @@ RUN if [ "$WITH_RUST" = "1" ]; then \
         rustc --version; cargo --version; \
     fi
 
-# To bake a real Rust binary in later: add `audio_stitch/Cargo.toml` to the repo,
-# COPY it in above, then add a second RUN:
-#   RUN cargo build --release --manifest-path /build/audio_stitch/Cargo.toml \
-#       && install -m755 /build/audio_stitch/target/release/audio_stitch /usr/local/bin/
+# To rebuild a crate on demand inside a running container:
+#   bind-mount or `docker cp` the crate, then e.g.
+#   cargo build --release --manifest-path /build/stitcher/Cargo.toml
+# The baked binaries in /usr/local/bin stay untouched until 3f re-copies
+# them, so an in-container experiment never shadows the shipped arsenal.
 # Deliberately kept as its own instruction: a `#` comment sitting inside a
 # line continuation ends the logical line for several Dockerfile parsers.
 ENV RUSTUP_HOME=/usr/local/rustup \
@@ -322,7 +433,26 @@ RUN groupadd -g ${APP_UID} ${APP_USER} 2>/dev/null || true && \
     chown -R ${APP_USER}:${APP_USER} /app /kaggle /var/log/tdubber 2>/dev/null || true
 
 # -----------------------------------------------------------------------------
-# STAGE 3f — CONTRACTS
+# STAGE 3f — THE ARMORY (four more static binaries, zero toolchains)
+# -----------------------------------------------------------------------------
+# The pack's five, minus tgup (already in 3c): all baked so local/CI parity
+# matches what build_kaggle_pack.ps1 ships to Kaggle. Discovery is PATH-based
+# in mazinger.assemble; STITCHER_BIN / NORMALIZER_BIN (ENV above) pin the two
+# that have Python bridges, shutil.which() finds subtitle_forge and
+# havaldar_core when anything asks for them by name.
+#
+# Nothing here -- and nothing in the HEALTHCHECK below -- ever EXECUTES
+# havaldar_core: starting it would boot the telemetry HTTP daemon. Presence
+# checks only.
+COPY --from=rust-arsenal /arsenal/stitcher/target/x86_64-unknown-musl/release/stitcher            /usr/local/bin/stitcher
+COPY --from=rust-arsenal /arsenal/subtitle_forge/target/x86_64-unknown-musl/release/subtitle_forge /usr/local/bin/subtitle_forge
+COPY --from=rust-arsenal /arsenal/havaldar_core/target/x86_64-unknown-musl/release/havaldar_core   /usr/local/bin/havaldar_core
+COPY --from=cpp-forge    /src/build/normalizer                            /usr/local/bin/normalizer
+RUN chmod 755 /usr/local/bin/stitcher /usr/local/bin/normalizer \
+              /usr/local/bin/subtitle_forge /usr/local/bin/havaldar_core
+
+# -----------------------------------------------------------------------------
+# STAGE 3g — CONTRACTS
 # -----------------------------------------------------------------------------
 # vLLM serves the OpenAI-compatible endpoint that Mazinger talks to. Exposing it
 # means `docker run -p 8000:8000` gives you a host-reachable translation API for
@@ -350,16 +480,95 @@ HEALTHCHECK --interval=30s --timeout=8s --start-period=90s --retries=3 \
     CMD ffmpeg -version > /dev/null 2>&1 || exit 1; \
         python -c "import torch, vllm, faster_whisper" > /dev/null 2>&1 || exit 1; \
         command -v tgup > /dev/null 2>&1 || exit 1; \
+        command -v stitcher > /dev/null 2>&1 || exit 1; \
+        command -v normalizer > /dev/null 2>&1 || exit 1; \
+        command -v subtitle_forge > /dev/null 2>&1 || exit 1; \
+        command -v havaldar_core > /dev/null 2>&1 || exit 1; \
         { [ ! -f /usr/local/cargo/.rust-present ] || command -v cargo > /dev/null 2>&1; } || exit 1; \
         exit 0
 
 # tini as PID 1: signal forwarding to vLLM's engine subprocesses + zombie reaping.
 ENTRYPOINT ["/usr/bin/tini", "--"]
-
-# Default to a shell, not a server. The real entrypoint is a notebook cell on
-# Kaggle or `python -m mazinger dub ...` locally. Put your command after the
-# image name, or override with --entrypoint.
+# No CMD without a shell: tini needs the program to run spelled out, and this
+# is the image's whole interactive contract (`docker run -it t-dubber bash`).
+# This line predates the pack stages and was lost when the competing
+# pack-build block was cut out of the file -- restored, not newly invented.
 CMD ["bash"]
+
+# =============================================================================
+# STAGE 4 — "THE MANIFEST"  ·  gather the five, prove each one runs
+# =============================================================================
+# debian:bookworm-slim only for its shell, coreutils and ldd -- the binaries
+# are already static, so nothing here links against the base. This stage
+# produces the exact byte set the Kaggle dataset ships, plus two documents:
+#   MANIFEST.txt  -- what each tool says about itself (help/version line)
+#                    and how big it is, human-readable at a glance;
+#   SHA256SUMS    -- the same five, hashed, for the exporter script (and
+#                    anyone downstream) to verify the bytes it received.
+#
+# Help commands are per-tool on purpose: stitcher has no --help flag (its
+# usage line IS the help), while running havaldar_core bare would BOOT its
+# telemetry daemon -- so every invocation below is the non-starting one.
+FROM debian:bookworm-slim AS pack-manifest
+
+WORKDIR /pack/bin
+
+COPY --from=go-transporter /out/tgup                                         ./tgup
+COPY --from=rust-arsenal   /arsenal/stitcher/target/x86_64-unknown-musl/release/stitcher            ./stitcher
+COPY --from=rust-arsenal   /arsenal/subtitle_forge/target/x86_64-unknown-musl/release/subtitle_forge ./subtitle_forge
+COPY --from=rust-arsenal   /arsenal/havaldar_core/target/x86_64-unknown-musl/release/havaldar_core   ./havaldar_core
+COPY --from=cpp-forge      /src/build/normalizer                             ./normalizer
+
+RUN set -eu; \
+    chmod 755 tgup stitcher normalizer subtitle_forge havaldar_core; \
+    line_tgup="$(./tgup help 2>&1 | head -n 1 || true)"; \
+    line_stitcher="$(./stitcher 2>&1 | head -n 1 || true)"; \
+    line_normalizer="$(./normalizer --help 2>&1 | head -n 1 || true)"; \
+    line_subtitle_forge="$(./subtitle_forge --version 2>&1 | head -n 1 || true)"; \
+    line_havaldar_core="$(./havaldar_core --help 2>&1 | head -n 1 || true)"; \
+    { \
+        echo "T_Dubber native arsenal - five static linux/amd64 binaries"; \
+        echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+        echo ""; \
+        printf '%-16s %12s  %s\n' "tool" "bytes" "identifies as"; \
+        printf '%-16s %12s  %s\n' "tgup"          "$(wc -c < tgup)"          "$line_tgup"; \
+        printf '%-16s %12s  %s\n' "stitcher"      "$(wc -c < stitcher)"      "$line_stitcher"; \
+        printf '%-16s %12s  %s\n' "normalizer"    "$(wc -c < normalizer)"    "$line_normalizer"; \
+        printf '%-16s %12s  %s\n' "subtitle_forge" "$(wc -c < subtitle_forge)" "$line_subtitle_forge"; \
+        printf '%-16s %12s  %s\n' "havaldar_core" "$(wc -c < havaldar_core)"  "$line_havaldar_core"; \
+    } > /pack/MANIFEST.txt; \
+    sha256sum tgup stitcher normalizer subtitle_forge havaldar_core > /pack/SHA256SUMS; \
+    for b in tgup stitcher normalizer subtitle_forge havaldar_core; do \
+        if ldd "$b" > /dev/null 2>&1; then echo "ERROR: $b is not static" >&2; exit 1; fi; \
+    done; \
+    cat /pack/MANIFEST.txt
+
+
+# =============================================================================
+# STAGE 5 — "PACK-EXPORTER"  ·  scratch-clean: the image IS the /pack folder
+# =============================================================================
+# FROM scratch on purpose: the exported filesystem contains exactly
+#   /pack/bin/{tgup,stitcher,normalizer,subtitle_forge,havaldar_core}
+#   /pack/MANIFEST.txt
+#   /pack/SHA256SUMS
+# and nothing else -- no shell, no libc, no layers to strip afterwards.
+#
+# build_kaggle_pack.ps1 runs:
+#   docker build --target pack-exporter --output type=local,dest=<folder> .
+# and BuildKit writes that filesystem straight onto the host. Only the
+# stages this target DEPENDS ON get built: the ~5 GB vLLM brain is never
+# pulled, so a pack rebuild costs minutes. Kaggle itself cannot run any of
+# this image -- the pack exists to be exported as a Dataset (see the
+# KAGGLE EQUIVALENT block below for the notebook side).
+FROM scratch AS pack-exporter
+
+LABEL org.opencontainers.image.title="T_Dubber Kaggle Pack" \
+      org.opencontainers.image.description="Five static linux/amd64 binaries: tgup (Go), stitcher + subtitle_forge + havaldar_core (Rust/musl), normalizer (C++)" \
+      org.opencontainers.image.version="1.0.0" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/engrtarun/T_Dubber"
+
+COPY --from=pack-manifest /pack /pack
 
 
 # =============================================================================
@@ -382,6 +591,15 @@ CMD ["bash"]
 #   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 #     | sh -s -- -y --profile minimal --no-modify-path
 #   export PATH=/usr/local/cargo/bin:$PATH
+#
+#   # Native arsenal -- ONE-TIME setup, no toolchain ever again:
+#   # upload the pack/ folder that build_kaggle_pack.ps1 exported as a
+#   # Kaggle dataset, then in Python (Cell 0, before anything else runs):
+#   #   import os
+#   #   os.environ["PATH"] = "/kaggle/input/<dataset>/pack/bin:" + os.environ["PATH"]
+#   # tgup/stitcher/normalizer/subtitle_forge/havaldar_core are then on PATH
+#   # for the whole session. The pack binaries are static: no glibc, no
+#   # rustup, no go, no gcc -- and no compile at startup.
 #
 #   # The brain
 #   pip install --no-cache-dir "vllm==0.29.0" \

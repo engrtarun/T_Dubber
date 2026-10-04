@@ -1,0 +1,16 @@
+# Rust build artifacts
+/target/
+
+**/*.rs.bk
+
+# Cargo.lock is deliberately NOT ignored.
+#
+# This is a binary crate, not a library, so the lockfile is part of the build
+# definition: it pins all 109 transitive packages (axum, rusqlite, tokio and
+# their trees). Ignore it and each build silently resolves whatever crates.io
+# serves that day -- a dependency can change behaviour, or fail to compile,
+# with no commit to point at.
+#
+# The other two crates in this repo (stitcher/, subtitle_forge/) previously
+# ignored their lockfiles. That is why the repository shipped none, and why
+# CI had to run `cargo generate-lockfile` before every build.

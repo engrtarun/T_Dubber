@@ -18,6 +18,15 @@ references/
 Index-Translate/
 "TG Web Cloud/"
 
+# Native build artifacts. The pack builds every binary FROM SOURCE inside
+# Docker (stages 1b/1c); host-built outputs would bloat the context, teach
+# the build nothing, and -- for Rust's target/ -- actively confuse it with
+# Windows executables sitting where Linux ones will be written.
+**/target/
+cpp_accelerator/build/
+**/*.exe
+**/*.pdb
+
 # Python bytecode + caches
 __pycache__/
 *.py[cod]
@@ -54,6 +63,11 @@ dummy.mp4
 config.json
 kaggle.json
 *.lock
+# ...but Cargo.lock must REACH the context: the arsenal builds from source,
+# and the lock is what makes that build reproducible instead of "whatever
+# crates.io served today". Last match wins in .dockerignore, so this
+# negation sits directly after the blanket rule.
+!**/Cargo.lock
 *.txt.lock
 boost.ps1
 start-boosted.ps1

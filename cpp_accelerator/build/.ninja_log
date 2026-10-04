@@ -1,0 +1,6 @@
+# ninja log v7
+6	5972	8128476626684053	CMakeFiles/normalizer.dir/normalizer.cpp.obj	27c0a8d8fe67adb6
+5976	6356	8128476686375003	normalizer.exe	3104f64feee66f7f
+14	71	8128492675746676	clean	8e44e696825b874d
+20	11393	8128492676936154	CMakeFiles/normalizer.dir/normalizer.cpp.obj	27c0a8d8fe67adb6
+11394	11870	8128492790692697	normalizer.exe	3104f64feee66f7f

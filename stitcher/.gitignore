@@ -1,4 +1,14 @@
 # Rust build artifacts
 /target/
 **/*.rs.bk
-Cargo.lock
+
+# Cargo.lock is deliberately NOT ignored.
+#
+# This is a binary crate, not a library, so the lockfile is part of the build
+# definition, not a local convenience: it pins every transitive version of
+# `hound`, `serde` and friends. Ignore it and each build silently resolves
+# whatever crates.io serves that day -- a dependency can change behaviour, or
+# fail to compile, with no commit to point at.
+#
+# It was previously ignored here, which is why the repo had no lockfile at all
+# and why CI had to run `cargo generate-lockfile` before every build.

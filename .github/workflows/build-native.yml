@@ -1,0 +1,397 @@
+# =============================================================================
+#  build-native.yml -- compile every native tool in the cloud
+# =============================================================================
+#  Why this file exists: the dev machine has no cargo, no rustc, no cmake and
+#  no docker, so `stitcher.exe`, `subtitle_forge.exe`, `havaldar_core.exe`,
+#  `normalizer.exe` and the Kaggle Linux pack were unbuildable locally. GitHub's
+#  runners carry all of them, so compilation moves here.
+#
+#  Two independent jobs, deliberately not a matrix:
+#    windows-native-tools  -> the four .exe files used locally
+#    kaggle-tdubber-pack   -> the five static linux/amd64 binaries for Kaggle
+#  They share no cache and do not gate each other: a C++ failure must not stop
+#  you getting the Windows binaries, and vice versa. Hence `needs: []`.
+#
+#  Triggers: every push to main (as requested), plus pull_request for the four
+#  source trees, plus manual dispatch.
+# =============================================================================
+
+name: build-native
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      # Rebuilding five binaries because a README changed wastes runner minutes.
+      # Remove this filter if you would rather always rebuild.
+      - '**/*.md'
+      - 'docs/**'
+      - '.github/workflows/build-native.yml'
+  pull_request:
+    paths:
+      - 'stitcher/**'
+      - 'subtitle_forge/**'
+      - 'havaldar_core/**'
+      - 'cpp_accelerator/**'
+      - '*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/build-native.yml'
+  workflow_dispatch:
+    inputs:
+      cmake_build_type:
+        description: 'CMake build type for normalizer.exe'
+        type: choice
+        options: [Release, RelWithDebInfo]
+        default: Release
+
+# Least privilege. This workflow only reads the repo and uploads artifacts; it
+# never pushes code, so `contents: write` would be wrong.
+permissions:
+  contents: read
+
+# A second push makes the first push's binaries irrelevant, and runner minutes
+# are the scarce resource.
+concurrency:
+  group: build-native-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ===========================================================================
+  # JOB 1 -- Windows binaries for local use
+  # ===========================================================================
+  windows-native-tools:
+    name: Windows .exe (stitcher, subtitle_forge, havalar_core, normalizer)
+    runs-on: windows-latest
+    # A cold cargo build of three independent crates plus CMake. Generous guard
+    # against a hung runner, not an expectation.
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # windows-latest images already carry a pinned stable Rust and MSVC, so
+      # there is nothing to install. Logging the versions is more useful than a
+      # silent toolchain upgrade: a build that starts failing after an unrelated
+      # runner image bump is otherwise very hard to diagnose.
+      - name: Report toolchain versions
+        shell: pwsh
+        run: |
+          Write-Host "=== toolchain ==="
+          rustc --version
+          cargo --version
+          cmake --version | Select-Object -First 1
+          $cl = Get-Command cl.exe -ErrorAction SilentlyContinue
+          if ($cl) { Write-Host "cl: $($cl.Source)" }
+          else { Write-Host "cl: not on PATH (normal; MSVC is present via vswhere)" }
+
+      # One cache entry per crate. There is no root Cargo.toml, so the three
+      # crates are independent; a shared target dir would only cause lock
+      # contention and cache thrash.
+      - name: Cache cargo registry and build dirs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            stitcher -> target
+            subtitle_forge -> target
+            havalar_core -> target
+          cache-on-failure: true
+
+      # Cargo.lock is what makes a build reproducible. The .gitignore in
+      # stitcher/ and subtitle_forge/ currently excludes it, so each run resolves
+      # dependencies fresh -- a new patch release can change behaviour or fail
+      # the build with no commit to blame. Generating it here makes the cached
+      # builds deterministic even while it is ignored. Commit the lockfiles and
+      # this step becomes a no-op you can delete.
+      - name: Resolve dependency lockfiles
+        shell: pwsh
+        run: |
+          foreach ($crate in @("stitcher", "subtitle_forge", "havaldar_core")) {
+            Push-Location $crate
+            Write-Host "--- cargo generate-lockfile: $crate"
+            cargo generate-lockfile
+            Pop-Location
+          }
+
+      # `--locked` is deliberately NOT used: the lockfiles are generated in the
+      # previous step and are not committed, so --locked fails on a fresh crate.
+      - name: Build Rust binaries (release)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($crate in @("stitcher", "subtitle_forge", "havaldar_core")) {
+            Push-Location $crate
+            Write-Host "=== cargo build --release: $crate ==="
+            cargo build --release
+            $exe = "target\release\$crate.exe"
+            # A missing binary is otherwise a silent failure: the upload step
+            # would just ship three files instead of four.
+            if (-not (Test-Path $exe)) {
+              throw "$crate.exe was not produced at $exe"
+            }
+            Write-Host ("  -> {0}  {1:N0} bytes" -f $exe, (Get-Item $exe).Length)
+            Pop-Location
+          }
+
+      # Prove each binary actually starts. One that links but cannot run -- a
+      # missing DLL, a bad subsystem -- passes the build and then fails on your
+      # machine, where you have no toolchain to debug it with.
+      #
+      # `stitcher` is invoked bare on purpose: running `havaldar_core` bare
+      # would BOOT its telemetry daemon and hang the job.
+      - name: Smoke-test the Rust binaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          foreach ($crate in @("stitcher", "subtitle_forge", "havaldar_core")) {
+            $exe = ".\$crate\target\release\$crate.exe"
+            Write-Host "=== $exe --version ==="
+            & $exe --version
+            Write-Host "  exit code: $LASTEXITCODE"
+          }
+          Write-Host "=== stitcher.exe with no args (expect a usage line) ==="
+          & .\stitcher\target\release\stitcher.exe 2>&1 | Select-Object -First 5
+          Write-Host "  exit code: $LASTEXITCODE"
+
+      - name: Build normalizer.exe with CMake
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cfg = "${{ inputs.cmake_build_type || 'Release' }}"
+          cmake -S cpp_accelerator -B cpp_accelerator/build -DCMAKE_BUILD_TYPE=$cfg
+          cmake --build cpp_accelerator/build --config $cfg --parallel --target normalizer
+          $exe = "cpp_accelerator\build\$cfg\normalizer.exe"
+          if (-not (Test-Path $exe)) { $exe = "cpp_accelerator\build\normalizer.exe" }
+          if (-not (Test-Path $exe)) { throw "normalizer.exe was not produced" }
+          Write-Host ("  -> {0}  {1:N0} bytes" -f $exe, (Get-Item $exe).Length)
+
+      - name: Smoke-test normalizer.exe
+        shell: pwsh
+        run: |
+          Write-Host "=== normalizer.exe (no args: expect usage, exit 2) ==="
+          & .\cpp_accelerator\build\Release\normalizer.exe
+          Write-Host "  exit code: $LASTEXITCODE"
+
+      - name: Stamp build time
+        id: now
+        shell: pwsh
+        run: |
+          $stamp = Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ssZ'
+          "stamp=$stamp" >> $env:GITHUB_OUTPUT
+          Write-Host "build stamp: $stamp"
+
+      # Everything lands in one flat directory: upload-artifact v4 preserves the
+      # directory tree under `path`, so without this staging copy the download
+      # would be three nested target/release folders instead of four loose .exe.
+      - name: Stage binaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "dist\windows"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          foreach ($crate in @("stitcher", "subtitle_forge", "havaldar_core")) {
+            Copy-Item "$crate\target\release\$crate.exe" "$stage\$crate.exe" -Force
+          }
+          $normalizer = if (Test-Path "cpp_accelerator\build\Release\normalizer.exe") {
+                          "cpp_accelerator\build\Release\normalizer.exe"
+                        } else { "cpp_accelerator\build\normalizer.exe" }
+          Copy-Item $normalizer "$stage\normalizer.exe" -Force
+
+          # A manifest makes a downloaded artifact self-describing: which commit,
+          # which host, which SHA-256. Four loose .exe files in a Downloads
+          # folder are otherwise unattributable.
+          #
+          # Built with ConvertTo-Json, not string interpolation: in a PowerShell
+          # plain string "{{" is two literal braces (brace escaping is a C#
+          # format-string convention, not a PowerShell one), so hand-rolled JSON
+          # silently emits invalid output.
+          $binaries = @(
+            Get-ChildItem "$stage\*.exe" | Sort-Object Name | ForEach-Object {
+              [ordered]@{
+                name   = $_.Name
+                bytes  = $_.Length
+                sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+              }
+            }
+          )
+          $manifest = [ordered]@{
+            artifact = "windows-native-tools"
+            commit   = "${{ github.sha }}"
+            ref      = "${{ github.ref_name }}"
+            built    = "${{ steps.now.outputs.stamp }}"
+            os       = "windows-x86_64"
+            binaries = $binaries
+          }
+          $manifest | ConvertTo-Json -Depth 5 |
+            Out-File -FilePath "$stage\manifest.json" -Encoding utf8
+          Get-Content "$stage\manifest.json"
+
+          # Prove it parses before uploading. A corrupt manifest is worse than
+          # none, because it looks authoritative.
+          Get-Content "$stage\manifest.json" -Raw | ConvertFrom-Json | Out-Null
+          Write-Host "manifest.json parses OK"
+
+      - name: Upload windows-native-tools
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-tools
+          path: dist/windows/
+          if-no-files-found: error
+          retention-days: 30
+
+  # ===========================================================================
+  # JOB 2 -- the Kaggle pack
+  # ===========================================================================
+  kaggle-tdubber-pack:
+    name: Kaggle pack (5 static linux/amd64 binaries)
+    runs-on: ubuntu-latest
+    # Only the stages pack-exporter depends on are built, so the ~5 GB
+    # torch/vLLM `brain` stage is never pulled. Minutes, not an hour.
+    timeout-minutes: 45
+    needs: []          # intentional: independent of job 1
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The pack builds all five binaries from source inside Docker, so every
+      # source tree must reach the build context. Matched exactly (`-x`) so a
+      # narrower rule such as `cpp_accelerator/build/`, which excludes output
+      # rather than sources, does not false-positive here.
+      - name: Verify sources are in the build context
+        run: |
+          set -euo pipefail
+          for d in stitcher subtitle_forge havalar_core cpp_accelerator; do
+            if grep -qxE "${d}/" .dockerignore; then
+              echo "::error file=.dockerignore::${d}/ excludes sources the pack stage needs"
+              exit 1
+            fi
+            if [ ! -d "$d" ]; then
+              echo "::error::${d}/ is not in the checkout"
+              exit 1
+            fi
+            echo "ok: ${d}/ present in the build context"
+          done
+
+      # Buildx local cache, so the Rust and C++ compiles are not redone on every
+      # push. Keyed on the Dockerfile plus every source tree feeding the arsenal.
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-kaggle-pack-${{ hashFiles('Dockerfile', '.dockerignore', 'stitcher/**', 'subtitle_forge/**', 'havaldar_core/**', 'cpp_accelerator/**', 'main.go', 'upload.go', 'fetch.go', 'commands.go', 'main_entry.go', 'go.mod', 'go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-kaggle-pack-
+
+      # `--output type=local` is the point of this job.
+      #
+      # The pack-exporter stage is `FROM scratch`, so BuildKit writes its
+      # filesystem straight to ./pack: no image to load, no `docker cp`, no
+      # layers to strip. Only the stages pack-exporter depends on are built --
+      # go-transporter, rust-arsenal, cpp-forge, pack-manifest -- so the 5 GB
+      # `brain` stage with torch and vLLM is never pulled.
+      #
+      # `--load` is deliberately NOT used: it would materialise the scratch
+      # image in the runner's daemon for no benefit.
+      - name: Build and export the pack (type=local)
+        run: |
+          set -euo pipefail
+          rm -rf pack
+          docker buildx build \
+            --target pack-exporter \
+            --output type=local,dest=./pack \
+            --progress=plain \
+            --metadata-file /tmp/buildmeta.json \
+            .
+
+      # pack-manifest already runs each binary and asserts it is static via ldd.
+      # This re-verifies the EXPORTED bytes, because `type=local` writes a plain
+      # directory: a truncated or mis-serialised export would otherwise reach
+      # Kaggle unnoticed.
+      - name: Verify the exported pack
+        run: |
+          set -euo pipefail
+          echo "=== pack tree ==="
+          find pack -type f | sort
+
+          for f in pack/MANIFEST.txt pack/SHA256SUMS; do
+            [ -f "$f" ] || { echo "::error::${f} is missing from the export"; exit 1; }
+          done
+
+          echo "=== MANIFEST.txt (written by the pack-manifest stage) ==="
+          cat pack/MANIFEST.txt
+
+          # End-to-end integrity: the checksums the Dockerfile produced, checked
+          # against the bytes that actually landed on disk.
+          echo "=== verifying SHA256SUMS ==="
+          ( cd pack/bin && sha256sum -c ../SHA256SUMS )
+
+          fail=0
+          for b in tgup stitcher subtitle_forge havaldar_core normalizer; do
+            p="pack/bin/${b}"
+            if [ ! -f "$p" ]; then echo "::error::missing ${p}"; fail=1; continue; fi
+            chmod +x "$p"
+            printf '  %-16s %10s bytes  %s\n' "$b" "$(stat -c%s "$p")" \
+              "$(file -b "$p" 2>/dev/null | cut -c1-64 || echo '?')"
+          done
+          [ $fail -eq 0 ] || exit 1
+
+      # tar.gz, not zip: the pack is a Linux tree, and zip's 4 GB cap plus
+      # weaker compression would both bite as soon as a venv is added.
+      - name: Compress the pack
+        run: |
+          set -euo pipefail
+          tar -czf kaggle-tdubber-pack.tar.gz -C pack .
+          ls -lh kaggle-tdubber-pack.tar.gz
+          # Checksum of the archive itself, so a download can be verified before
+          # anyone mounts it on Kaggle.
+          sha256sum kaggle-tdubber-pack.tar.gz | tee kaggle-tdubber-pack.tar.gz.sha256
+
+      - name: Upload kaggle-tdubber-pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaggle-tdubber-pack
+          path: kaggle-tdubber-pack.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      # The manifest and checksums are tiny, so they get their own artifact: you
+      # can read what a build produced without downloading the pack at all.
+      - name: Upload pack manifest (small)
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaggle-tdubber-pack-manifest
+          path: |
+            pack/MANIFEST.txt
+            pack/SHA256SUMS
+            kaggle-tdubber-pack.tar.gz.sha256
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Summary
+        run: |
+          {
+            echo "### Kaggle pack built"
+            echo ""
+            echo '```'
+            cat pack/MANIFEST.txt
+            echo '```'
+            echo ""
+            echo "archive: \`kaggle-tdubber-pack.tar.gz\` ($(du -h kaggle-tdubber-pack.tar.gz | cut -f1))"
+            echo ""
+            echo "Download the artifact, publish it as a Kaggle Dataset, and mount it"
+            echo "in the kernel. The pack is five static linux/amd64 binaries only --"
+            echo "it does **not** contain the Python venv, so the notebook still"
+            echo "installs torch/vLLM unless you mount that as a second Dataset."
+          } >> "$GITHUB_STEP_SUMMARY"

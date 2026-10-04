@@ -1,0 +1,4 @@
+# Kaggle pack export -- build_kaggle_pack.ps1 lands pack\ at the repo root
+# by default: ~40 MB of Linux ELF binaries, regenerable in minutes with that
+# script, so it must never enter git history (nor the Docker build context).
+pack/

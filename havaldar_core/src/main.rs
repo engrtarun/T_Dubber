@@ -65,7 +65,6 @@ pub mod packet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
@@ -227,7 +226,9 @@ async fn run(args: Args) -> error::Result<()> {
         let app = http::router(http_state);
         let addr: SocketAddr = format!("{}:{}", args.host, args.port)
             .parse()
-            .unwrap_or(([127, 0, 0, 1], args.port));
+            .unwrap_or_else(|_| {
+                SocketAddr::from(([127, 0, 0, 1], args.port))
+            });
         let listener = match tokio::net::TcpListener::bind(addr).await {
             Ok(l) => l,
             Err(e) => {
@@ -258,7 +259,7 @@ async fn run(args: Args) -> error::Result<()> {
         let mut udp_shutdown = shutdown_rx.clone();
         let addr: SocketAddr = format!("{}:{}", args.host, args.udp_port)
             .parse()
-            .unwrap_or(([127, 0, 0, 1], args.udp_port));
+            .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], args.udp_port)));
         tasks.push(tokio::spawn(async move {
             if let Err(e) = http::serve_udp(addr, udp_state, udp_shutdown.clone()).await {
                 tracing::error!(%addr, error = %e, "UDP listener failed");

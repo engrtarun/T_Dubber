@@ -77,7 +77,7 @@ async fn write(
 ) -> Result<havaldar_core::db::WriteOutcome> {
     let event = packet.into_event(false)?;
     writer
-        .submit_and_wait(event, 1024, Duration::from_secs(5))
+        .submit_and_wait(event, Duration::from_secs(5))
         .await
 }
 

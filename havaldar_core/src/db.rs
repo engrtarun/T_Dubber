@@ -165,9 +165,10 @@ pub fn spawn(db_path: &Path, cfg: WriterConfig) -> Result<Writer> {
     let in_flight = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let counter = in_flight.clone();
+    let loop_cfg = cfg.clone();
     thread::Builder::new()
         .name("havaldar-writer".into())
-        .spawn(move || writer_loop(conn, rx, cfg, counter))
+        .spawn(move || writer_loop(conn, rx, loop_cfg, counter))
         // A failed spawn means the OS refused a thread. Surface it as a startup
         // error rather than a writer that silently never runs.
         .map_err(|e| HavaldarError::Config(format!("could not spawn the writer thread: {e}")))?;
@@ -284,7 +285,7 @@ fn writer_loop(
         match rx.recv_timeout(cfg.flush_interval) {
             Ok(job) => {
                 stats.received += 1;
-                let outcome = apply(&mut conn, &job, &mut running_seen, &mut stage_start);
+                let outcome = apply(&mut conn, &job, &mut running_seen, &mut stage_start, &mut stats);
                 if let Some(ack) = job.ack {
                     // Fails only if the caller already gave up (timeout), which
                     // is not an error worth propagating.
@@ -331,10 +332,11 @@ fn apply(
     job: &WriteJob,
     running_seen: &mut HashSet<(String, i64)>,
     stage_start: &mut HashMap<(String, i64), Instant>,
+    stats: &mut WriterStats,
 ) -> WriteOutcome {
     match &job.event {
-        TelemetryEvent::Stage(ev) => write_stage(conn, ev, running_seen, stage_start),
-        TelemetryEvent::Log(ev) => write_log(conn, ev),
+        TelemetryEvent::Stage(ev) => write_stage(conn, ev, running_seen, stage_start, stats),
+        TelemetryEvent::Log(ev) => write_log(conn, ev, stats),
     }
 }
 
@@ -363,7 +365,7 @@ fn write_stage(
             // Repeat "running": do not overwrite, but repair a NULL if the row
             // somehow has one (e.g. a stage that went straight to success
             // before this daemon saw a running packet).
-            repair_started_at(conn, &ev.project_id, ev.stage, &now)
+            repair_started_at(conn, &ev.project_id, ev.stage, &now).as_deref()
         }
     } else {
         None
@@ -488,10 +490,10 @@ fn write_log(conn: &mut Connection, ev: &LogEvent, stats: &mut WriterStats) -> W
         }
         Err(e) => {
             stats.rejected += 1;
-            if HavaldarError::Sqlite(e).is_busy() {
+            let err = HavaldarError::Sqlite(e);
+            if err.is_busy() {
                 stats.busy_retries += 1;
             }
-            let err = HavaldarError::Sqlite(e);
             if err.is_constraint_violation() {
                 WriteOutcome::rejected(format!(
                     "log rejected for project {:?}: {err}. Does that project exist?",
@@ -523,6 +525,7 @@ fn checkpoint(conn: &Connection, stats: &mut WriterStats, truncate: bool) {
     stats.batches += 1;
 }
 
+impl Writer {
 /// Submit an event without waiting for the write to land.
 ///
 /// Non-blocking by design: `try_send` either takes the slot or reports the queue
@@ -593,6 +596,7 @@ pub async fn drain(&self, timeout: Duration) -> bool {
     })
     .await
     .is_ok()
+}
 }
 
 /// Read current counters. Kept here so the writer thread owns all mutation.
