@@ -669,10 +669,18 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
             if "could not resolve" in res.stderr.lower() or "500" in res.stderr or "network" in res.stderr.lower():
                 if kernel_attempt == 0:
                     yield "[STAGE:4] ⚠️ Network error during push. Retrying in 60 seconds...\n"
+                    track_stage(project_id, 4, "running",
+                                message="Network error during kernel push; retrying in 60s",
+                                error=(res.stderr or "").strip() or None, manifest=manifest)
                     time.sleep(60)
                     continue
+            track_stage(project_id, 4, "failed", message="Kernel push failed",
+                        error=(res.stderr or res.stdout or "").strip() or "kaggle kernels push exited non-zero",
+                        manifest=manifest)
             return
-            
+
+        track_stage(project_id, 4, "success",
+                    message=f"Worker kernel pushed to {kernel_id}", manifest=manifest)
         yield "[STAGE:5] ⏳ Waiting for Kaggle Worker to complete...\n"
 
         # Feature films can take several hours on a free shared GPU.
