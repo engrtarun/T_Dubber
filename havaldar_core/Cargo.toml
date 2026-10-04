@@ -14,6 +14,12 @@ categories = ["database", "web-programming::http-server"]
 name = "havaldar_core"
 path = "src/main.rs"
 
+# The integration tests in tests/ingest.rs exercise the real SQL through the
+# public surface, so the modules must also be reachable as a library target.
+[lib]
+name = "havaldar_core"
+path = "src/main.rs"
+
 # ---------------------------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------------------------

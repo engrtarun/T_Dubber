@@ -249,6 +249,13 @@ fn run(timeline_path: &str) -> Result<(), Box<dyn std::error::Error>> {
 /// Read any PCM/float WAV as mono f32 in [-1.0, 1.0].
 /// Multi-channel input is downmixed by averaging; the source rate is
 /// returned so the caller can resample to the target rate.
+///
+/// hound gates every `Sample` impl on what the *header* declares: `f32::read`
+/// returns `InvalidSampleFormat` for integer PCM, and the integer types reject
+/// float files symmetrically.  The element type therefore has to be chosen
+/// from `spec.sample_format` — decoding everything as `f32` (the natural first
+/// attempt) fails outright on the `PCM_16` WAVs that soundfile writes by
+/// default, which is every file mazinger hands to this tool.
 fn read_wav_mono(path: &str) -> Result<(Vec<f32>, u32), Box<dyn std::error::Error>> {
     let mut reader =
         hound::WavReader::open(path).map_err(|e| format!("cannot open WAV '{path}': {e}"))?;
@@ -256,10 +263,31 @@ fn read_wav_mono(path: &str) -> Result<(Vec<f32>, u32), Box<dyn std::error::Erro
     if spec.channels == 0 {
         return Err(format!("WAV '{path}' has 0 channels").into());
     }
-    let raw: Vec<f32> = reader
-        .samples::<f32>()
-        .collect::<Result<Vec<f32>, hound::Error>>()
-        .map_err(|e| format!("cannot decode samples in '{path}': {e}"))?;
+
+    let raw: Vec<f32> = match spec.sample_format {
+        // IEEE float: stored in [-1, 1] already, so pass straight through.
+        hound::SampleFormat::Float => reader
+            .samples::<f32>()
+            .collect::<Result<Vec<f32>, hound::Error>>()
+            .map_err(|e| format!("cannot decode float samples in '{path}': {e}"))?,
+        hound::SampleFormat::Int => {
+            // hound documents that `S` needs *at least* `bits_per_sample`
+            // bits, and `i32::read` accepts every integer layout it can
+            // parse: 8, 16, 24 and 32 bits, in either container width.
+            // Scaling by 2^(bits-1) puts the result back in [-1, 1].
+            let bits = spec.bits_per_sample;
+            if !matches!(bits, 8 | 16 | 24 | 32) {
+                return Err(format!("unsupported bit depth {bits} in '{path}'").into());
+            }
+            let scale = (1u64 << (bits - 1)) as f32;
+            reader
+                .samples::<i32>()
+                .map(|s| s.map(|v| v as f32 / scale))
+                .collect::<Result<Vec<f32>, hound::Error>>()
+                .map_err(|e| format!("cannot decode integer samples in '{path}': {e}"))?
+        }
+    };
+
     let channels = usize::from(spec.channels);
     if channels == 1 {
         return Ok((raw, spec.sample_rate));
@@ -294,4 +322,210 @@ fn resample_linear(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
         out.push(a + (b - a) * frac);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- helpers ----------------------------------------------------------
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let mut p = env::temp_dir();
+        p.push(format!("stitcher_ut_{}_{}", std::process::id(), name));
+        p
+    }
+
+    fn write_i16(path: &Path, samples: &[i16], rate: u32) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(path, spec).expect("create wav");
+        for &s in samples {
+            w.write_sample(s).expect("write sample");
+        }
+        w.finalize().expect("finalize wav");
+    }
+
+    fn write_f32(path: &Path, samples: &[f32], rate: u32) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: rate,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(path, spec).expect("create wav");
+        for &s in samples {
+            w.write_sample(s).expect("write sample");
+        }
+        w.finalize().expect("finalize wav");
+    }
+
+    fn write_stereo_i16(path: &Path, left: &[i16], right: &[i16], rate: u32) {
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(path, spec).expect("create wav");
+        for (&l, &r) in left.iter().zip(right.iter()) {
+            w.write_sample(l).expect("write l");
+            w.write_sample(r).expect("write r");
+        }
+        w.finalize().expect("finalize wav");
+    }
+
+    fn mean(samples: &[f32], lo_frac: f32, hi_frac: f32) -> f32 {
+        let lo = (samples.len() as f32 * lo_frac) as usize;
+        let hi = (samples.len() as f32 * hi_frac) as usize;
+        let slice = &samples[lo..hi.max(lo + 1)];
+        slice.iter().sum::<f32>() / slice.len() as f32
+    }
+
+    // -- WAV decoding -----------------------------------------------------
+
+    /// Regression: integer PCM must decode.  `hound`'s `f32` sample type
+    /// rejects `SampleFormat::Int` outright, so decoding every file as `f32`
+    /// fails on the PCM_16 WAVs soundfile writes by default — i.e. on every
+    /// input the pipeline actually produces.  This test is the reason the
+    /// decode path branches on `spec.sample_format`.
+    #[test]
+    fn reads_integer_pcm_wav() {
+        let path = scratch("int16.wav");
+        // -1.0, -0.5, 0.0, 0.5, and just under +1.0
+        let src: Vec<i16> = [-32768, -16384, 0, 16384, 32767].to_vec();
+        write_i16(&path, &src, 24_000);
+
+        let (pcm, rate) = read_wav_mono(&path.to_string_lossy()).expect("int16 must decode");
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(rate, 24_000);
+        assert_eq!(pcm.len(), src.len());
+        for (got, want) in pcm.iter().zip(src.iter()) {
+            let want = *want as f32 / 32768.0;
+            assert!(
+                (got - want).abs() < 1e-6,
+                "int16 sample decoded as {got}, want {want}"
+            );
+        }
+    }
+
+    /// Float WAVs must keep decoding too — the branch must not favour one
+    /// format at the expense of the other.
+    #[test]
+    fn reads_float_wav() {
+        let path = scratch("float32.wav");
+        let src: Vec<f32> = [-1.0, -0.25, 0.0, 0.25, 0.9].to_vec();
+        write_f32(&path, &src, 24_000);
+
+        let (pcm, rate) = read_wav_mono(&path.to_string_lossy()).expect("float must decode");
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(rate, 24_000);
+        assert_eq!(pcm.len(), src.len());
+        for (got, want) in pcm.iter().zip(src.iter()) {
+            assert!((got - want).abs() < 1e-6, "float sample {got} != {want}");
+        }
+    }
+
+    #[test]
+    fn downmixes_stereo_by_averaging() {
+        let path = scratch("stereo.wav");
+        let left: Vec<i16> = vec![16384; 8]; // ~+0.5
+        let right: Vec<i16> = vec![0; 8]; //  0.0
+        write_stereo_i16(&path, &left, &right, 24_000);
+
+        let (pcm, _) = read_wav_mono(&path.to_string_lossy()).expect("stereo must decode");
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(pcm.len(), 8, "channel count must be folded away");
+        for got in &pcm {
+            assert!((got - 0.25).abs() < 1e-3, "downmix {got}, want ~0.25");
+        }
+    }
+
+    #[test]
+    fn missing_file_is_an_error() {
+        let err = read_wav_mono("Z:\\definitely\\not\\here.wav");
+        assert!(err.is_err(), "a missing file must not decode as silence");
+    }
+
+    // -- resampler --------------------------------------------------------
+
+    #[test]
+    fn resample_is_a_noop_at_matching_rate() {
+        let input: Vec<f32> = (0..100).map(|i| i as f32 / 100.0).collect();
+        let out = resample_linear(&input, 24_000, 24_000);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn resample_halves_the_length_when_downsampling() {
+        let input = vec![0.5f32; 96_000]; // 4 s at 48 kHz
+        let out = resample_linear(&input, 48_000, 24_000);
+        assert!((out.len() as i64 - 48_000).abs() <= 1, "len {}", out.len());
+        for v in &out {
+            assert!((v - 0.5).abs() < 1e-6, "constant signal must stay constant");
+        }
+    }
+
+    // -- end-to-end mix ---------------------------------------------------
+
+    /// Drive `run()` with a real timeline: background laid first, halved
+    /// under the voice, voice added at unity.
+    #[test]
+    fn run_mixes_background_ducking_and_voice() {
+        let work = env::temp_dir().join(format!("stitcher_ut_{}_mix", std::process::id()));
+        let _ = fs::remove_dir_all(&work);
+        fs::create_dir_all(&work).expect("scratch dir");
+
+        let seg = work.join("seg.wav");
+        let bg = work.join("bg.wav");
+        let out = work.join("out.wav");
+        let tl = work.join("timeline.json");
+
+        // 0.5 for 1 s of voice; 0.4 for 4 s of background.
+        write_i16(&seg, &vec![16_384i16; 24_000], 24_000);
+        write_i16(&bg, &vec![13_107i16; 96_000], 24_000);
+
+        let json = serde_json::json!({
+            "duration": 4.0,
+            "background_audio": bg.to_string_lossy().into_owned(),
+            "background_volume": 0.5,
+            "segments": [{
+                "start": 1.0,
+                "end": 2.0,
+                "file": seg.to_string_lossy().into_owned(),
+            }],
+            "output": out.to_string_lossy().into_owned(),
+        });
+        fs::write(&tl, json.to_string()).expect("write timeline");
+
+        run(&tl.to_string_lossy()).expect("run must succeed");
+
+        let (pcm, rate) = read_wav_mono(&out.to_string_lossy()).expect("output readable");
+        let _ = fs::remove_dir_all(&work);
+
+        assert_eq!(rate, 24_000);
+        assert_eq!(pcm.len(), 96_000, "4 s at 24 kHz");
+
+        let bg_only = 0.4 * 0.5; // declared volume
+        let bg_ducked = bg_only * DUCK_FACTOR;
+
+        let before = mean(&pcm, 0.05, 0.20); // background, no voice
+        let during = mean(&pcm, 0.30, 0.45); // voice over background
+        let after = mean(&pcm, 0.75, 0.95); // background again
+
+        assert!((before - bg_only).abs() < 0.01, "bg {before}, want {bg_only}");
+        assert!((after - bg_only).abs() < 0.01, "bg {after}, want {bg_only}");
+        assert!(
+            (during - (0.5 + bg_ducked)).abs() < 0.01,
+            "during {during}, want {}",
+            0.5 + bg_ducked
+        );
+    }
 }

@@ -67,7 +67,7 @@ jobs:
   # JOB 1 -- Windows binaries for local use
   # ===========================================================================
   windows-native-tools:
-    name: Windows .exe (stitcher, subtitle_forge, havalar_core, normalizer)
+    name: Windows .exe (stitcher, subtitle_forge, havaldar_core, normalizer)
     runs-on: windows-latest
     # A cold cargo build of three independent crates plus CMake. Generous guard
     # against a hung runner, not an expectation.
@@ -101,7 +101,7 @@ jobs:
           workspaces: |
             stitcher -> target
             subtitle_forge -> target
-            havalar_core -> target
+            havaldar_core -> target
           cache-on-failure: true
 
       # Cargo.lock is what makes a build reproducible. The .gitignore in
@@ -272,7 +272,7 @@ jobs:
       - name: Verify sources are in the build context
         run: |
           set -euo pipefail
-          for d in stitcher subtitle_forge havalar_core cpp_accelerator; do
+          for d in stitcher subtitle_forge havaldar_core cpp_accelerator; do
             if grep -qxE "${d}/" .dockerignore; then
               echo "::error file=.dockerignore::${d}/ excludes sources the pack stage needs"
               exit 1

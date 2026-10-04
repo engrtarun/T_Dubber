@@ -22,3 +22,6 @@
 [submodule "Index-Translate"]
 	path = Index-Translate
 	url = https://github.com/bilibili/Index-Translate.git
+[submodule "references/pyvideotrans"]
+	path = references/pyvideotrans
+	url = https://github.com/jianchang512/pyvideotrans.git

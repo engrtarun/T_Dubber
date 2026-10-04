@@ -213,12 +213,13 @@ async fn ingest_batch(
         events.push(ev);
     }
 
+    let accepted = events.len();
     for ev in events {
         state.writer.submit(ev).map_err(ApiError)?;
     }
     Ok((
         StatusCode::ACCEPTED,
-        Json(serde_json::json!({"ok": true, "accepted": events.len()})),
+        Json(serde_json::json!({"ok": true, "accepted": accepted})),
     ))
 }
 

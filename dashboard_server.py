@@ -31,9 +31,8 @@ Design constraints
    are importable (the repo already pulls FastAPI in via Gradio); otherwise it
    falls back to the standard library's ThreadingHTTPServer. The request
    handling and all logic are shared by both transports.
-3. DEGRADE, NEVER CRASH. ``pipeline_stages`` and ``channel_daily_quota`` are
-   empty in the current database and ``record_stage()`` is not yet wired into
-   ``pipeline.py`` (SQLITE_ROLLOUT.md, Phase 2). Every query here tolerates a
+3. DEGRADE, NEVER CRASH. ``pipeline_stages`` and ``channel_daily_quota`` may be
+   empty in the current database. Every query here tolerates a
    missing table, a missing column, or a NULL, and the snapshot still renders.
 4. HONEST ABOUT GAPS. There is no chunk table, no GPU telemetry and no Rust
    binary anywhere in the pipeline, so this server does not invent them. It
@@ -412,9 +411,8 @@ class SnapshotBuilder:
                      state: str) -> Tuple[List[Dict[str, Any]], Optional[int]]:
         """Return (stage rows, current stage index).
 
-        Reads pipeline_stages when it has rows. It has none today because
-        record_stage() is not yet called from pipeline.py, so the rail is
-        inferred from projects.current_stage instead of rendering empty.
+        Reads pipeline_stages when it has rows. When the table is empty the
+        rail is inferred from projects.current_stage instead of rendering empty.
         """
         pid = project["id"]
         rows: List[Dict[str, Any]] = []
@@ -526,11 +524,13 @@ class SnapshotBuilder:
             ff = {"state": "idle", "detail": "standby", "pct": 0}
 
         # --- Rust -----------------------------------------------------------
-        # Truthfully unbuilt: the only Cargo.toml in the repo belongs to the
-        # vendored Telegram-Drive Tauri app. Timeline assembly happens in
-        # mazinger's Python assemble step.
+        # stitcher (timeline mixing) and normalizer (loudness) are built and
+        # shipped in the Docker/Kaggle pack. Their state is inferred from the
+        # stage rail because they emit no telemetry of their own.
         if running and stage >= 6:
-            rust = {"state": "queued", "detail": "no Rust binary in pipeline", "pct": 0}
+            rust = {"state": "running", "detail": "stitcher + normalizer", "pct": 50}
+        elif state == "done":
+            rust = {"state": "done", "detail": "stitched", "pct": 100}
         else:
             rust = {"state": "idle", "detail": "standby", "pct": 0}
 
@@ -1116,7 +1116,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     p.add_argument("--host", default="127.0.0.1",
                    help="bind address; 0.0.0.0 exposes Telegram metadata to the LAN")
-    p.add_argument("--port", type=int, default=8080, help="TCP port")
+    p.add_argument("--port", type=int, default=8081, help="TCP port (8081: havaldar_core owns 8080)")
     p.add_argument("--db", default=DEFAULT_DB, help="path to t_dubber.db")
     p.add_argument("--root", default=DEFAULT_WEB_ROOT, help="directory holding index.html")
     p.add_argument("--tg-dir", default=None, help="upload journal dir (default: <app>/.tg_uploads)")
@@ -1164,12 +1164,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("      links are readable by anything that can reach this port.")
     print()
 
-    transport = "stdlib"
     app = None
     if args.engine in ("auto", "fastapi"):
         try:
             app = build_fastapi(builder, args.root)
-            transport = "fastapi"
         except Exception as exc:
             if args.engine == "fastapi":
                 print(f"[x] FastAPI requested but unavailable: {exc}", file=sys.stderr)
@@ -1205,7 +1203,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         httpd = Server((args.host, args.port), handler)
     except OSError as exc:
         print(f"[x] cannot bind {args.host}:{args.port} — {exc}", file=sys.stderr)
-        print("    Another process may hold the port. Try --port 8081.", file=sys.stderr)
+        print("    Another process may hold the port. Try --port 8082.", file=sys.stderr)
         return 4
 
     if not args.no_open:

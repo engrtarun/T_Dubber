@@ -4,13 +4,20 @@ import json
 import datetime
 import subprocess
 import shutil
-import re
 import uuid
 import hashlib
 import glob
 import zipfile
 import sys
+import urllib.request
 from pathlib import Path
+
+# Optional: havaldar_core telemetry daemon integration
+try:
+    from havaldar import HavaldarDaemon
+    _HAS_HAVALDAR = True
+except ImportError:
+    _HAS_HAVALDAR = False
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -74,6 +81,111 @@ _TEL_WARN_LIMIT = 5
 _tel_started = {}   # (project_id, stage) -> time.monotonic() at "running"
 _tel_ready = set()  # project ids confirmed to exist in `projects`
 _tel_warned = 0
+
+
+# ---------------------------------------------------------------------------
+# havaldar_core telemetry sink
+# ---------------------------------------------------------------------------
+# havaldar_core is the Rust telemetry daemon (axum + rusqlite). It accepts
+# POST /ingest packets and writes them to the same t_dubber.db that db.py
+# writes. This client is best-effort: a failed POST is logged to stderr and
+# never interrupts the run, matching the telemetry-is-not-load-bearing rule.
+
+_HAVALDAR_URL = "http://127.0.0.1:8080"
+
+
+def _havaldar_post(packet: dict) -> bool:
+    """POST one telemetry packet to havaldar_core. Returns True on success."""
+    try:
+        body = json.dumps(packet).encode("utf-8")
+        req = urllib.request.Request(
+            f"{_HAVALDAR_URL}/ingest",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return 200 <= resp.status < 300
+    except Exception:
+        return False
+
+
+def _havaldar_enabled() -> bool:
+    """Whether havaldar_core telemetry is wanted (env-gated, default on)."""
+    return os.environ.get("HAVALDAR_DISABLE", "").lower() not in ("1", "true", "yes")
+
+
+# ---------------------------------------------------------------------------
+# subtitle_forge integration
+# ---------------------------------------------------------------------------
+# subtitle_forge turns a faster-whisper JSON transcript into styled .srt and
+# .ass subtitles. It is a Rust binary shipped in the Docker/Kaggle pack; this
+# helper finds it, calls it, and returns the output paths. Every failure is
+# logged -- a silent fallback here would produce a video with no subtitles
+# and no explanation.
+
+def _subtitle_forge_binary() -> str:
+    """Locate the subtitle_forge binary, or "" when unavailable."""
+    candidates = [
+        os.environ.get("SUBTITLE_FORGE_BIN", ""),
+        os.path.join(APP_DIR, "subtitle_forge", "target", "release", "subtitle_forge.exe" if sys.platform == "win32" else "subtitle_forge"),
+        os.path.join(APP_DIR, "subtitle_forge", "target", "release", "subtitle_forge"),
+    ]
+    for cand in candidates:
+        if cand and os.path.isfile(cand):
+            return cand
+    found = shutil.which("subtitle_forge")
+    return found or ""
+
+
+def generate_subtitles(transcript_json: str, output_stem: str,
+                       srt: bool = True, ass: bool = True) -> dict:
+    """Generate .srt/.ass subtitles from a faster-whisper JSON transcript.
+
+    Returns ``{"srt": path_or_None, "ass": path_or_None, "ok": bool}``.
+    Never raises: a failure is logged and reported in the result.
+    """
+    binary = _subtitle_forge_binary()
+    if not binary:
+        print("[pipeline] subtitle_forge not found; skipping subtitle generation", file=sys.stderr)
+        return {"srt": None, "ass": None, "ok": False}
+    if not os.path.isfile(transcript_json):
+        print(f"[pipeline] transcript not found: {transcript_json}", file=sys.stderr)
+        return {"srt": None, "ass": None, "ok": False}
+
+    cmd = [binary, "-i", transcript_json]
+    outputs = {}
+    if srt:
+        srt_path = output_stem + ".srt"
+        cmd += ["-s", srt_path]
+        outputs["srt"] = srt_path
+    if ass:
+        ass_path = output_stem + ".ass"
+        cmd += ["-a", ass_path]
+        outputs["ass"] = ass_path
+    if not outputs:
+        print("[pipeline] generate_subtitles: no output format requested", file=sys.stderr)
+        return {"srt": None, "ass": None, "ok": False}
+
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        print(f"[pipeline] subtitle_forge timed out: {transcript_json}", file=sys.stderr)
+        return {"srt": None, "ass": None, "ok": False}
+    except Exception as exc:
+        print(f"[pipeline] subtitle_forge failed to start: {exc}", file=sys.stderr)
+        return {"srt": None, "ass": None, "ok": False}
+
+    if res.returncode != 0:
+        print(f"[pipeline] subtitle_forge exited {res.returncode}: {(res.stderr or res.stdout or '')[-500:]}", file=sys.stderr)
+        return {"srt": None, "ass": None, "ok": False}
+
+    # Verify at least one output file was actually produced.
+    produced = {k: v for k, v in outputs.items() if os.path.isfile(v) and os.path.getsize(v) > 0}
+    if not produced:
+        print(f"[pipeline] subtitle_forge produced no output files for {transcript_json}", file=sys.stderr)
+        return {"srt": None, "ass": None, "ok": False}
+    return {"srt": produced.get("srt"), "ass": produced.get("ass"), "ok": True}
 
 
 def _tel_warn(reason):
@@ -160,6 +272,17 @@ def track_stage(project_id, stage_number, status, message=None, error=None,
             error=_tel_truncate(error, _MAX_ERROR),
             duration_sec=duration_sec,
         )
+        # Mirror the transition to havaldar_core (best-effort, never raises).
+        if _havaldar_enabled():
+            _havaldar_post({
+                "project_id": project_id,
+                "stage": stage_number,
+                "stage_name": name,
+                "status": status,
+                "message": _tel_truncate(message, _MAX_MESSAGE),
+                "error": _tel_truncate(error, _MAX_ERROR),
+                "duration_sec": duration_sec,
+            })
         return True
     except Exception as exc:
         _tel_warn(f"{project_id} stage {stage_number} {status} not recorded: {exc}")
@@ -244,6 +367,15 @@ def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seco
         status_text = (result.stdout or "") + (result.stderr or "")
         lowered = status_text.lower()
 
+        # If the status command itself failed (network, auth, etc.), treat as
+        # a transient error and retry — do NOT treat as kernel failure.
+        if result.returncode != 0:
+            yield f"[{stage}] ⚠️ Kaggle status check failed (exit {result.returncode}); retrying in {poll_seconds}s...\n"
+            if (result.stderr or result.stdout):
+                yield f"[{stage}] CLI output: {(result.stderr or result.stdout).strip()[-500:]}\n"
+            time.sleep(poll_seconds)
+            continue
+
         if "complete" in lowered:
             yield f"[{stage}] ✅ Kaggle execution completed!\n"
             track_stage(project_id, stage_number, "success",
@@ -306,7 +438,7 @@ def reattach_to_kernel(project_dir, kernel_id, timeout=10 * 60 * 60, poll_second
     tel_manifest = manifest
 
     yield "[STAGE:5] ♻️ Reattaching to the Kaggle worker...\n"
-    yield f"[STAGE:5] ☁️ Your PC going offline does not stop Kaggle; the job is still running there.\n"
+    yield "[STAGE:5] ☁️ Your PC going offline does not stop Kaggle; the job is still running there.\n"
     yield f"[STAGE:5] 🔗 Worker URL: https://www.kaggle.com/code/{kernel_id}\n"
 
     outcome = yield from _wait_for_kernel(
@@ -384,6 +516,18 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         "status": "processing",
     }
 
+    # Start havaldar_core telemetry daemon (optional, best-effort)
+    havaldar = None
+    if _HAS_HAVALDAR:
+        db_path = os.path.join(APP_DIR, "t_dubber.db")
+        havaldar = HavaldarDaemon(db_path=db_path, port=8080)
+        result = havaldar.start()
+        if result.success:
+            yield f"[STAGE:0] 📡 Telemetry daemon started on http://127.0.0.1:8080 (pid={result.pid})\n"
+        else:
+            yield f"[STAGE:0] ⚠️ Telemetry daemon not started: {result.error}\n"
+            havaldar = None
+
     yield "[STAGE:1] 🚀 Starting Kaggle pipeline...\n"
     track_stage(project_id, 1, "running", message="Starting Kaggle pipeline", manifest=manifest)
 
@@ -408,7 +552,7 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         return
 
     try:
-        with open(kaggle_creds_path) as kf:
+        with open(kaggle_creds_path, encoding="utf-8") as kf:
             kcreds = json.load(kf)
             KAGGLE_USERNAME = kcreds.get("username", "YOUR_KAGGLE_USERNAME")
     except Exception as e:
@@ -428,7 +572,7 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     dataset_dir = os.path.join(project_dir, "dataset_safe")
     os.makedirs(dataset_dir, exist_ok=True)
     
-    video_filename = "source_video" + (Path(video_path).suffix.lower() or ".mp4")
+    video_filename = "source_video" + ((Path(video_path).suffix.lower()) if video_path else ".mp4")
     # A stable filename lets dataset versions replace the previous input cleanly.
     for old_video in Path(dataset_dir).glob("source_video.*"):
         old_video.unlink()
@@ -437,15 +581,21 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
     needs_compression = file_size_mb > 30
     if not needs_compression:
-        probe_cmd = f'ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 "{video_path}"'
+        probe_cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=height",
+            "-of", "csv=s=x:p=0",
+            video_path,
+        ]
         try:
-            res_probe = subprocess.run(probe_cmd, shell=True, capture_output=True, text=True)
+            res_probe = run_cmd(probe_cmd)
             if res_probe.returncode == 0 and res_probe.stdout.strip():
                 height = int(res_probe.stdout.strip())
                 if height > 1080:
                     needs_compression = True
-        except:
-            pass
+        except Exception as exc:
+            print(f"[pipeline] ffprobe probe failed ({exc}); assuming no compression needed", file=sys.stderr)
 
     compressed_video_path = None
     if needs_compression:
@@ -453,9 +603,12 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         track_stage(project_id, 1, "running",
                     message=f"Compressing {file_size_mb:.1f}MB source to 480p", manifest=manifest)
         compressed_video_path = os.path.join(project_dir, f"compressed_{unique_id}.mp4")
-        ffmpeg_cmd = f'ffmpeg -y -i "{video_path}" -vf scale=854:480 -b:v 1M "{compressed_video_path}"'
-        yield f"[STAGE:1] Executing: {ffmpeg_cmd}\n"
-        run_cmd(ffmpeg_cmd)
+        ffmpeg_cmd = ["ffmpeg", "-y", "-i", video_path, "-vf", "scale=854:480",
+                      "-b:v", "1M", compressed_video_path]
+        yield f"[STAGE:1] Executing: {' '.join(ffmpeg_cmd)}\n"
+        res = run_cmd(ffmpeg_cmd)
+        if res.returncode != 0:
+            print(f"[pipeline] ffmpeg compression exited {res.returncode}: {(res.stderr or '')[-500:]}", file=sys.stderr)
         
         if os.path.exists(compressed_video_path) and os.path.getsize(compressed_video_path) > 0:
             target_upload_path = compressed_video_path
@@ -629,8 +782,7 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     
     kmeta_path = os.path.join(kernel_dir, "kernel-metadata.json")
     # Keep one private notebook so its configuration persists between video runs.
-    kernel_slug = "dubber-worker-homura"
-    
+
     if os.path.exists(kmeta_path):
         with open(kmeta_path, "r") as f:
             kmeta = json.load(f)
@@ -706,18 +858,41 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     
     # Verify downloaded output video
     original_video_basename = os.path.basename(video_path)
-    mp4_files = [f for f in glob.glob(os.path.join(project_dir, "*.mp4")) if os.path.basename(f) != original_video_basename]
+    mp4_files = [
+        f for f in glob.glob(os.path.join(project_dir, "*.mp4"))
+        if os.path.basename(f) != original_video_basename and os.path.getsize(f) > 0
+    ]
     
-    if mp4_files and os.path.getsize(mp4_files[0]) > 0:
+    if mp4_files:
         track_stage(project_id, 6, "success",
                     message=f"Downloaded {len(mp4_files)} file(s) from Kaggle", manifest=manifest)
         stale_error_log = os.path.join(project_dir, "error_log.txt")
         if os.path.isfile(stale_error_log):
             os.remove(stale_error_log)
+        # Pick the largest file (consistent with reattach_to_kernel)
+        biggest = max(mp4_files, key=lambda f: os.path.getsize(f))
         track_stage(project_id, 7, "success",
-                    message=f"Verified output video {os.path.basename(mp4_files[0])}",
+                    message=f"Verified output video {os.path.basename(biggest)}",
                     manifest=manifest)
-        yield f"[STAGE:7] 🎉 Pipeline finished successfully! Video saved at {os.path.basename(mp4_files[0])} and report saved locally."
+        yield f"[STAGE:7] 🎉 Pipeline finished successfully! Video saved at {os.path.basename(biggest)} and report saved locally."
+
+        # Generate subtitles from the worker's transcript if one was downloaded.
+        transcript_candidates = (
+            glob.glob(os.path.join(project_dir, "*transcript*.json"))
+            + glob.glob(os.path.join(project_dir, "*whisper*.json"))
+        )
+        if transcript_candidates:
+            transcript = transcript_candidates[0]
+            stem = os.path.splitext(biggest)[0]
+            yield f"[STAGE:7] 📝 Generating subtitles from {os.path.basename(transcript)}...\n"
+            sub_result = generate_subtitles(transcript, stem)
+            if sub_result["ok"]:
+                made = ", ".join(os.path.basename(p) for p in (sub_result["srt"], sub_result["ass"]) if p)
+                yield f"[STAGE:7] ✅ Subtitles generated: {made}\n"
+            else:
+                yield "[STAGE:7] ⚠️ Subtitle generation failed (see stderr); continuing without subtitles.\n"
+        else:
+            yield "[STAGE:7] ℹ️ No transcript JSON found; skipping subtitle generation.\n"
     else:
         track_stage(project_id, 6, "success",
                     message="Downloaded Kaggle outputs (no video present)", manifest=manifest)
@@ -739,12 +914,12 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         if err_content:
             yield f"[STAGE:7] ❌ Worker Error Log:\n{err_content[-2500:]}\n"
         else:
-            yield f"[STAGE:7] ❌ No error_log.txt found. The worker likely failed silently (e.g., pip install failed due to no internet).\n"
+            yield "[STAGE:7] ❌ No error_log.txt found. The worker likely failed silently (e.g., pip install failed due to no internet).\n"
         
         if "resolve host" in err_content.lower() or "network" in err_content.lower() or "internet" in err_content.lower() or not err_content:
-            yield f"[STAGE:7] 💡 FIX: Open https://www.kaggle.com/code/{kernel_id} → Settings → Enable Internet → Re-run the notebook manually.\n"
+            yield "[STAGE:7] 💡 FIX: Open https://www.kaggle.com/code/" + kernel_id + " → Settings → Enable Internet → Re-run the notebook manually.\n"
         else:
-            yield f"[STAGE:7] 💡 FIX: An error occurred in the execution. Please check the logs above or open https://www.kaggle.com/code/{kernel_id} to debug.\n"
+            yield "[STAGE:7] 💡 FIX: An error occurred in the execution. Please check the logs above or open https://www.kaggle.com/code/" + kernel_id + " to debug.\n"
 
         track_stage(project_id, 7, "failed",
                     message="Worker reported 'complete' but no output video was produced",
@@ -756,6 +931,11 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     if compressed_video_path and os.path.exists(compressed_video_path):
         try:
             os.remove(compressed_video_path)
-            yield f"[STAGE:7] 🧹 Cleaned up temporary compressed video.\n"
-        except:
-            pass
+            yield "[STAGE:7] 🧹 Cleaned up temporary compressed video.\n"
+        except Exception as exc:
+            print(f"[pipeline] could not remove {compressed_video_path}: {exc}", file=sys.stderr)
+
+    # Stop havaldar_core telemetry daemon
+    if havaldar and havaldar.is_running():
+        yield "[STAGE:7] 📡 Stopping telemetry daemon...\n"
+        havaldar.stop(timeout=5.0)

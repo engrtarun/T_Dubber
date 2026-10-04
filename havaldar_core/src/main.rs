@@ -196,7 +196,7 @@ async fn run(args: Args) -> error::Result<()> {
     };
 
     // Fail loudly at startup rather than accepting packets we cannot store.
-    let writer = spawn(&args.db, cfg)?;
+    let writer = spawn(&args.db, cfg.clone())?;
     tracing::info!(
         queue_capacity = cfg.queue_capacity,
         flush_interval_ms = cfg.flush_interval.as_millis(),
@@ -206,6 +206,9 @@ async fn run(args: Args) -> error::Result<()> {
     );
 
     let state = AppState::new(writer, cfg.queue_capacity);
+    let host = args.host.clone();
+    let host_udp = args.host.clone();
+    let udp_port = args.udp_port;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     // A second handle for the signal path.
     let signal_tx = shutdown_tx.clone();
@@ -224,7 +227,7 @@ async fn run(args: Args) -> error::Result<()> {
     let http_shutdown = shutdown_rx.clone();
     tasks.push(tokio::spawn(async move {
         let app = http::router(http_state);
-        let addr: SocketAddr = format!("{}:{}", args.host, args.port)
+        let addr: SocketAddr = format!("{}:{}", host, args.port)
             .parse()
             .unwrap_or_else(|_| {
                 SocketAddr::from(([127, 0, 0, 1], args.port))
@@ -254,12 +257,13 @@ async fn run(args: Args) -> error::Result<()> {
     }));
 
     // ---- UDP (optional) ----
-    if args.udp_port > 0 {
+    if udp_port > 0 {
         let udp_state = state.clone();
-        let mut udp_shutdown = shutdown_rx.clone();
-        let addr: SocketAddr = format!("{}:{}", args.host, args.udp_port)
+        let udp_shutdown = shutdown_rx.clone();
+        let udp_shutdown_keepalive = udp_shutdown.clone();
+        let addr: SocketAddr = format!("{}:{}", host_udp, udp_port)
             .parse()
-            .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], args.udp_port)));
+            .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], udp_port)));
         tasks.push(tokio::spawn(async move {
             if let Err(e) = http::serve_udp(addr, udp_state, udp_shutdown.clone()).await {
                 tracing::error!(%addr, error = %e, "UDP listener failed");
@@ -268,7 +272,7 @@ async fn run(args: Args) -> error::Result<()> {
         }));
         // Keep the receiver alive until shutdown flips.
         tasks.push(tokio::spawn(async move {
-            let mut rx = udp_shutdown;
+            let mut rx = udp_shutdown_keepalive;
             while rx.changed().await.is_ok() {
                 if *rx.borrow() {
                     break;

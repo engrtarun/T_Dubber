@@ -37,7 +37,7 @@ attachments, or private-channel ``tg://`` links. Python and Telethon keep all of
 that. See ``TGUP.md``.
 
 The public API here is unchanged from the previous helper, so
-``telegram_uploader.py`` and ``doctor.ps1`` need no edits.
+``telegram_uploader.py`` and ``doctor.py`` need no edits.
 """
 
 from __future__ import annotations
@@ -195,7 +195,7 @@ def build_plan_go(path: str, chunk_size: int = DEFAULT_CHUNK_SIZE) -> dict:
     if not binary_runnable():
         raise RuntimeError(status()["reason"] or "tgup is not runnable here.")
 
-    state = Path(TGUP_DIR) / "_plan_tmp.json"
+    state = Path(TGUP_DIR) / f"_plan_tmp.{os.getpid()}.json"
     code, _stdout, human = tgup_bridge.run_command(
         [
             "plan",
@@ -242,7 +242,8 @@ def build_plan(
     if use_go and binary_runnable():
         try:
             produced = build_plan_go(path, chunk_size)
-        except Exception:  # noqa: BLE001 - fall back rather than fail the run
+        except Exception as exc:  # noqa: BLE001 - fall back rather than fail the run
+            print(f"[go_planner] Go planning failed ({exc}); using Python planner", file=sys.stderr)
             produced = None
         if produced and len(produced.get("parts", [])) == len(plan):
             by_number = {int(p["part"]): p.get("sha256", "") for p in produced["parts"]}
@@ -352,8 +353,8 @@ def upload_via_go(
                 chunk_count=event.part_count,
                 message=event.message or f"tgup part {event.part}/{event.part_count}",
             )
-        except Exception:  # noqa: BLE001 - a broken display must not abort a transfer
-            pass
+        except Exception as exc:  # noqa: BLE001 - a broken display must not abort a transfer
+            print(f"[go_planner] progress callback error: {exc}", file=sys.stderr)
 
     result = tgup_bridge.upload(
         file=os.path.abspath(file_path),

@@ -2,3 +2,6 @@
 # by default: ~40 MB of Linux ELF binaries, regenerable in minutes with that
 # script, so it must never enter git history (nor the Docker build context).
 pack/
+
+__pycache__/
+*.pyc

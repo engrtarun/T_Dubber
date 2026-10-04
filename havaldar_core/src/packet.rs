@@ -97,6 +97,15 @@ pub const MAX_ERROR_LEN: usize = 2_000;
 pub const MAX_PROJECT_ID_LEN: usize = 255;
 pub const MAX_STAGE_NAME_LEN: usize = 128;
 
+/// Upper bound on a stage index accepted from the wire.
+///
+/// The canonical rail lives in `pipeline.py` and grows over time, so the daemon
+/// must accept an index it does not recognise yet -- `canonical_stage_name`
+/// synthesises "Stage N" for it. The bound only exists to reject values far
+/// outside any plausible rail, which are far more likely a corrupt or hostile
+/// packet than a real stage.
+pub const MAX_STAGE_INDEX: i64 = 255;
+
 /// One telemetry packet.
 ///
 /// `project_id` + `stage` + `status` identify the row. `stage_name` is optional
@@ -196,14 +205,26 @@ fn canonical_stage_name(stage: i64, supplied: Option<&str>) -> String {
         .ok()
         .and_then(|i| STAGE_NAMES.get(i).copied());
 
-    // Prefer the index: it is the single source of truth, and the label is only
-    // cosmetic. A mismatched label from a stale client must not rewrite it.
-    match from_index {
-        Some(name) => name.to_string(),
-        None => supplied
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("Stage {stage}")),
+    // The index is the single source of truth and outranks a supplied label: a
+    // stale client sending the wrong name must not rewrite the canonical one,
+    // or the dashboard's rail would relabel a stage mid-run.
+    if let Some(name) = from_index {
+        return name.to_string();
     }
+
+    // Off the end of the rail. `pipeline.py` can legitimately grow a stage, so
+    // this is not an error -- but a label is only trustworthy when it has no
+    // canonical name to contradict. Below the rail (a negative index) the
+    // supplied label is the only description there is; past its end the index
+    // is unambiguous, so we synthesise one and keep every consumer consistent.
+    let plausible = supplied
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.len() <= MAX_STAGE_NAME_LEN)
+        .filter(|_| stage < 0);
+
+    plausible
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("Stage {stage}"))
 }
 
 /// Truncate to `max` bytes on a char boundary, appending an ellipsis marker.
@@ -246,10 +267,15 @@ impl StageEvent {
         let stage = packet
             .stage
             .ok_or_else(|| HavaldarError::invalid("stage", "is required for a stage packet"))?;
-        if !(-1..=64).contains(&stage) {
+        // `pipeline.py` owns the canonical rail (0..=8) and may grow it, so a stage
+        // past the end is a legitimate forward-compatibility case, not a client
+        // bug -- `canonical_stage_name` synthesises "Stage N" for it. The bound
+        // only exists to reject values so far outside any plausible rail that
+        // they are far more likely a corrupt or hostile packet.
+        if !(-1..=MAX_STAGE_INDEX).contains(&stage) {
             return Err(HavaldarError::invalid(
                 "stage",
-                format!("{stage} is out of the accepted range -1..=64"),
+                format!("{stage} is out of the accepted range -1..={MAX_STAGE_INDEX}"),
             ));
         }
 
@@ -365,6 +391,9 @@ impl TelemetryPacket {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the type-checking tests below need this; the struct itself is
+    // exercised through StageEvent::normalize.
+    use crate::packet::TelemetryEvent;
 
     #[test]
     fn status_aliases_normalise_to_db_py_vocabulary() {
@@ -436,11 +465,72 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_stage_gets_generic_name() {
+    fn past_the_rail_gets_a_generic_name() {
+        // Stage 12 is past the nine canonical names but inside the accepted
+        // -1..=64 range, so it reaches the naming logic instead of being
+        // rejected as out of range. The index is unambiguous there, so a
+        // generic "Stage N" outranks any label the client sent -- otherwise a
+        // stale client could relabel a stage the dashboard shows by index.
         let mut p = stage_packet("running");
-        p.stage = Some(99);
+        p.stage = Some(12);
         let e = StageEvent::normalize(&p, false).expect("valid");
-        assert_eq!(e.stage_name, "Stage 99");
+        assert_eq!(e.stage_name, "Stage 12");
+
+        let mut p = stage_packet("running");
+        p.stage = Some(12);
+        p.stage_name = Some("Bogus".into());
+        let e = StageEvent::normalize(&p, false).expect("valid");
+        assert_eq!(e.stage_name, "Stage 12");
+    }
+
+    #[test]
+    fn far_out_of_range_stage_is_rejected_before_naming() {
+        // Beyond the accepted -1..=64 range there is no name to invent: a
+        // stage 500 is a malformed packet, not a new pipeline stage. -1 is the
+        // only negative the range admits, so -9 is out of range too.
+        let mut p = stage_packet("running");
+        p.stage = Some(500);
+        assert!(StageEvent::normalize(&p, false).is_err());
+
+        let mut p = stage_packet("running");
+        p.stage = Some(MAX_STAGE_INDEX + 1);
+        assert!(
+            StageEvent::normalize(&p, false).is_err(),
+            "one past the ceiling must be rejected"
+        );
+
+        let mut p = stage_packet("running");
+        p.stage = Some(-9);
+        assert!(StageEvent::normalize(&p, false).is_err(), "-1 is the floor");
+
+        // And the boundary values themselves are accepted. Spelled in terms of
+        // the constant, not a literal, so widening the range cannot turn this
+        // into a test that fails for the wrong reason.
+        let mut p = stage_packet("running");
+        p.stage = Some(MAX_STAGE_INDEX);
+        assert!(
+            StageEvent::normalize(&p, false).is_ok(),
+            "the ceiling must be valid"
+        );
+        let mut p = stage_packet("running");
+        p.stage = Some(-1);
+        assert!(StageEvent::normalize(&p, false).is_ok(), "-1 must be valid");
+    }
+
+    #[test]
+    fn negative_stage_keeps_a_supplied_label() {
+        // -1 is inside the accepted range and has no canonical name to
+        // contradict, so a label is the only description available.
+        let mut p = stage_packet("running");
+        p.stage = Some(-1);
+        p.stage_name = Some("Preflight".into());
+        let e = StageEvent::normalize(&p, false).expect("valid");
+        assert_eq!(e.stage_name, "Preflight");
+
+        let mut p = stage_packet("running");
+        p.stage = Some(-1);
+        let e = StageEvent::normalize(&p, false).expect("valid");
+        assert_eq!(e.stage_name, "Stage -1");
     }
 
     #[test]

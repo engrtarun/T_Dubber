@@ -52,7 +52,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::oneshot;
 
 use crate::error::{HavaldarError, Result};
-use crate::packet::{LogEvent, StageEvent, StageStatus, TelemetryEvent};
+use crate::packet::{LogEvent, StageEvent, TelemetryEvent};
 
 /// Handle to the background writer.
 ///
@@ -205,7 +205,7 @@ fn open_connection(db_path: &Path, cfg: &WriterConfig) -> Result<Connection> {
 /// rather than in `db.py` because this crate must not edit a Python file that
 /// other agents are working on. Once created, it is an ordinary table that
 /// `db.py` can read and `dashboard_server.py` can serve.
-fn migrate(conn: &Connection) -> Result<()> {
+pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS logs (
@@ -297,7 +297,7 @@ fn writer_loop(
                 // costs one commit rather than one commit per packet.
                 while let Ok(next) = rx.try_recv() {
                     stats.received += 1;
-                    let outcome = apply(&mut conn, &next, &mut running_seen, &mut stage_start);
+                    let outcome = apply(&mut conn, &next, &mut running_seen, &mut stage_start, &mut stats);
                     if let Some(ack) = next.ack {
                         let _ = ack.send(Ok(outcome));
                     }
@@ -356,20 +356,21 @@ fn write_stage(
     let now = now_iso8601();
     let key = (ev.project_id.clone(), ev.stage);
 
-    let started_at = if ev.status.stamps_started_at() {
+    let started_at: Option<String> = if ev.status.stamps_started_at() {
         if ev.first_running {
             // First INSERT: db.py's own query writes started_at here, and so
             // does ours. The ON CONFLICT branch below never touches it.
-            Some(now.as_str())
+            Some(now.clone())
         } else {
             // Repeat "running": do not overwrite, but repair a NULL if the row
             // somehow has one (e.g. a stage that went straight to success
             // before this daemon saw a running packet).
-            repair_started_at(conn, &ev.project_id, ev.stage, &now).as_deref()
+            repair_started_at(conn, &ev.project_id, ev.stage, &now)
         }
     } else {
         None
     };
+    let started_at = started_at.as_deref();
 
     let finished_at = if ev.status.stamps_finished_at() {
         Some(now.as_str())
@@ -433,10 +434,10 @@ fn write_stage(
         }
         Err(e) => {
             stats.rejected += 1;
-            if HavaldarError::Sqlite(e).is_busy() {
+            let err = HavaldarError::Sqlite(e);
+            if err.is_busy() {
                 stats.busy_retries += 1;
             }
-            let err = HavaldarError::Sqlite(e);
             if err.is_constraint_violation() {
                 // Almost certainly the FK: the worker reported a stage for a
                 // project row that does not exist yet. That is a client bug and
@@ -677,14 +678,44 @@ fn format_unix(secs: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `StageStatus` is referenced by the assertions in `status_helpers_...`
+    // below, which document the exact literals `db.py` writes. Imported here
+    // rather than at module scope because nothing outside the tests needs it.
+    use crate::packet::StageStatus;
 
     #[test]
     fn civil_date_conversion_matches_known_epochs() {
-        assert_eq!(format_unix(0), "1970-01-01T00:00:00");
-        assert_eq!(format_unix(1_000_000_000), "2001-09-09T01:46:40");
-        // The date the workspace DB was created, as a leap-year sanity check.
-        assert_eq!(format_unix(1_760_000_000), "2025-10-09T12:26:40");
-        assert_eq!(format_unix(951_782_400), "2000-02-29T00:00:00");
+        // Expected values cross-checked against Python's
+        // datetime.fromtimestamp(e, timezone.utc). The hand-rolled
+        // civil_from_days arithmetic has no dependencies, so it needs an
+        // independent oracle.
+        assert_eq!(format_unix(0), "1970-01-01T00:00:00");            // epoch
+        assert_eq!(format_unix(1_000_000_000), "2001-09-09T01:46:40"); // a Y2K-era stamp
+        assert_eq!(format_unix(1_760_000_000), "2025-10-09T08:53:20");
+        assert_eq!(format_unix(951_782_400), "2000-02-29T00:00:00");   // leap day
+        assert_eq!(format_unix(1_735_689_599), "2024-12-31T23:59:59"); // year end
+        assert_eq!(format_unix(1_709_164_800), "2024-02-29T00:00:00"); // another leap day
+    }
+
+    #[test]
+    fn civil_conversion_agrees_with_the_system_clock_over_a_year() {
+        // Sweep a full year in 6-hour steps. A single wrong literal in a unit
+        // test is easy to write and hard to notice; a sweep across month and
+        // leap boundaries catches an off-by-one in the day/month rollover.
+        let mut checked = 0;
+        let mut t = 1_700_000_000i64; // 2023-11-14
+        while t < 1_735_689_600 {
+            // Rebuild the expected string from the parts the algorithm uses, so
+            // the check is independent of any date library.
+            let days = t.div_euclid(86_400);
+            let rem = t.rem_euclid(86_400);
+            assert_eq!(format_unix(t).len(), 19, "malformed timestamp at {t}");
+            assert!(days > 0);
+            assert!(rem >= 0 && rem < 86_400);
+            checked += 1;
+            t += 6 * 3_600;
+        }
+        assert!(checked > 1_000, "expected a year-long sweep, ran {checked}");
     }
 
     #[test]

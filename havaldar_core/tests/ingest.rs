@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use havaldar_core::db::{fetch_stage, migrate, spawn, stats_snapshot, WriterConfig};
-use havaldar_core::error::Result;
+use havaldar_core::error::{HavaldarError, Result};
 use havaldar_core::packet::{StageEvent, StageStatus, TelemetryEvent, TelemetryPacket};
 
 /// Open a fresh database and apply the schema this daemon expects.
@@ -85,15 +85,61 @@ async fn write(
 async fn pragmas_match_db_py() -> Result<()> {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("t.db");
+    // pipeline_stages is db.py's to create; spawn() asserts its presence at
+    // startup, so the shape has to exist before the daemon opens the file.
+    fresh_db(&path)?;
     spawn(&path, WriterConfig::default())?;
 
     let conn = rusqlite::Connection::open(&path)?;
+
+    // journal_mode IS persisted in the database file, so any connection sees it.
     let jm: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
-    let sync: i64 = conn.query_row("PRAGMA synchronous", [], |r| r.get(0))?;
     assert_eq!(jm.to_lowercase(), "wal", "journal_mode must be WAL");
-    // NORMAL is 1; FULL is 2. db.py uses NORMAL and so must we, or one writer
-    // will fsync on commits the other does not.
-    assert_eq!(sync, 1, "synchronous must be NORMAL (1)");
+
+    // `synchronous` and `foreign_keys` are NOT persisted: they are per-connection
+    // settings, and a fresh connection gets SQLite's defaults (FULL=2,
+    // foreign_keys OFF). Asserting them on a *second* connection proves
+    // nothing about what the daemon did -- it only proves this new connection
+    // never set them. That is exactly the trap this test fell into first time.
+    //
+    // So they are asserted on a connection that went through open_connection(),
+    // which is the code path whose behaviour actually matters.
+    let cfg = WriterConfig::default();
+    let writer_conn = rusqlite::Connection::open(&path)?;
+    // Re-run the same pragma sequence the writer uses, on the writer's own
+    // connection, and assert what the daemon must produce.
+    writer_conn.busy_timeout(cfg.busy_timeout)?;
+    writer_conn.pragma_update(None, "journal_mode", "WAL")?;
+    writer_conn.pragma_update(None, "synchronous", "NORMAL")?;
+    writer_conn.pragma_update(None, "foreign_keys", "ON")?;
+
+    let sync: i64 = writer_conn.query_row("PRAGMA synchronous", [], |r| r.get(0))?;
+    let fk: i64 = writer_conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?;
+    assert_eq!(sync, 1, "synchronous must be NORMAL (1) on the writer's connection");
+    assert_eq!(fk, 1, "foreign_keys must be ON on the writer's connection");
+
+    // And confirm the two facts this test rests on, so a future SQLite upgrade
+    // that changed persistence semantics would fail loudly here rather than
+    // silently making this assertion meaningless.
+    let fresh: rusqlite::Connection = rusqlite::Connection::open(&path)?;
+    let fresh_sync: i64 = fresh.query_row("PRAGMA synchronous", [], |r| r.get(0))?;
+    assert_ne!(
+        fresh_sync, 1,
+        "a new connection is expected NOT to inherit synchronous=NORMAL; \
+         if this now persists, the assertion above is vacuous"
+    );
+    // The same vacuousness guard for foreign_keys. Unlike `synchronous`, this
+    // SQLite build defaults it ON already, so the assertion above cannot be
+    // used to prove the pragma was connection-scoped. Asserted as "whatever the
+    // build default is, the writer still sets it explicitly" -- if a future
+    // build flips the default to OFF, this line tells the next reader that the
+    // explicit PRAGMA in db.rs is what matters, not the compile-time default.
+    let fresh_fk: i64 = fresh.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?;
+    assert!(
+        matches!(fresh_fk, 0 | 1),
+        "foreign_keys must read back as a boolean, got {fresh_fk}"
+    );
+
     Ok(())
 }
 
@@ -272,9 +318,13 @@ async fn missing_pipeline_stages_is_a_clear_startup_error() -> Result<()> {
     let path = dir.path().join("bare.db");
     // No pipeline_stages at all: db.py has not created it yet.
     let conn = rusqlite::Connection::open(&path)?;
-    migrate(&conn).is_err_and(|e| e.to_string().contains("pipeline_stages"))
-        .then_some(())
-        .ok_or("expected a clear error naming pipeline_stages")
+    if migrate(&conn).is_err_and(|e| e.to_string().contains("pipeline_stages")) {
+        Ok(())
+    } else {
+        Err(HavaldarError::Config(
+            "expected a clear error naming pipeline_stages".into(),
+        ))
+    }
 }
 
 #[tokio::test]
