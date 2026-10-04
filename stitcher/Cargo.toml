@@ -1,0 +1,19 @@
+[package]
+name = "stitcher"
+version = "0.1.0"
+edition = "2021"
+description = "Fast WAV timeline stitcher for T_Dubber: mixes voice segments over a ducked background track"
+
+[[bin]]
+name = "stitcher"
+path = "src/main.rs"
+
+[dependencies]
+hound = "3.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
