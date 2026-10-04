@@ -37,11 +37,15 @@
  *                          Unset = every chat that can talk to the bot.
  *   KAGGLE_PUSH_MODE       auto (default) | multipart | json
  *   KERNEL_ID              Full kernel slug, default `${KAGGLE_USERNAME}/dubber-worker-homura`
+ *   KERNEL_SLUG            Slug part only, default `dubber-worker-homura`
  *   KERNEL_TITLE           Kernel title, default derived from the slug
  *   UNIQUE_KERNEL          1 = append a timestamp to the slug (parallel runs,
  *                          avoids colliding with a kernel that is still busy)
  *   CHOP_DROP_URLS         Comma list of download URLs for chop_drop.py
  *                          (defaults to raw.githubusercontent + jsDelivr mirror)
+ *                          NOTE: both read from GitHub `main`, so `chop_drop.py`
+ *                          must be committed AND pushed, or the Kaggle boot cell
+ *                          will refuse to run a file it cannot fetch.
  *   CHOP_DROP_ARGS         Default extra argv for chop_drop.py,
  *                          e.g. "--chunk-minutes 10"
  *   ALLOW_PRIVATE_URLS     1 = allow RFC1918 / link-local video URLs
@@ -85,9 +89,9 @@ const TELEGRAM_API = "https://api.telegram.org";
 const SUCCESS_TEXT = "🚀 Kaggle Moon Mission Pushed Successfully!";
 const MAX_URL_LENGTH = 2048;
 const MAX_EXTRA_ARGS = 8;
-const ARG_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._:=/-]{0,63}$/;
+const ARG_TOKEN_RE = /^-{0,2}[A-Za-z0-9][A-Za-z0-9._:=/-]{0,62}$/;
 const KERNEL_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}\/[a-z0-9][a-z0-9-]{0,63}$/;
-const EXTRA_ARG_TIMEOUT_MS = 25_000;
+const KAGGLE_TIMEOUT_MS = 25_000;
 const TELEGRAM_TIMEOUT_MS = 10_000;
 
 /** Default sources for chop_drop.py: GitHub raw first, jsDelivr as mirror. */
@@ -424,6 +428,11 @@ async function interpretKaggleResponse(response) {
   const status = response.status;
   const fatal = fatalStatuses.has(status);
 
+  if (status >= 300 && status < 400) {
+    const location = response.headers.get("location") || "(no location header)";
+    return { ok: false, status, detail: `unexpected redirect to ${truncate(location, 200)}`, fatal };
+  }
+
   if (!response.ok) {
     const detail =
       (payload && (payload.error || payload.message)) || truncate(raw, 500) || `HTTP ${status}`;
@@ -437,7 +446,7 @@ async function interpretKaggleResponse(response) {
   return {
     ok: true,
     status,
-    detail: truncate(payload && (payload.url || raw) ? (payload.url || raw) : "accepted", 400),
+    detail: truncate((payload && payload.url) || raw || "accepted", 400),
     payload,
     raw,
   };
@@ -463,7 +472,7 @@ async function pushMultipart(env, metadata, notebook) {
     headers: { authorization: basicAuth(env) },
     body: form,
     redirect: "manual",
-    signal: AbortSignal.timeout(EXTRA_ARG_TIMEOUT_MS),
+    signal: AbortSignal.timeout(KAGGLE_TIMEOUT_MS),
   });
   return interpretKaggleResponse(response);
 }
@@ -471,7 +480,6 @@ async function pushMultipart(env, metadata, notebook) {
 /** Modern kaggle-api shape: JSON KernelPushRequest carrying the notebook text. */
 async function pushJson(env, metadata, notebook) {
   const body = {
-    id: null,
     slug: metadata.id,
     new_title: metadata.title,
     text: JSON.stringify(notebook),
@@ -497,7 +505,7 @@ async function pushJson(env, metadata, notebook) {
     },
     body: JSON.stringify(body),
     redirect: "manual",
-    signal: AbortSignal.timeout(EXTRA_ARG_TIMEOUT_MS),
+    signal: AbortSignal.timeout(KAGGLE_TIMEOUT_MS),
   });
   return interpretKaggleResponse(response);
 }
@@ -636,7 +644,7 @@ async function handleDub(env, message) {
 
   if (!chatIsAllowed(env, chatId)) {
     await sendTelegram(env, chatId, "⛔ This chat is not authorised to drive the Moon Mission.", message.message_id);
-    return { status: 203, handled: "denied_chat" };
+    return { handled: "denied_chat" };
   }
 
   const { urlToken, argTokens } = extractTarget(message);
@@ -769,7 +777,8 @@ export default {
 
     try {
       const outcome = await handleUpdate(env, update);
-      return jsonResponse({ ok: true, ...outcome });
+      // Telegram treats any 2xx as "delivered"; the body carries the detail.
+      return jsonResponse({ ok: true, ...outcome }, outcome.status || 200);
     } catch (error) {
       console.log(
         JSON.stringify({

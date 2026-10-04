@@ -1,0 +1,1528 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="void">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="color-scheme" content="dark" />
+<title>T_DUBBER · MISSION CONTROL</title>
+<meta name="description" content="Live telemetry for the T_Dubber AI dubbing pipeline: Chop &amp; Drop chunk progress and engine status." />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet" />
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='42' fill='none' stroke='%2322d3ee' stroke-width='7'/%3E%3Ccircle cx='50' cy='50' r='13' fill='%23a855f7'/%3E%3C/svg%3E" />
+
+<style>
+/* ===========================================================================
+   MISSION CONTROL — design tokens
+   Neon cyan -> violet -> magenta over a deep-space ground. Status hues are
+   borrowed from the repo's Telegram-Drive App.css so the dashboard and the
+   app never disagree about what "danger red" means.
+   ======================================================================== */
+:root{
+  --ink:#04060d;          /* page ground, near-black blue                  */
+  --ink-2:#070b16;        /* panel base                                    */
+  --panel:rgba(13,18,33,.55);
+  --panel-solid:#0c1120;
+  --raise:rgba(255,255,255,.045);
+  --raise-2:rgba(255,255,255,.075);
+  --stroke:rgba(125,190,255,.13);
+  --stroke-hi:rgba(125,190,255,.26);
+
+  --cyan:#22d3ee;  --cyan-lo:#0e7490; --cyan-hi:#a5f3fc;
+  --violet:#a855f7; --violet-lo:#6d28d9; --violet-hi:#e9d5ff;
+  --magenta:#f472b6;
+
+  --ok:#45c486;   --warn:#e6a64c;   --danger:#ef6a72;   --info:#63a9ff;
+
+  --txt:#e9edf7;  --dim:#8b93a8;  --faint:#59627a;
+
+  --grad:linear-gradient(120deg,var(--cyan) 0%,var(--violet) 55%,var(--magenta) 100%);
+  --grad-soft:linear-gradient(120deg,rgba(34,211,238,.20) 0%,rgba(168,85,247,.20) 55%,rgba(244,114,182,.16) 100%);
+
+  --r-lg:20px; --r-md:14px; --r-sm:10px;
+  --blur:saturate(150%) blur(20px);
+  --shadow:0 22px 60px -22px rgba(0,0,0,.95), 0 2px 0 0 rgba(255,255,255,.03) inset;
+  --lift:0 26px 70px -20px rgba(0,0,0,.9), 0 0 0 1px var(--stroke) inset;
+
+  --f-display:"Space Grotesk","Segoe UI",Inter,system-ui,-apple-system,sans-serif;
+  --f-mono:"JetBrains Mono","Cascadia Code",ui-monospace,Consolas,monospace;
+
+  --ease:cubic-bezier(.2,.8,.2,1);
+  --fast:120ms; --std:200ms; --slow:420ms;
+
+  /* channel widths, set once */
+  --shell:min(1560px, 100vw - 2.5rem);
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+html,body{ height:100%; }
+body{
+  margin:0; background:var(--ink); color:var(--txt);
+  font:400 15px/1.55 var(--f-display);
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  overflow-x:hidden;
+}
+/* The void: aurora bloom + film grain, behind everything */
+body::before{
+  content:""; position:fixed; inset:-20vmax; z-index:-3; pointer-events:none;
+  background:
+    radial-gradient(46vmax 30vmax at 12% -6%,  rgba(34,211,238,.20), transparent 62%),
+    radial-gradient(52vmax 34vmax at 88% 4%,   rgba(168,85,247,.19), transparent 64%),
+    radial-gradient(64vmax 44vmax at 50% 112%, rgba(244,114,182,.13), transparent 66%),
+    radial-gradient(38vmax 30vmax at 96% 78%,  rgba(99,169,255,.11), transparent 62%);
+  filter:blur(28px); animation:drift 46s var(--ease) infinite alternate;
+}
+body::after{ /* grain */
+  content:""; position:fixed; inset:0; z-index:-2; pointer-events:none; opacity:.32;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.34'/%3E%3C/svg%3E");
+}
+@keyframes drift{ from{transform:translate3d(0,0,0) scale(1)} to{transform:translate3d(-3%,2%,0) scale(1.09)} }
+
+#sky{ position:fixed; inset:0; z-index:-1; pointer-events:none; }
+
+::selection{ background:rgba(168,85,247,.36); color:#fff; }
+:focus-visible{ outline:2px solid var(--cyan); outline-offset:3px; border-radius:6px; }
+::selection,::-moz-selection{ background:rgba(168,85,247,.36); }
+
+/* scrollbars */
+*::-webkit-scrollbar{ width:9px; height:9px; }
+*::-webkit-scrollbar-track{ background:transparent; }
+*::-webkit-scrollbar-thumb{ background:linear-gradient(var(--cyan-lo),var(--violet-lo)); border-radius:99px; border:2px solid transparent; background-clip:padding-box; }
+*{ scrollbar-width:thin; scrollbar-color:var(--violet-lo) transparent; }
+
+/* ============================ GLASS PRIMITIVE ============================ */
+.glass{
+  position:relative; border-radius:var(--r-lg);
+  background:var(--panel);
+  -webkit-backdrop-filter:var(--blur); backdrop-filter:var(--blur);
+  border:1px solid var(--stroke);
+  box-shadow:var(--shadow);
+  isolation:isolate;
+}
+/* gradient hairline on the top edge — the "premium glass" tell */
+.glass::before{
+  content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+  padding:1px; background:var(--grad-soft);
+  -webkit-mask:linear-gradient(#000,#000) content-box, linear-gradient(#000,#000);
+  -webkit-mask-composite:xor; mask-composite:exclude;
+  opacity:.85;
+}
+/* slow specular sweep on hover */
+.glass::after{
+  content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+  background:linear-gradient(115deg,transparent 28%,rgba(255,255,255,.055) 46%,transparent 62%);
+  background-size:280% 100%; background-position:180% 0; opacity:0;
+  transition:opacity var(--std) var(--ease), background-position 1.1s var(--ease);
+}
+.glass:hover::after{ opacity:1; background-position:-80% 0; }
+
+/* ================================ SHELL ================================= */
+.shell{ width:var(--shell); margin-inline:auto; padding:1.15rem 0 3rem; }
+
+/* ============================== HEADER ================================== */
+.top{
+  display:flex; align-items:center; gap:1rem; flex-wrap:wrap;
+  padding:.85rem 1.15rem; margin-bottom:.95rem;
+}
+.brand{ display:flex; align-items:center; gap:.8rem; min-width:0; }
+.sigil{ position:relative; width:42px; height:42px; flex:none; }
+.sigil svg{ display:block; filter:drop-shadow(0 0 14px rgba(34,211,238,.6)); }
+.sigil .spin{ transform-origin:32px 32px; animation:spin 9s linear infinite; }
+@keyframes spin{ to{ transform:rotate(360deg) } }
+.brand-txt{ min-width:0; }
+.brand-txt h1{
+  margin:0; font-size:1.02rem; font-weight:700; letter-spacing:.14em; line-height:1.1;
+  background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent;
+  white-space:nowrap;
+}
+.brand-txt p{ margin:.15rem 0 0; font:500 .635rem/1 var(--f-mono); letter-spacing:.24em; color:var(--faint); text-transform:uppercase; }
+
+.top-meta{ display:flex; align-items:center; gap:.55rem; margin-left:auto; flex-wrap:wrap; }
+
+.chip{
+  display:inline-flex; align-items:center; gap:.5rem;
+  height:32px; padding:0 .8rem; border-radius:99px;
+  background:var(--raise); border:1px solid var(--stroke);
+  font:500 .665rem/1 var(--f-mono); letter-spacing:.13em; text-transform:uppercase; color:var(--dim);
+  transition:border-color var(--std) var(--ease), color var(--std) var(--ease), background var(--std) var(--ease);
+  white-space:nowrap;
+}
+.chip b{ color:var(--txt); font-weight:700; letter-spacing:.08em; }
+.chip:hover{ border-color:var(--stroke-hi); color:var(--txt); }
+
+.dot{ width:8px; height:8px; border-radius:99px; background:var(--faint); flex:none; position:relative; }
+.dot[data-s="live"]{ background:var(--ok); box-shadow:0 0 0 0 rgba(69,196,134,.55); animation:ping 2s var(--ease) infinite; }
+.dot[data-s="demo"]{ background:var(--violet); box-shadow:0 0 0 0 rgba(168,85,247,.55); animation:ping 2.6s var(--ease) infinite; }
+.dot[data-s="wait"]{ background:var(--warn); animation:blink 1s steps(2) infinite; }
+.dot[data-s="down"]{ background:var(--danger); }
+@keyframes ping{ 0%{box-shadow:0 0 0 0 currentColor} 70%{box-shadow:0 0 0 8px transparent} 100%{box-shadow:0 0 0 0 transparent} }
+@keyframes blink{ 50%{opacity:.25} }
+
+/* control dock */
+.dock{ display:flex; align-items:center; gap:.4rem; padding:.3rem; border-radius:99px; }
+.btn{
+  display:inline-flex; align-items:center; justify-content:center; gap:.45rem;
+  height:30px; padding:0 .72rem; border-radius:99px; border:1px solid transparent;
+  background:transparent; color:var(--dim); cursor:pointer;
+  font:500 .66rem/1 var(--f-mono); letter-spacing:.12em; text-transform:uppercase;
+  transition:all var(--fast) var(--ease);
+}
+.btn:hover{ color:var(--txt); background:var(--raise); }
+.btn[aria-pressed="true"]{
+  color:#04121a; background:var(--grad);
+  box-shadow:0 0 18px -4px rgba(168,85,247,.75);
+}
+.btn.icon{ width:30px; padding:0; }
+.btn svg{ width:13px; height:13px; fill:currentColor; }
+
+.seg{ display:flex; gap:.15rem; padding:.18rem; border-radius:99px; background:rgba(0,0,0,.34); border:1px solid var(--stroke); }
+
+/* ============================== LAYOUT ================================== */
+.grid{ display:grid; gap:.95rem; grid-template-columns:repeat(12,1fr); align-items:start; }
+.c3{ grid-column:span 3 } .c4{ grid-column:span 4 } .c5{ grid-column:span 5 }
+.c6{ grid-column:span 6 } .c7{ grid-column:span 7 } .c8{ grid-column:span 8 }
+.c12{ grid-column:span 12 }
+
+@media (max-width:1180px){ .c3,.c4,.c5,.c7,.c8{ grid-column:span 6 } .c6{ grid-column:span 12 } }
+@media (max-width:720px){ .c3,.c4,.c5,.c6,.c7,.c8{ grid-column:span 12 } }
+
+/* ========================= SECTION FURNITURE =========================== */
+.head{ display:flex; align-items:center; gap:.6rem; padding:1.05rem 1.25rem .1rem; }
+.head h2{
+  margin:0; font:600 .7rem/1 var(--f-mono); letter-spacing:.26em; text-transform:uppercase; color:var(--txt);
+  display:flex; align-items:center; gap:.6rem;
+}
+.head h2::before{
+  content:""; width:5px; height:5px; border-radius:99px; background:var(--grad); flex:none;
+  box-shadow:0 0 10px rgba(34,211,238,.9);
+}
+.head .sub{ margin-left:auto; font:400 .64rem/1 var(--f-mono); letter-spacing:.16em; color:var(--faint); text-transform:uppercase; }
+.body{ padding:1.05rem 1.25rem 1.25rem; }
+
+/* ======================= HERO · CHOP & DROP ============================= */
+.hero{ overflow:hidden; }
+.hero .body{ padding:1.4rem 1.5rem 1.5rem; }
+
+.hero-top{ display:flex; align-items:flex-start; gap:1.5rem; flex-wrap:wrap; }
+.hero-read{ min-width:230px; }
+.hero-kicker{
+  font:500 .63rem/1 var(--f-mono); letter-spacing:.3em; text-transform:uppercase; color:var(--faint);
+  display:flex; align-items:center; gap:.5rem;
+}
+.hero-kicker .live-txt{ color:var(--cyan); }
+.hero-count{
+  display:flex; align-items:baseline; gap:.5rem; margin:.55rem 0 .1rem;
+  font-family:var(--f-mono); font-weight:700; letter-spacing:-.045em; line-height:.9;
+}
+.hero-count .cur{
+  font-size:4.4rem; line-height:.85;
+  background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent;
+  filter:drop-shadow(0 0 26px rgba(168,85,247,.45));
+}
+.hero-count .tot{ font-size:1.75rem; color:var(--faint); }
+.hero-state{
+  display:inline-flex; align-items:center; gap:.5rem; height:26px; padding:0 .7rem; border-radius:99px;
+  font:600 .63rem/1 var(--f-mono); letter-spacing:.2em; text-transform:uppercase;
+  background:var(--raise); border:1px solid var(--stroke); color:var(--dim);
+  transition:all var(--std) var(--ease);
+}
+.hero-state[data-s="running"]{ color:var(--cyan-hi); border-color:rgba(34,211,238,.4); background:rgba(34,211,238,.10); }
+.hero-state[data-s="done"]{ color:var(--ok); border-color:rgba(69,196,134,.4); background:rgba(69,196,134,.10); }
+.hero-state[data-s="error"]{ color:var(--danger); border-color:rgba(239,106,114,.42); background:rgba(239,106,114,.10); }
+
+.hero-meta{ margin-left:auto; display:grid; grid-template-columns:repeat(auto-fit,minmax(96px,1fr)); gap:.5rem; min-width:min(100%,430px); }
+.mini{
+  padding:.6rem .7rem; border-radius:var(--r-sm); background:rgba(0,0,0,.28); border:1px solid var(--stroke);
+  transition:border-color var(--std) var(--ease), transform var(--std) var(--ease);
+}
+.mini:hover{ border-color:var(--stroke-hi); transform:translateY(-2px); }
+.mini dt{ font:500 .58rem/1 var(--f-mono); letter-spacing:.18em; text-transform:uppercase; color:var(--faint); }
+.mini dd{ margin:.34rem 0 0; font:700 1.02rem/1 var(--f-mono); color:var(--txt); letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
+.mini dd small{ font-size:.62rem; font-weight:500; color:var(--faint); letter-spacing:.06em; }
+
+/* --- the chunk rail: one segment per 600 s chunk (CHUNK_SECONDS=600) --- */
+.rail-wrap{ margin-top:1.5rem; }
+.rail-label{ display:flex; align-items:center; gap:.6rem; font:500 .6rem/1 var(--f-mono); letter-spacing:.2em; text-transform:uppercase; color:var(--faint); margin-bottom:.6rem; }
+.rail-label .hint{ margin-left:auto; letter-spacing:.1em; color:var(--faint); opacity:.75; }
+
+.rail{ display:flex; gap:.42rem; height:54px; }
+.seg-chunk{
+  position:relative; flex:1 1 0; min-width:0; border-radius:var(--r-sm); overflow:hidden;
+  background:rgba(255,255,255,.028); border:1px solid var(--stroke);
+  display:flex; align-items:center; justify-content:center;
+  transition:border-color var(--std) var(--ease), box-shadow var(--std) var(--ease), transform var(--std) var(--ease);
+}
+.seg-chunk .n{
+  position:relative; z-index:2; font:600 .74rem/1 var(--f-mono); color:var(--faint);
+  transition:color var(--std) var(--ease);
+}
+.seg-chunk .fill{
+  position:absolute; inset:0; transform-origin:left center; transform:scaleX(0);
+  background:var(--grad); opacity:.9;
+  transition:transform 640ms var(--ease);
+}
+.seg-chunk .fill::after{ /* shimmer sweep on the in-flight chunk */
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(100deg,transparent 20%,rgba(255,255,255,.55) 50%,transparent 80%);
+  background-size:220% 100%; background-position:180% 0;
+  animation:sweep 1.5s linear infinite;
+}
+@keyframes sweep{ to{ background-position:-80% 0 } }
+.seg-chunk[data-s="done"]{ border-color:rgba(69,196,134,.42); box-shadow:0 0 22px -8px rgba(69,196,134,.7); }
+.seg-chunk[data-s="done"] .n{ color:#032015; }
+.seg-chunk[data-s="active"]{
+  border-color:rgba(34,211,238,.5);
+  box-shadow:0 0 30px -6px rgba(34,211,238,.65), 0 0 0 1px rgba(34,211,238,.2) inset;
+  transform:translateY(-3px);
+}
+.seg-chunk[data-s="active"] .n{ color:#fff; text-shadow:0 0 12px rgba(0,0,0,.5); }
+.seg-chunk[data-s="error"]{ border-color:rgba(239,106,114,.55); background:rgba(239,106,114,.12); }
+.seg-chunk[data-s="error"] .n{ color:var(--danger); }
+.seg-chunk:hover{ transform:translateY(-3px); }
+
+/* --- master progress track --- */
+.track{
+  position:relative; height:8px; margin-top:1.15rem; border-radius:99px;
+  background:rgba(255,255,255,.05); overflow:hidden;
+  box-shadow:0 0 0 1px rgba(255,255,255,.03) inset;
+}
+.track .bar{
+  position:absolute; inset:0 auto 0 0; width:0%; border-radius:99px;
+  background:var(--grad); box-shadow:0 0 22px -2px rgba(168,85,247,.85);
+  transition:width 640ms var(--ease);
+}
+.track .bar::after{
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);
+  background-size:180% 100%; background-position:180% 0; animation:sweep 2.1s linear infinite;
+}
+.track-cap{ display:flex; justify-content:space-between; margin-top:.55rem; font:500 .6rem/1 var(--f-mono); letter-spacing:.16em; text-transform:uppercase; color:var(--faint); }
+.track-cap b{ color:var(--cyan); font-weight:700; font-variant-numeric:tabular-nums; }
+
+/* ============================ STAT TILES =============================== */
+.tiles{ display:grid; grid-template-columns:repeat(4,1fr); gap:.75rem; }
+@media (max-width:900px){ .tiles{ grid-template-columns:repeat(2,1fr) } }
+@media (max-width:460px){ .tiles{ grid-template-columns:1fr } }
+.tile{ padding:.9rem 1rem; border-radius:var(--r-md); background:var(--panel-solid); border:1px solid var(--stroke); position:relative; overflow:hidden; transition:transform var(--std) var(--ease), border-color var(--std) var(--ease); }
+.tile:hover{ transform:translateY(-3px); border-color:var(--stroke-hi); }
+.tile::before{ content:""; position:absolute; left:0; top:0; bottom:0; width:2px; background:var(--grad); opacity:.85; }
+.tile .k{ font:500 .57rem/1 var(--f-mono); letter-spacing:.2em; text-transform:uppercase; color:var(--faint); }
+.tile .v{ margin:.42rem 0 0; font:700 1.42rem/1 var(--f-mono); letter-spacing:-.035em; font-variant-numeric:tabular-nums; }
+.tile .v small{ font-size:.6rem; font-weight:500; color:var(--dim); letter-spacing:.05em; margin-left:.2rem; }
+.tile .s{ margin-top:.3rem; font:400 .655rem/1.35 var(--f-display); color:var(--dim); }
+.tile.up .v{ color:var(--ok) } .tile.hot .v{ color:var(--warn) } .tile.bad .v{ color:var(--danger) }
+
+/* ========================== ENGINE BADGES ============================== */
+.bay{ display:grid; grid-template-columns:repeat(2,1fr); gap:.7rem; }
+@media (max-width:1180px){ .bay{ grid-template-columns:repeat(2,1fr) } }
+@media (max-width:560px){ .bay{ grid-template-columns:1fr } }
+
+.eng{
+  position:relative; padding:.85rem .9rem; border-radius:var(--r-md); overflow:hidden;
+  background:rgba(255,255,255,.022); border:1px solid var(--stroke);
+  transition:transform var(--std) var(--ease), border-color var(--std) var(--ease), background var(--std) var(--ease);
+}
+.eng:hover{ transform:translateY(-3px); border-color:var(--stroke-hi); background:var(--raise); }
+.eng[data-s="running"]{ border-color:rgba(34,211,238,.34); background:linear-gradient(150deg,rgba(34,211,238,.10),rgba(168,85,247,.05)); }
+.eng[data-s="done"]{ border-color:rgba(69,196,134,.3); }
+.eng[data-s="error"]{ border-color:rgba(239,106,114,.42); background:rgba(239,106,114,.07); }
+
+.eng-top{ display:flex; align-items:center; gap:.65rem; }
+.eng-ico{
+  width:30px; height:30px; flex:none; border-radius:9px; display:grid; place-items:center;
+  background:rgba(255,255,255,.05); border:1px solid var(--stroke); position:relative;
+}
+.eng-ico svg{ width:15px; height:15px; }
+.eng[data-s="running"] .eng-ico{ color:var(--cyan); border-color:rgba(34,211,238,.45); box-shadow:0 0 18px -4px rgba(34,211,238,.9); }
+/* conic activity ring, only while running */
+.eng[data-s="running"] .eng-ico::before{
+  content:""; position:absolute; inset:-1px; border-radius:inherit; padding:1px;
+  background:conic-gradient(from 0turn, transparent 0 55%, var(--cyan) 78%, var(--violet) 100%);
+  -webkit-mask:linear-gradient(#000,#000) content-box, linear-gradient(#000,#000);
+  -webkit-mask-composite:xor; mask-composite:exclude;
+  animation:spin 1.5s linear infinite;
+}
+.eng[data-s="done"] .eng-ico{ color:var(--ok) } .eng[data-s="error"] .eng-ico{ color:var(--danger) }
+.eng[data-s="queued"] .eng-ico{ color:var(--faint) }
+
+.eng-name{ min-width:0; flex:1; }
+.eng-name .n{ font:600 .735rem/1.15 var(--f-display); letter-spacing:.03em; color:var(--txt); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.eng-name .r{ font:400 .585rem/1 var(--f-mono); letter-spacing:.13em; text-transform:uppercase; color:var(--faint); margin-top:.22rem; }
+
+.badge{
+  display:inline-flex; align-items:center; gap:.38rem; height:22px; padding:0 .55rem; border-radius:99px;
+  font:600 .565rem/1 var(--f-mono); letter-spacing:.14em; text-transform:uppercase;
+  border:1px solid var(--stroke); background:var(--raise); color:var(--faint); white-space:nowrap; flex:none;
+}
+.badge .dot{ width:6px; height:6px; }
+.badge[data-s="running"]{ color:var(--cyan-hi); border-color:rgba(34,211,238,.4); background:rgba(34,211,238,.1); }
+.badge[data-s="done"]{ color:var(--ok); border-color:rgba(69,196,134,.4); background:rgba(69,196,134,.1); }
+.badge[data-s="error"]{ color:var(--danger); border-color:rgba(239,106,114,.45); background:rgba(239,106,114,.1); }
+.badge[data-s="queued"]{ color:var(--dim); }
+
+.eng-detail{
+  margin-top:.6rem; font:400 .655rem/1.4 var(--f-mono); color:var(--dim);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-height:1.4em;
+}
+.eng-foot{ margin-top:.55rem; height:3px; border-radius:99px; background:rgba(255,255,255,.06); overflow:hidden; }
+.eng-foot i{ display:block; height:100%; width:0%; border-radius:99px; background:var(--grad); transition:width 420ms var(--ease); }
+.eng[data-s="running"] .eng-foot i{ box-shadow:0 0 12px rgba(34,211,238,.9) }
+
+/* =========================== STAGE RAIL ================================ */
+.stages{ display:flex; gap:0; padding:1.15rem 1.25rem 1.3rem; overflow-x:auto; }
+.stg{ flex:1 1 0; min-width:92px; position:relative; text-align:center; padding:0 .3rem; }
+.stg::before{ content:""; position:absolute; top:9px; left:-50%; width:100%; height:2px; background:rgba(255,255,255,.08); z-index:0; }
+.stg:first-child::before{ display:none }
+.stg[data-s="done"]::before,.stg[data-s="active"]::before{ background:var(--grad); }
+.stg .knob{
+  position:relative; z-index:1; width:19px; height:19px; margin:0 auto .6rem; border-radius:99px;
+  background:var(--ink-2); border:2px solid rgba(255,255,255,.14);
+  transition:all var(--std) var(--ease);
+}
+.stg .knob::after{
+  content:""; position:absolute; inset:4px; border-radius:99px; background:var(--faint);
+  transition:all var(--std) var(--ease);
+}
+.stg[data-s="done"] .knob{ border-color:rgba(69,196,134,.55) } .stg[data-s="done"] .knob::after{ background:var(--ok); box-shadow:0 0 10px var(--ok) }
+.stg[data-s="active"] .knob{ border-color:var(--cyan); box-shadow:0 0 0 5px rgba(34,211,238,.14), 0 0 20px rgba(34,211,238,.7); }
+.stg[data-s="active"] .knob::after{ background:var(--cyan); animation:blink 1.4s var(--ease) infinite }
+.stg[data-s="error"] .knob{ border-color:var(--danger) } .stg[data-s="error"] .knob::after{ background:var(--danger) }
+.stg .t{ font:500 .585rem/1.25 var(--f-mono); letter-spacing:.11em; text-transform:uppercase; color:var(--faint); transition:color var(--std) var(--ease); }
+.stg[data-s="done"] .t{ color:var(--dim) } .stg[data-s="active"] .t{ color:var(--txt); font-weight:700 }
+.stg[data-s="error"] .t{ color:var(--danger) }
+.stg .ms{ display:block; margin-top:.22rem; font:400 .55rem/1 var(--f-mono); color:var(--faint); opacity:.7; font-variant-numeric:tabular-nums; }
+
+/* ============================ CONSOLE ================================== */
+.console{
+  position:relative; height:236px; margin:0; padding:.95rem 1rem; overflow-y:auto; overflow-x:hidden;
+  font:400 .705rem/1.62 var(--f-mono); background:rgba(0,0,0,.4);
+  border-radius:0 0 var(--r-lg) var(--r-lg); border-top:1px solid var(--stroke);
+  scroll-behavior:smooth;
+}
+.console::before{ /* scanline veil */
+  content:""; position:sticky; top:0; left:0; display:block; height:0;
+}
+.line{ display:flex; gap:.65rem; padding:.055rem 0; animation:slidein .28s var(--ease) both; }
+@keyframes slidein{ from{ opacity:0; transform:translateX(-8px) } }
+.line .ts{ color:var(--faint); flex:none; opacity:.72 }
+.line .tx{ min-width:0; word-break:break-word }
+.line .tx b{ font-weight:500; color:var(--cyan) }
+.line[data-l="ok"] .tx b{ color:var(--ok) }
+.line[data-l="warn"] .tx b{ color:var(--warn) }
+.line[data-l="err"] .tx b{ color:var(--danger) }
+.line[data-l="info"] .tx b{ color:var(--info) }
+
+.caret{ display:inline-block; width:7px; height:1em; vertical-align:-2px; background:var(--cyan); animation:blink 1.1s steps(2) infinite; }
+
+/* =========================== SPARKLINE ================================= */
+.spark{ width:100%; height:74px; display:block; border-radius:var(--r-sm); background:rgba(0,0,0,.3); }
+.spark-foot{ display:flex; justify-content:space-between; margin-top:.55rem; font:500 .58rem/1 var(--f-mono); letter-spacing:.15em; text-transform:uppercase; color:var(--faint); }
+
+/* ============================== MISC =================================== */
+.kv{ display:grid; grid-template-columns:auto 1fr; gap:.42rem .9rem; font:400 .68rem/1.4 var(--f-mono); }
+.kv dt{ color:var(--faint); letter-spacing:.1em; text-transform:uppercase; font-size:.6rem; align-self:center }
+.kv dd{ margin:0; color:var(--txt); text-align:right; font-weight:500; word-break:break-all }
+
+.link{ color:var(--cyan); text-decoration:none; border-bottom:1px solid rgba(34,211,238,.3); transition:all var(--fast) var(--ease) }
+.link:hover{ color:var(--cyan-hi); border-color:var(--cyan) }
+
+.toast{
+  position:fixed; left:50%; bottom:1.5rem; transform:translate(-50%,140%);
+  padding:.7rem 1.1rem; border-radius:99px; z-index:50;
+  background:var(--panel-solid); border:1px solid var(--stroke-hi); box-shadow:var(--lift);
+  font:500 .7rem/1 var(--f-mono); color:var(--txt); letter-spacing:.06em;
+  transition:transform var(--slow) var(--ease); pointer-events:none;
+}
+.toast.up{ transform:translate(-50%,0) }
+
+/* connect sheet */
+.sheet{
+  position:fixed; inset:0; z-index:60; display:grid; place-items:center; padding:1.5rem;
+  background:rgba(3,5,11,.76); -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+  opacity:0; pointer-events:none; transition:opacity var(--std) var(--ease);
+}
+.sheet.on{ opacity:1; pointer-events:auto }
+.sheet .box{ width:min(560px,100%); padding:1.5rem; border-radius:var(--r-lg); }
+.sheet h3{ margin:0 0 .35rem; font-size:1.05rem; letter-spacing:.02em }
+.sheet p{ margin:0 0 1.1rem; color:var(--dim); font-size:.83rem; line-height:1.6 }
+.field{ margin-bottom:.85rem }
+.field label{ display:block; font:500 .58rem/1 var(--f-mono); letter-spacing:.2em; text-transform:uppercase; color:var(--faint); margin-bottom:.45rem }
+.field input{
+  width:100%; height:40px; padding:0 .8rem; border-radius:var(--r-sm);
+  background:rgba(0,0,0,.42); border:1px solid var(--stroke); color:var(--txt);
+  font:400 .78rem/1 var(--f-mono);
+  transition:border-color var(--std) var(--ease), box-shadow var(--std) var(--ease);
+}
+.field input:focus{ outline:0; border-color:var(--cyan); box-shadow:0 0 0 3px rgba(34,211,238,.16) }
+.field small{ display:block; margin-top:.4rem; font:400 .68rem/1.45 var(--f-mono); color:var(--faint); word-break:break-all }
+pre.snippet{
+  margin:.2rem 0 0; padding:.85rem; border-radius:var(--r-sm); overflow-x:auto;
+  background:rgba(0,0,0,.5); border:1px solid var(--stroke);
+  font:400 .655rem/1.55 var(--f-mono); color:var(--dim);
+}
+pre.snippet i{ color:var(--faint); font-style:normal }
+pre.snippet em{ color:var(--cyan); font-style:normal }
+
+.foot{ margin-top:1.5rem; display:flex; align-items:center; gap:.8rem; flex-wrap:wrap; font:400 .655rem/1.5 var(--f-mono); color:var(--faint); letter-spacing:.06em }
+.foot .sep{ opacity:.35 }
+
+/* boot reveal */
+.boot{ animation:boot .7s var(--ease) both }
+@keyframes boot{ from{ opacity:0; transform:translateY(14px) scale(.995) } }
+.d1{ animation-delay:.02s } .d2{ animation-delay:.09s } .d3{ animation-delay:.16s }
+.d4{ animation-delay:.23s } .d5{ animation-delay:.30s } .d6{ animation-delay:.37s }
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{ animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; scroll-behavior:auto !important; }
+  .seg-chunk .fill::after,.track .bar::after{ display:none }
+}
+</style>
+</head>
+
+<body>
+<canvas id="sky" aria-hidden="true"></canvas>
+
+<div class="shell">
+
+  <!-- ======================= HEADER / CONTROL DOCK ======================= -->
+  <header class="glass top boot d1">
+    <div class="brand">
+      <div class="sigil" aria-hidden="true">
+        <svg viewBox="0 0 64 64" width="42" height="42">
+          <defs>
+            <linearGradient id="sg" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#22d3ee"/><stop offset=".55" stop-color="#a855f7"/><stop offset="1" stop-color="#f472b6"/>
+            </linearGradient>
+          </defs>
+          <g class="spin" fill="none" stroke="url(#sg)" stroke-width="1.6" opacity=".9">
+            <ellipse cx="32" cy="32" rx="27" ry="10"/>
+            <ellipse cx="32" cy="32" rx="27" ry="10" transform="rotate(60 32 32)"/>
+            <ellipse cx="32" cy="32" rx="27" ry="10" transform="rotate(120 32 32)"/>
+          </g>
+          <circle cx="32" cy="32" r="7.5" fill="url(#sg)"/>
+          <circle cx="32" cy="32" r="12" fill="none" stroke="url(#sg)" stroke-width="1" opacity=".55"/>
+        </svg>
+      </div>
+      <div class="brand-txt">
+        <h1>T_DUBBER</h1>
+        <p>Mission Control</p>
+      </div>
+    </div>
+
+    <div class="top-meta">
+      <div class="chip"><span class="dot" id="connDot" data-s="demo"></span><span id="connTxt">Demo Link</span></div>
+      <div class="chip">Worker <b id="kernelChip">—</b></div>
+      <div class="chip">GPU <b id="gpuChip">—</b></div>
+      <div class="chip"><span id="clock" style="font-variant-numeric:tabular-nums">--:--:--</span></div>
+
+      <div class="chip dock">
+        <div class="seg" role="group" aria-label="Data source">
+          <button class="btn" id="btnDemo" aria-pressed="true" title="Simulated telemetry (D)">Demo</button>
+          <button class="btn" id="btnLive" aria-pressed="false" title="Poll a live status endpoint (L)">Live</button>
+        </div>
+        <button class="btn icon" id="btnPause" title="Pause / resume stream (Space)" aria-pressed="false" aria-label="Pause">
+          <svg id="icPause" viewBox="0 0 16 16"><rect x="4" y="3" width="3" height="10" rx="1"/><rect x="9" y="3" width="3" height="10" rx="1"/></svg>
+        </button>
+        <button class="btn icon" id="btnLink" title="Telemetry endpoint &amp; JSON contract" aria-label="Endpoint">
+          <svg viewBox="0 0 16 16"><path d="M6.4 9.6a3 3 0 0 0 4.2 0l2-2a3 3 0 1 0-4.2-4.2l-.8.8M9.6 6.4a3 3 0 0 0-4.2 0l-2 2a3 3 0 1 0 4.2 4.2l.8-.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="grid">
+
+    <!-- ======================= HERO: CHOP &amp; DROP ======================= -->
+    <section class="glass hero c12 boot d2" aria-labelledby="heroH">
+      <div class="head">
+        <h2 id="heroH">Chop &amp; Drop · Streaming</h2>
+        <span class="sub" id="heroJob">—</span>
+      </div>
+      <div class="body">
+        <div class="hero-top">
+          <div class="hero-read">
+            <div class="hero-kicker">
+              <span>Chunks Dubbed</span>
+              <span class="live-txt" id="heroPhase">IDLE</span>
+            </div>
+            <div class="hero-count">
+              <span class="cur" id="chunkCur">00</span>
+              <span class="tot" id="chunkTot">/ 00</span>
+            </div>
+            <span class="hero-state" id="heroState" data-s="running">Awaiting</span>
+          </div>
+
+          <dl class="hero-meta">
+            <div class="mini"><dt>Elapsed</dt><dd id="mElapsed">00:00</dd></div>
+            <div class="mini"><dt>ETA</dt><dd id="mEta">—</dd></div>
+            <div class="mini"><dt>Window</dt><dd>600<small>s</small></dd></div>
+            <div class="mini"><dt>Target</dt><dd id="mLang">—</dd></div>
+          </dl>
+        </div>
+
+        <div class="rail-wrap">
+          <div class="rail-label">
+            <span>Chunk Rail</span>
+            <span class="hint" id="railHint">10-minute segments · stream-copy remux</span>
+          </div>
+          <div class="rail" id="rail" role="list" aria-label="Chunk progress"></div>
+
+          <div class="track" role="progressbar" aria-labelledby="heroH" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="track">
+            <div class="bar" id="trackBar"></div>
+          </div>
+          <div class="track-cap">
+            <span>Overall · <b id="trackPct">0.0%</b></span>
+            <span id="trackRight">0 / 0 segments</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ STAT TILES ============================ -->
+    <section class="c12 boot d3" aria-label="Key metrics">
+      <div class="tiles">
+        <div class="tile" id="tileUplink">
+          <div class="k">Uplink · tgup</div>
+          <div class="v"><span class="n" id="vUplink">—</span><small class="u" id="uUplink"></small></div>
+          <div class="s" id="sUplink">Idle · 3 connections</div>
+        </div>
+        <div class="tile" id="tileVram">
+          <div class="k">VRAM in use</div>
+          <div class="v"><span class="n" id="vVram">—</span><small class="u" id="uVram"></small></div>
+          <div class="s" id="sVram">Index-Homura-2B · fp16</div>
+        </div>
+        <div class="tile" id="tileRate">
+          <div class="k">Realtime factor</div>
+          <div class="v"><span class="n" id="vRate">—</span><small class="u" id="uRate"></small></div>
+          <div class="s" id="sRate">Wall / audio seconds</div>
+        </div>
+        <div class="tile" id="tileParts">
+          <div class="k">Parts stored</div>
+          <div class="v"><span class="n" id="vParts">—</span><small class="u" id="uParts"></small></div>
+          <div class="s" id="sParts">1.9 GB per part cap</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =========================== ENGINE BAY ============================= -->
+    <section class="glass c7 boot d4" aria-labelledby="engH">
+      <div class="head">
+        <h2 id="engH">Engine Bay</h2>
+        <span class="sub" id="engSum">4 subsystems</span>
+      </div>
+      <div class="body">
+        <div class="bay" id="bay"><!-- injected --></div>
+      </div>
+    </section>
+
+    <!-- ======================= SPARKLINE + RUN FACTS ====================== -->
+    <section class="glass c5 boot d5" aria-labelledby="telH">
+      <div class="head">
+        <h2 id="telH">Telemetry</h2>
+        <span class="sub" id="telWin">60 s window</span>
+      </div>
+      <div class="body">
+        <canvas class="spark" id="spark" width="600" height="148" aria-label="Throughput history" role="img"></canvas>
+        <div class="spark-foot">
+          <span>Throughput</span>
+          <span id="sparkPeak">peak 0 MB/s</span>
+        </div>
+        <dl class="kv" style="margin-top:1.05rem" id="facts"></dl>
+      </div>
+    </section>
+
+    <!-- =========================== STAGE RAIL ============================= -->
+    <section class="glass c12 boot d6" aria-labelledby="stgH">
+      <div class="head">
+        <h2 id="stgH">Pipeline Stages</h2>
+        <span class="sub">STAGE:0 → STAGE:8</span>
+      </div>
+      <div class="stages" id="stages"><!-- injected --></div>
+    </section>
+
+    <!-- ============================= CONSOLE ============================== -->
+    <section class="glass c12" aria-labelledby="conH" style="margin-bottom:.95rem">
+      <div class="head">
+        <h2 id="conH">Event Stream</h2>
+        <span class="sub" id="conCount">0 events</span>
+      </div>
+      <div class="console" id="console" role="log" aria-live="polite" aria-relevant="additions" aria-label="Pipeline event stream"></div>
+    </section>
+
+  </main>
+
+  <footer class="foot boot d6">
+    <span>T_DUBBER v<span id="ver">6.29.0</span></span><span class="sep">/</span>
+    <span>Pipeline <span id="footKernel">—</span></span><span class="sep">/</span>
+    <span>Zero-copy glass · vanilla JS</span>
+    <span style="margin-left:auto"><kbd>D</kbd> demo · <kbd>L</kbd> live · <kbd>Space</kbd> pause · <kbd>R</kbd> reconnect</span>
+  </footer>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- ============================ CONNECT SHEET ============================ -->
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetH" hidden>
+  <div class="glass box">
+    <h3 id="sheetH">Telemetry Endpoint</h3>
+    <p>
+      Point this dashboard at any JSON endpoint that emits the snapshot below.
+      It polls with exponential backoff and pauses itself when the tab is
+      hidden. Until your worker exposes one, run the built-in <b>Demo</b> link —
+      it drives the identical render path with simulated chunks.
+    </p>
+    <div class="field">
+      <label for="inpUrl">GET endpoint (CORS required)</label>
+      <input id="inpUrl" type="url" spellcheck="false" placeholder="http://127.0.0.1:8765/status" />
+      <small id="urlNote">Requests are plain GET. No credentials are stored or sent.</small>
+    </div>
+    <div class="field">
+      <label for="inpPoll">Poll interval (ms)</label>
+      <input id="inpPoll" type="number" min="400" max="60000" step="100" value="1500" />
+    </div>
+    <div class="field">
+      <label>Expected payload</label>
+      <pre class="snippet"><i>// every field optional — the UI degrades gracefully</i>
+{
+  <em>"project"</em>: { <em>"title"</em>, <em>"kernel_id"</em>, <em>"target_language"</em> },
+  <em>"progress"</em>: { <em>"chunk_index"</em>: 3, <em>"chunk_count"</em>: 7, <em>"pct"</em>: 41.2, <em>"phase"</em>: <em>"DUBBING"</em> },
+  <em>"engines"</em>: {
+    <em>"python"</em>: { <em>"state"</em>: <em>"running"</em>, <em>"detail"</em>: <em>"vLLM translate"</em>, <em>"pct"</em>: 61 },
+    <em>"ffmpeg"</em>: { <em>"state"</em>: <em>"done"</em>,    <em>"detail"</em>: <em>"480p ready"</em> },
+    <em>"rust"</em>:   { <em>"state"</em>: <em>"queued"</em> },
+    <em>"go"</em>:     { <em>"state"</em>: <em>"idle"</em>,   <em>"detail"</em>: <em>"3 conn"</em> }
+  },
+  <em>"metrics"</em>: { <em>"elapsed_sec"</em>, <em>"eta_sec"</em>, <em>"uplink_mbps"</em>,
+                 <em>"vram_gb"</em>, <em>"rtf"</em>, <em>"parts_stored"</em>, <em>"parts_total"</em> },
+  <em>"stages"</em>:  [ { <em>"stage"</em>: 5, <em>"status"</em>: <em>"running"</em>, <em>"ms"</em>: 812000 } ],
+  <em>"log"</em>:     [ { <em>"level"</em>: <em>"ok"</em>, <em>"msg"</em>: <em>"part_stored"</em> } ]
+}</pre>
+    </div>
+    <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:1.2rem">
+      <button class="btn" id="btnCopy">Copy contract</button>
+      <button class="btn" id="btnCancel">Cancel</button>
+      <button class="btn" id="btnApply" aria-pressed="true">Connect</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ===========================================================================
+   MISSION CONTROL — vanilla renderer
+   ---------------------------------------------------------------------------
+   Design notes
+   * Render is a pure function of a snapshot object. DOM writes are guarded by
+     a last-written-value cache, so a 1.5 s poll against a busy worker does not
+     thrash layout (no innerHTML on the hot path, no layout-triggering writes).
+   * Progress is eased with rAF toward the target instead of snapped, which is
+     what makes the bar feel like motion rather than a jump cut.
+   * The 4 engines and the 9 stages mirror the real pipeline:
+     pipeline.py emits [STAGE:0]..[STAGE:7], db.py's pipeline_stages.status
+     is pending|running|success|failed|skipped, and tgup emits
+     part_skipped|part_failed|part_stored|download_progress.
+   ======================================================================== */
+
+/* ------------------------------ utilities ------------------------------ */
+const $  = (id) => document.getElementById(id);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp  = (a, b, t) => a + (b - a) * t;
+const pad2  = (n) => String(n).padStart(2, "0");
+const esc   = (s) => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+// Telemetry crosses a Python/JSON boundary, so numbers arrive as strings more
+// often than you would like — report.json literally emits "WER": "Not measured".
+// Coerce once, here, instead of guarding every call site.
+function num(v, dflt = 0){
+  const n = typeof v === "number" ? v : parseFloat(v);
+  return Number.isFinite(n) ? n : dflt;
+}
+// Last path segment of a possibly-non-string field. Guards the one place a
+// stray type from the wire would otherwise throw mid-render.
+function base(v){
+  const s = String(v);
+  const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\\\"));
+  return i >= 0 ? s.slice(i + 1) : s;
+}
+const ENG_STATES = ["idle","running","done","queued","error"];
+const STG_STATES = ["pending","running","success","done","failed","skipped"];
+
+function hms(sec){
+  if (sec == null || !isFinite(sec) || sec < 0) return "—";
+  sec = Math.round(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h ? `${h}:${pad2(m)}:${pad2(s)}` : `${pad2(m)}:${pad2(s)}`;
+}
+function now(){
+  const d = new Date();
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
+/* --------------------------- static definitions ------------------------- */
+const ICON = {
+  python: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c-3 0-3.5 1.2-3.5 2.6V7h7v1H6.2C4.6 8 3.2 9.3 3.2 12s1.3 3.7 3 3.7h1.7v-2.3c0-1.6 1.4-3 3-3h4c1.4 0 2.6-1.1 2.6-2.5V4.6C15.5 3 14.5 2 12 2Z"/><circle cx="9.6" cy="4.4" r="1.05" fill="currentColor" stroke="none"/><path d="M12 22c3 0 3.5-1.2 3.5-2.6V17h-7v-1h6.3c1.6 0 3-1.3 3-4s-1.3-3.7-3-3.7h-1.7v2.3c0 1.6-1.4 3-3 3H6.3c-1.4 0-2.6 1.1-2.6 2.5v2.9C3.7 21 4.7 22 7.3 22Z" transform="translate(0 0) translate(12 0) scale(-1 1) translate(-12 0)"/><circle cx="14.4" cy="19.6" r="1.05" fill="currentColor" stroke="none"/></svg>',
+  ffmpeg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><path d="M6 8.4v7.2M8.4 6h5.2a3 3 0 0 1 3 3v2.6M8.4 18h5.2a3 3 0 0 0 3-3v-2.6"/></svg>',
+  rust:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 2.6 20.2 7v10L12 21.4 3.8 17V7Z"/><path d="M12 21.4V13M12 13 3.8 7.4M12 13l8.2-5.6"/><path d="M12 13 8.2 10.8v-3.6L12 5l3.8 2.2v3.6Z"/></svg>',
+  go:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 4 3 11.2l7.2 2.9L13 21Z"/><path d="M21 4 10.2 14.1"/></svg>'
+};
+
+const ENGINES = [
+  { key:"python", name:"Python AI",   role:"vLLM · faster-whisper", icon:ICON.python, defaultLabel:"Running" },
+  { key:"ffmpeg", name:"FFmpeg",      role:"chop · mux · compress", icon:ICON.ffmpeg, defaultLabel:"Chopping" },
+  { key:"rust",   name:"Rust",        role:"audio stitcher",        icon:ICON.rust,   defaultLabel:"Merging" },
+  { key:"go",     name:"Go · tgup",   role:"Telegram transporter",  icon:ICON.go,     defaultLabel:"Uploading" }
+];
+
+// Mirrors pipeline.py [STAGE:n] plus the transport step the notebook performs.
+const STAGES = [
+  { n:0, t:"Resolve"    },
+  { n:1, t:"Compress"   },
+  { n:2, t:"Bundle"     },
+  { n:3, t:"Dataset"    },
+  { n:4, t:"Kernel"     },
+  { n:5, t:"GPU Worker" },
+  { n:6, t:"Download"   },
+  { n:7, t:"Verify"     },
+  { n:8, t:"Transport"  }
+];
+
+/* ------------------------------- state ---------------------------------- */
+const S = {
+  mode:"demo", paused:false,
+  url:"", poll:1500, fails:0, timer:null,
+  pctShown:0, pctTarget:0,
+  logs:[], seen:0, series:[], seriesT:[]
+};
+
+/* ============================ DOM scaffolding ============================ */
+const rail = $("rail"), bay = $("bay"), stagesEl = $("stages"), consoleEl = $("console");
+
+function buildRail(n){
+  rail.innerHTML = "";
+  for (let i = 1; i <= n; i++){
+    const d = document.createElement("div");
+    d.className = "seg-chunk"; d.dataset.s = "pending"; d.setAttribute("role","listitem");
+    d.innerHTML = `<div class="fill"></div><span class="n">${pad2(i)}</span>`;
+    d.title = `Chunk ${i}`;
+    rail.appendChild(d);
+  }
+}
+function buildBay(){
+  bay.innerHTML = ENGINES.map(e => `
+    <article class="eng" data-k="${e.key}" data-s="idle">
+      <div class="eng-top">
+        <div class="eng-ico">${e.icon}</div>
+        <div class="eng-name"><div class="n">${e.name}</div><div class="r">${e.role}</div></div>
+        <span class="badge" data-s="idle"><span class="dot"></span><span class="t">Idle</span></span>
+      </div>
+      <div class="eng-detail">standby</div>
+      <div class="eng-foot"><i></i></div>
+    </article>`).join("");
+}
+function buildStages(){
+  stagesEl.innerHTML = STAGES.map(s => `
+    <div class="stg" data-n="${s.n}" data-s="pending">
+      <div class="knob"></div>
+      <div class="t">${s.t}<span class="ms"></span></div>
+    </div>`).join("");
+}
+buildBay(); buildStages(); buildRail(7);
+
+/* ------------------------- write-guard helper --------------------------- */
+// Cheap memo: skip a write when the value is unchanged. Keeps poll-driven
+// rendering allocation-free and avoids 60 needless style recalcs per second.
+const memo = new WeakMap();
+function setText(node, val){
+  if (!node) return;
+  if (memo.get(node) === val) return;
+  memo.set(node, val);
+  node.textContent = val;
+}
+function setAttr(node, k, v){
+  if (!node) return;
+  if (memo.get(node) === k + "=" + v) return;
+  memo.set(node, k + "=" + v);
+  node.setAttribute(k, v);
+}
+
+/* ============================== the renderer ============================ */
+function render(snap){
+  const p = snap.project || {};
+  const pr = snap.progress || {};
+  const me = snap.metrics || {};
+
+  /* ---- header ---- */
+  setText($("connTxt"), S.mode === "demo" ? "Demo Link" : (S.fails ? "Retrying" : "Live Link"));
+  const ds = S.mode === "demo" ? "demo" : (S.fails ? "down" : "live");
+  setAttr($("connDot"), "data-s", ds);
+  setText($("kernelChip"), p.kernel_id ? base(p.kernel_id) : "—");
+  setText($("gpuChip"), num(me.vram_gb, 0) ? `${num(me.vram_gb, 0).toFixed(1)} GB` : "T4 ×2");
+  setText($("footKernel"), p.kernel_id || "—");
+  setText($("heroJob"), p.title || "no active run");
+  setText($("mLang"), p.target_language || "—");
+
+  /* ---- hero: Chop & Drop ---- */
+  const total = clamp(Math.round(num(pr.chunk_count, 0)), 0, 999);
+  const index = clamp(Math.round(num(pr.chunk_index, 0)), 0, Math.max(total, 1));
+
+  // Rebuild the rail only when the denominator actually changes. A garbage
+  // chunk_count must never blank a rail we already drew.
+  const have = rail.children.length;
+  if (total > 0 && total !== have) buildRail(total);
+
+  setText($("chunkCur"), pad2(index));
+  setText($("chunkTot"), `/ ${pad2(total)}`);
+  setText($("heroPhase"), pr.phase || "IDLE");
+
+  // Chunk states drive the rail fill.
+  [...rail.children].forEach((el, i) => {
+    const n = i + 1;
+    const st = n < index ? "done" : n === index ? (snap.chunk_error === n ? "error" : "active") : "pending";
+    if (el.dataset.s !== st) el.dataset.s = st;
+    const f = st === "done" ? 1 : st === "active" ? clamp(pr.pct ? (index - 1 + pr.pct / 100) / total : 0, 0, 1) : 0;
+    el.firstElementChild.style.transform = `scaleX(${f})`;
+  });
+
+  const activePct = num(pr.pct, NaN);
+  const overall = clamp(
+    Number.isFinite(activePct) ? activePct
+      : (total ? ((index - (index === total ? 1 : 0)) / total) * 100 : 0), 0, 100);
+  S.pctTarget = overall;
+
+  const hstate = snap.state || "running";
+  setAttr($("heroState"), "data-s", hstate);
+  setText($("heroState"), hstate === "done" ? "Mission Complete"
+    : hstate === "error" ? "Fault" : (pr.phase || "In Flight"));
+
+  setText($("mElapsed"), hms(me.elapsed_sec));
+  setText($("mEta"), me.eta_sec != null ? hms(me.eta_sec) : "—");
+  setText($("trackPct"), overall.toFixed(1) + "%");
+  setText($("trackRight"), `${Math.min(index, total)} / ${total} segments`);
+  setAttr($("track"), "aria-valuenow", overall.toFixed(1));
+  setAttr($("track"), "aria-valuetext", `${index} of ${total} chunks dubbed`);
+
+  /* ---- stat tiles ---- */
+  const up = num(me.uplink_mbps, 0);
+  const vram = num(me.vram_gb, 0);
+  const rtf = num(me.rtf, 0);
+  const pTotal = me.parts_total == null ? null : Math.round(num(me.parts_total, 0));
+  const pDone = Math.round(num(me.parts_stored, 0));
+
+  $("tileUplink").className = "tile" + (up > 2 ? " up" : "");
+  setText($("vUplink"), up ? up.toFixed(2) : "—");
+  setText($("uUplink"), up ? "MB/s" : "");
+  setText($("sUplink"), num(snap.conns, 3) ? `${Math.round(num(snap.conns, 3))} connections · 3 default, 8 max` : "Idle · 3 connections");
+
+  $("tileVram").className = "tile" + (vram > 14 ? " hot" : "");
+  setText($("vVram"), vram ? vram.toFixed(1) : "—");
+  setText($("uVram"), vram ? "/ 15.0 GB" : "");
+  setText($("sVram"), p.model || "Index-Homura-2B · fp16 · TP1");
+
+  $("tileRate").className = "tile" + (rtf > 1 ? " bad" : rtf > 0 ? " up" : "");
+  setText($("vRate"), rtf ? rtf.toFixed(2) : "—");
+  setText($("uRate"), rtf ? "×" : "");
+  setText($("sRate"), rtf > 1 ? "Slower than realtime" : rtf ? "Faster than realtime" : "Wall / audio seconds");
+
+  $("tileParts").className = "tile" + ((pTotal && pDone === pTotal) ? " up" : "");
+  setText($("vParts"), pTotal != null ? String(pDone) : "—");
+  setText($("uParts"), pTotal != null ? `/ ${pTotal}` : "");
+  setText($("sParts"), (pTotal || 0) > 1 ? "1.9 GB per part cap · resumable" : "Single part · no split");
+
+  /* ---- engine bay ---- */
+  const eng = snap.engines || {};
+  let running = 0;
+  for (const def of ENGINES){
+    const e = eng[def.key] || {};
+    const st = ENG_STATES.includes(e.state) ? e.state : "idle";
+    const node = bay.querySelector(`[data-k="${def.key}"]`);
+    if (!node) continue;
+    if (node.dataset.s !== st) node.dataset.s = st;
+    const b = node.querySelector(".badge");
+    setAttr(b, "data-s", st);
+    setText(b.querySelector(".t"), e.label || (st === "running" ? def.defaultLabel : st === "done" ? "Complete" : st === "error" ? "Failed" : st === "queued" ? "Queued" : "Idle"));
+    setText(node.querySelector(".eng-detail"), e.detail || "standby");
+    node.querySelector(".eng-foot i").style.width =
+      clamp(num(e.pct, st === "done" ? 100 : st === "running" ? 45 : 0), 0, 100) + "%";
+    if (st === "running") running++;
+  }
+  setText($("engSum"), `${running} active · ${ENGINES.length} subsystems`);
+
+  /* ---- stage rail ---- */
+  // Several demo phases legitimately collapse onto one STAGE number (vllm,
+  // whisper and chopdrop are all STAGE:5; tgup and done are both STAGE:8).
+  // Merge by priority, not last-write-wins, so a trailing "pending" row can
+  // never mask an in-flight "running" row for the same stage.
+  const PRI = { running:3, failed:2, success:1, done:1, pending:0, skipped:0 };
+  const MAP = { running:"active", success:"done", done:"done", failed:"error", pending:"pending", skipped:"pending" };
+  const smap = {};
+  for (const s of (snap.stages || [])){
+    const k = s.stage ?? s.n;
+    const status = s.status || "pending";
+    if (!smap[k] || (PRI[status] ?? 0) > (PRI[smap[k].status] ?? 0)) smap[k] = s;
+  }
+  for (const k in smap) if (!STG_STATES.includes(smap[k].status)) smap[k] = { ...smap[k], status:"pending" };
+  // Infer forward progress if the worker only reports the active stage number.
+  let cursor = -1;
+  for (const s of STAGES) if (smap[s.n] && ["running","success","done"].includes(smap[s.n].status)) cursor = Math.max(cursor, s.n);
+  for (const s of STAGES){
+    const node = stagesEl.querySelector(`[data-n="${s.n}"]`);
+    const r = smap[s.n];
+    const st = r ? (MAP[r.status] || "pending") : (s.n < cursor ? "done" : s.n === cursor ? "active" : "pending");
+    if (node.dataset.s !== st) node.dataset.s = st;
+    setText(node.querySelector(".ms"), r && r.ms ? hms(r.ms / 1000) : "");
+  }
+
+  /* ---- run facts ---- */
+  const j = snap.journal || {};
+  $("facts").innerHTML = [
+    ["Project",  p.id || p.title || "—"],
+    ["Kernel",   p.kernel_id || "—"],
+    ["Output",   p.output_video ? base(p.output_video) : "pending"],
+    ["Channel",  j.channel || "—"],
+    ["Digest",   j.source_sha256 ? j.source_sha256.slice(0, 16) + "…" : "—"],
+    ["Started",  p.created_at || "—"]
+  ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+
+  /* ---- event stream ---- */
+  // Live endpoints send a cumulative tail; we append only what we have not
+  // seen. If the producer trims that buffer (length drops below our cursor)
+  // rebase instead of waiting forever for indices that no longer exist.
+  const incoming = snap.log || [];
+  if (incoming.length < S.seen) S.seen = 0;
+  for (let i = S.seen; i < incoming.length; i++){
+    const l = incoming[i];
+    const item = typeof l === "string" ? { level:"info", msg:l } : (l || {});
+    pushLog(item.level || "info", item.msg ?? "");
+  }
+  S.seen = incoming.length;
+  if (snap.note) pushLog("info", snap.note);
+
+  /* ---- throughput series ---- */
+  pushSeries(me.uplink_mbps);
+  drawSpark();
+}
+
+// Throughput history. Coerce here too: a string rate reaching the canvas
+// produces NaN path coordinates and silently blanks the sparkline.
+function pushSeries(raw){
+  if (raw == null) return;
+  const v = num(raw, 0);
+  const t = Date.now();
+  S.series.push({ t, v });
+  while (S.series.length && t - S.series[0].t > 60000) S.series.shift();
+  const peak = Math.max(0, ...S.series.map(s => s.v));
+  setText($("sparkPeak"), `peak ${peak.toFixed(2)} MB/s · ${S.series.length} samples`);
+}
+
+function pushLog(level, msg){
+  const div = document.createElement("div");
+  div.className = "line"; div.dataset.l = level;
+  div.innerHTML = `<span class="ts">${now()}</span><span class="tx"><b>${esc(String(level).toUpperCase().padEnd(5))}</b> ${esc(msg)}</span>`;
+  consoleEl.appendChild(div);
+  while (consoleEl.children.length > 220) consoleEl.removeChild(consoleEl.firstChild);
+  if (!S.paused) consoleEl.scrollTop = consoleEl.scrollHeight;
+  const n = consoleEl.children.length;
+  setText($("conCount"), `${n} event${n === 1 ? "" : "s"}`);
+}
+
+/* ====================== eased progress (rAF loop) ======================= */
+let last = performance.now();
+function frame(t){
+  const dt = Math.min((t - last) / 1000, 0.1); last = t;
+
+  if (!S.paused){
+    const diff = S.pctTarget - S.pctShown;
+    if (Math.abs(diff) > 0.05){
+      S.pctShown = lerp(S.pctShown, S.pctTarget, 1 - Math.pow(0.001, dt));
+      const w = clamp(S.pctShown, 0, 100);
+      $("trackBar").style.width = w.toFixed(2) + "%";
+    } else if (S.pctShown !== S.pctTarget){
+      S.pctShown = S.pctTarget;
+      $("trackBar").style.width = S.pctShown.toFixed(2) + "%";
+    }
+  }
+
+  // clock
+  setText($("clock"), now());
+
+  drawSpark();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ============================ sparkline ================================= */
+const sc = $("spark"), sx = sc.getContext("2d");
+function sizeSpark(){
+  const r = sc.getBoundingClientRect();
+  if (!r.width) return false;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  sc.width = Math.round(r.width * dpr); sc.height = Math.round(r.height * dpr);
+  sx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return true;
+}
+function drawSpark(){
+  const w = sc.clientWidth, h = sc.clientHeight;
+  if (!w || !h) return;
+  if (sc.width !== Math.round(w * Math.min(devicePixelRatio||1,2))) sizeSpark();
+  sx.clearRect(0, 0, w, h);
+
+  // grid
+  sx.strokeStyle = "rgba(255,255,255,.045)"; sx.lineWidth = 1;
+  for (let i = 1; i < 4; i++){
+    const y = (h / 4) * i + .5;
+    sx.beginPath(); sx.moveTo(0, y); sx.lineTo(w, y); sx.stroke();
+  }
+
+  const pts = S.series.slice(-90);
+  if (pts.length < 2){
+    sx.fillStyle = "rgba(255,255,255,.16)";
+    sx.font = '500 11px "JetBrains Mono", monospace';
+    sx.textAlign = "center"; sx.fillText("AWAITING TELEMETRY", w / 2, h / 2 + 4);
+    return;
+  }
+  const max = Math.max(1, ...pts.map(p => p.v)) * 1.18;
+  const X = i => (i / (pts.length - 1)) * w;
+  const Y = v => h - (v / max) * (h - 8) - 4;
+
+  // area fill
+  const g = sx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, "rgba(168,85,247,.42)"); g.addColorStop(.55, "rgba(34,211,238,.14)"); g.addColorStop(1, "rgba(34,211,238,0)");
+  sx.beginPath(); sx.moveTo(0, h);
+  pts.forEach((p, i) => sx.lineTo(X(i), Y(p.v)));
+  sx.lineTo(w, h); sx.closePath(); sx.fillStyle = g; sx.fill();
+
+  // stroke
+  const lg = sx.createLinearGradient(0, 0, w, 0);
+  lg.addColorStop(0, "#22d3ee"); lg.addColorStop(.55, "#a855f7"); lg.addColorStop(1, "#f472b6");
+  sx.beginPath();
+  pts.forEach((p, i) => i ? sx.lineTo(X(i), Y(p.v)) : sx.moveTo(X(i), Y(p.v)));
+  sx.strokeStyle = lg; sx.lineWidth = 2; sx.lineJoin = "round"; sx.shadowColor = "rgba(168,85,247,.75)"; sx.shadowBlur = 12;
+  sx.stroke(); sx.shadowBlur = 0;
+
+  // head dot
+  const lastP = pts[pts.length - 1];
+  sx.beginPath(); sx.arc(X(pts.length - 1), Y(lastP.v), 3.2, 0, 7);
+  sx.fillStyle = "#fff"; sx.shadowColor = "#22d3ee"; sx.shadowBlur = 12; sx.fill(); sx.shadowBlur = 0;
+}
+addEventListener("resize", () => { sizeSpark(); drawSpark(); }, { passive:true });
+sizeSpark();
+
+/* ============================== starfield =============================== */
+(function sky(){
+  const c = $("sky"), x = c.getContext("2d");
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let stars = [], W = 0, H = 0;
+
+  function seed(){
+    W = c.width = innerWidth; H = c.height = innerHeight;
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    c.width = W * dpr; c.height = H * dpr; x.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const n = Math.round(clamp((W * H) / 14000, 40, 170));
+    stars = Array.from({ length:n }, () => ({
+      x:Math.random() * W, y:Math.random() * H,
+      r:Math.random() * 1.15 + .25,
+      a:Math.random() * .55 + .12,
+      s:Math.random() * .012 + .003,
+      d:Math.random() * 6.28,
+      c: Math.random() > .82 ? "168,85,247" : (Math.random() > .6 ? "34,211,238" : "226,232,240")
+    }));
+  }
+  function loop(){
+    x.clearRect(0, 0, W, H);
+    for (const s of stars){
+      if (!reduce){ s.y -= s.s; s.d += .02; if (s.y < -2){ s.y = H + 2; s.x = Math.random() * W; } }
+      const tw = reduce ? 1 : .72 + .28 * Math.sin(s.d);
+      x.beginPath(); x.arc(s.x, s.y, s.r, 0, 6.2832);
+      x.fillStyle = `rgba(${s.c},${s.a * tw})`;
+      x.fill();
+    }
+    requestAnimationFrame(loop);
+  }
+  seed(); loop();
+  addEventListener("resize", seed, { passive:true });
+})();
+
+/* ============================== DEMO LINK =============================== */
+/* Deterministic scripted run. Drives the exact same render() path as live
+   telemetry, so if the demo looks right the live wiring is right too.
+
+   Two separate timelines, deliberately:
+     - SEGS   drives the rendered snapshot (engines, chunks, stages).
+     - EVENTS is a side-effect list the ticker flushes through pushLog().
+   Keeping logs out of the snapshot is what stops the "cumulative buffer
+   shrinks and my index cursor goes stale" class of bug entirely.        */
+const DEMO = (() => {
+  const CHUNKS = 7;
+  const CHUNK_SECONDS = 600;           // matches chop_drop.CHUNK_SECONDS
+
+  // [key, duration s, human phase label, STAGE number]
+  const SCRIPT = [
+    ["resolve",   2.5, "RESOLVING",     0],
+    ["compress",  3.5, "COMPRESSING",   1],
+    ["bundle",       3, "BUNDLING",     2],
+    ["upload_ds",    3, "DATASET UPLOAD",3],
+    ["push",       2.5, "KERNEL PUSH",  4],
+    ["vllm",       4.5, "VLLM BOOT",    5],
+    ["whisper",      2, "TRANSCRIBE",   5],
+    ...Array.from({ length:CHUNKS }, () => ["chopdrop", 2.2, "CHOP & DROP", 5]),
+    ["merge",      3.5, "MERGING",      6],
+    ["verify",     2.5, "VERIFYING",    7],
+    ["tgup",          6, "UPLOADING",   8],
+    ["done",         2, "COMPLETE",     8]
+  ];
+
+  // Flatten into absolute start/end offsets once, up front.
+  let acc = 0;
+  const SEGS = SCRIPT.map(([k, d, label, stage]) => {
+    const seg = { k, d, label, stage, start:acc, end:acc + d }; acc += d; return seg;
+  });
+  const TOTAL = acc;
+
+  const CHOP = SEGS.filter(s => s.k === "chopdrop");
+  const CHOP_START = CHOP[0].start;
+  const CHOP_END   = CHOP[CHOP.length - 1].end;
+  const ORDER      = ["resolve","compress","bundle","upload_ds","push","vllm","whisper","chopdrop","merge","verify","tgup","done"];
+
+  const TITLES = [
+    "Interstellar · 2014 · 1080p", "Attack on Titan · S01E03", "Your Name · 2016",
+    "Dark · S02E05", "Oppenheimer · 2023 · IMAX", "Dune · Part Two", "Interstellar · Re-dub"
+  ];
+
+  /* ---- the log timeline (at, level, message) ---- */
+  const EVENTS = [];
+  const at = (key) => SEGS.find(s => s.k === key).start;
+  EVENTS.push(
+    [0.15, "info", "[STAGE:0] Source resolved · Telegram archive reused"],
+    [at("compress"), "warn", "Source is 4.2 GB @ 2160p — compressing to 480p"],
+    [at("compress") + 1.6, "ok", "ffmpeg -vf scale=854:480 -b:v 1M · 4.2 GB → 612 MB"],
+    [at("bundle"), "info", "[STAGE:2] Bundling Mazinger source as root-level archive"],
+    [at("upload_ds"), "info", "[STAGE:3] Uploading video to reusable Kaggle dataset"],
+    [at("upload_ds") + 1.9, "ok", "Dataset version 14 committed · engrtarun/dubber-video-3f9a2c1d"],
+    [at("push"), "info", "[STAGE:4] Pushing execution code to Kaggle GPU Worker"],
+    [at("push") + 1.8, "ok", "Kernel live · https://kaggle.com/code/engrtarun/dubber-worker-homura"],
+    [at("vllm"), "warn", "vLLM cold start — loading IndexTeam/Index-Homura-2B"],
+    [at("vllm") + 3.9, "ok", "vLLM ready in 41.2 s · /v1/models · tensor_parallel_size=1"],
+    [at("whisper"), "info", "faster-whisper large-v3 · VAD on · beam_size=5"],
+    [CHOP_START - 0.05, "info", "mazinger dub · target Hindi · tts=omnivoice · voice ref @6.9s"]
+  );
+  // One "chunk N/M dubbed" line per chunk — the Chop & Drop beat, logged.
+  CHOP.forEach((seg, i) => {
+    EVENTS.push([seg.start + 0.02, "info", `chop · -ss ${i * CHUNK_SECONDS}s -t ${CHUNK_SECONDS}s · -c copy`]);
+    EVENTS.push([seg.start + 0.9,  "info", `transcribe+translate · chunk ${i + 1}/${CHUNKS}`]);
+    EVENTS.push([seg.end - 0.15, "ok", `Chunk ${i + 1} to ${CHUNKS} dubbed · 57 segments · coverage 0.94`]);
+  });
+  EVENTS.push(
+    [at("merge"),  "info", "rust audio-stitch · assembling timeline · tempo_mode fit (max 1.5×)"],
+    [at("merge") + 2.4, "ok", "timeline assembled · 399 segments · drift 0.31 s"],
+    [at("verify"), "info", "report.json · duration drift + stream + subtitle coverage checks"],
+    [at("verify") + 1.6, "ok", "validation passed · drift 0.31 s ≤ 2.00 s · coverage 0.94 ≥ 0.80"],
+    [at("tgup"),   "info", "tgup upload --concurrency 3 · 3 DC clients"],
+    [at("tgup") + 3.2, "ok", "part_stored · 1/1 · 612 MB @ 3.42 MB/s"],
+    [at("done"),   "ok", "🎉 Pipeline finished successfully! Archived to @tgwebcloud1"],
+    [at("done") + 0.8, "ok", "manifest written · tg_dubber_manifest 2 · 9 live journals"]
+  );
+  EVENTS.sort((a, b) => a[0] - b[0]);
+
+  /* ---------------------------- snapshot builder --------------------------- */
+  function snapAt(el){
+    // Resolve the segment that CONTAINS el. Walking by end-boundary is the
+    // only correct way to do this: an "elapsed >= mark" walk reports the
+    // segment that just finished, i.e. one step behind.
+    let seg = SEGS[SEGS.length - 1];
+    for (const s of SEGS){ if (el < s.end){ seg = s; break; } }
+    const cur = seg.k, ci = ORDER.indexOf(cur);
+
+    const s = {
+      project:{
+        title: TITLES[Math.floor(el / TOTAL * TITLES.length) % TITLES.length],
+        id: "interstellar-4f9a2c1d-8e31b0",
+        kernel_id: "engrtarun/dubber-worker-homura",
+        target_language: "Hindi",
+        model: "Index-Homura-2B · fp16 · TP1",
+        created_at: "21:04:11",
+        output_video: cur === "done" ? "/kaggle/working/output.mp4" : null
+      },
+      progress:{ chunk_index:0, chunk_count:CHUNKS, pct:0, phase: seg.label },
+      engines:{},
+      metrics:{},
+      stages:[],
+      journal:{ channel:"@tgwebcloud1", source_sha256:"9f2b1c7ad4e05f83b6c1a9d2e7f4b8c0" },
+      conns:3,
+      state: cur === "done" ? "done" : "running"
+    };
+
+    const E = (k, state, detail, pct) => s.engines[k] = { state, detail, pct };
+    const IDLE = () => { E("python","idle","standby"); E("ffmpeg","idle","standby"); E("rust","idle","standby"); E("go","idle","standby"); };
+
+    switch (cur){
+      case "resolve":
+        E("python","idle","standby"); E("ffmpeg","queued","queued");
+        E("rust","idle","standby");  E("go","running","Resolving source link",30); break;
+      case "compress":
+        E("python","idle","standby"); E("ffmpeg","running","scale=854:480 · libx264 · 1M",62);
+        E("rust","idle","standby");  E("go","done","dataset link saved",100); break;
+      case "bundle":
+        E("python","idle","standby"); E("ffmpeg","running","remux · +faststart",88);
+        E("rust","idle","standby");  E("go","done","dataset link saved",100); break;
+      case "upload_ds":
+        E("python","idle","standby"); E("ffmpeg","done","612 MB @ 480p ready",100);
+        E("rust","idle","standby");  E("go","running","Uploading dataset v14",55); break;
+      case "push":
+        E("python","queued","queued"); E("ffmpeg","done","612 MB @ 480p ready",100);
+        E("rust","idle","standby");   E("go","running","Committing kernel",85); break;
+      case "vllm":
+        E("python","running","Loading Index-Homura-2B · fp16",45);
+        E("ffmpeg","done","612 MB @ 480p ready",100);
+        E("rust","idle","standby");   E("go","done","dataset v14 committed",100); break;
+      case "whisper":
+        E("python","running","faster-whisper large-v3 · VAD",72);
+        E("ffmpeg","running","Extracting voice reference",95);
+        E("rust","idle","standby");   E("go","done","dataset v14 committed",100); break;
+      case "chopdrop": {
+        // Defensive: the resolver guarantees inChop, but never leave the bay
+        // blank if the timeline is ever retimed.
+        const idx = clamp(Math.floor((el - CHOP_START) / 2.2), 0, CHUNKS - 1);
+        const frac = clamp((el - CHOP_START) / 2.2 - idx, 0, 1);
+        s.progress = {
+          chunk_index: idx + 1, chunk_count: CHUNKS, pct: frac * 100,
+          phase: frac < .34 ? "CHOPPING" : frac < .74 ? "TRANSLATING" : "SYNTHESIZING"
+        };
+        E("ffmpeg", frac < .34 ? "running" : "done",
+          frac < .34 ? `-ss ${idx * CHUNK_SECONDS}s -t ${CHUNK_SECONDS}s · -c copy` : `chunk ${pad2(idx + 1)} remuxed`,
+          frac < .34 ? frac / .34 * 100 : 100);
+        E("python", frac < .34 ? "queued" : "running",
+          frac < .34 ? "awaiting chunk"
+                     : frac < .74 ? "translate block · batch 24 · overlap 8"
+                                  : `omnivoice seg ${Math.round((frac - .74) / .26 * 57)}/57`,
+          frac < .34 ? 0 : (frac - .34) / .66 * 100);
+        E("rust","idle","standby"); E("go","done","dataset v14 committed",100);
+        break;
+      }
+      case "merge":
+        E("python","done","399 segments synthesised",100); E("ffmpeg","done","voice ref ready",100);
+        E("rust","running","Stitching timeline · tempo fit",58);
+        E("go","done","dataset v14 committed",100); break;
+      case "verify":
+        E("python","done","399 segments synthesised",100); E("ffmpeg","running","Duration drift check",74);
+        E("rust","done","timeline muxed",100); E("go","done","dataset v14 committed",100); break;
+      case "tgup":
+        E("python","done","399 segments synthesised",100); E("ffmpeg","done","output.mp4 · 598 MB",100);
+        E("rust","done","timeline muxed",100);
+        E("go","running","Uploading to Telegram · 3 conn",70); break;
+      case "done":
+        E("python","done","399 segments synthesised",100); E("ffmpeg","done","output.mp4 · 598 MB",100);
+        E("rust","done","timeline muxed",100);   E("go","done","Archived · @tgwebcloud1",100); break;
+      default:
+        IDLE();
+    }
+
+    // Stage rail: exactly one row per STAGE number, running phase marked active.
+    const done = new Map();
+    ORDER.forEach((k, n) => {
+      const num = SEGS.find(x => x.k === k).stage;
+      const active = k === cur;
+      if (active || !done.has(num)) done.set(num, { stage:num, status: active ? "running" : (n < ci ? "success" : "pending") });
+      else if (done.get(num).status === "pending" && n < ci) done.set(num, { stage:num, status:"success" });
+    });
+    s.stages = [...done.values()].sort((a, b) => a.stage - b.stage)
+      .map(x => ({ ...x, ms: x.status === "success" ? (x.stage + 1) * 412000 : undefined }));
+
+    // Chop & Drop progress is CUMULATIVE. Once a chunk is dubbed it stays
+    // dubbed, so the rail must not snap back to 0/N when the pipeline moves on
+    // to merge/verify/upload — the whole point of the panel is "7 of 7 done".
+    // The stage rail below carries overall pipeline progress; this one carries
+    // how much of the source has actually been dubbed.
+    const CHOP_ORDER = ORDER.indexOf("chopdrop");
+    if (ci > CHOP_ORDER){
+      s.progress.chunk_index = CHUNKS;
+      s.progress.pct = 100;
+    }
+
+    const inChop = cur === "chopdrop";
+    const tgupStart = SEGS.find(x => x.k === "tgup").start;
+    const tgupProg = clamp((el - tgupStart) / 6, 0, 1);
+    s.metrics = {
+      elapsed_sec: el,
+      eta_sec: cur === "done" ? 0 : Math.max(0, TOTAL - el),
+      vram_gb: ["vllm"].includes(cur) ? 6.1
+             : ["whisper","chopdrop","merge","verify","tgup","done"].includes(cur) ? 11.4 : 0.4,
+      rtf: inChop ? 0.34 : ["merge","verify"].includes(cur) ? 0.9 : 0,
+      uplink_mbps: cur === "upload_ds" ? 2.9
+                 : cur === "tgup" ? 3.42 + Math.sin(el * 1.6) * .45
+                 : cur === "done" ? 0 : 0,
+      parts_stored: tgupProg >= .55 || cur === "done" ? 1 : 0,
+      parts_total: 1
+    };
+    return s;
+  }
+
+  return { total: TOTAL, events: EVENTS, snapAt };
+})();
+
+let demoT = 0, demoEvt = 0;
+function demoStep(dt){
+  if (S.paused) return;
+  demoT += dt;
+  if (demoT >= DEMO.total + 5){          // loop the showcase
+    demoT = 0; demoEvt = 0;
+    consoleEl.innerHTML = "";
+    setText($("conCount"), "0 events");
+  }
+  render(DEMO.snapAt(demoT));
+  // Flush every scripted event whose time we just crossed, in order.
+  while (demoEvt < DEMO.events.length && DEMO.events[demoEvt][0] <= demoT){
+    const e = DEMO.events[demoEvt++];
+    pushLog(e[1], e[2]);
+  }
+}
+
+/* ============================== LIVE LINK =============================== */
+async function poll(){
+  if (S.mode !== "live" || S.paused) return;
+  try{
+    const ac = new AbortController();
+    const to = setTimeout(() => ac.abort(), 8000);
+    const r = await fetch(S.url, { cache:"no-store", signal:ac.signal, headers:{ Accept:"application/json" } });
+    clearTimeout(to);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    S.fails = 0;
+    render(data);
+  } catch (e){
+    S.fails++;
+    pushLog("err", `telemetry unreachable · ${e.message} (fail ${S.fails})`);
+    if (S.fails >= 5) pushLog("warn", "giving up on this endpoint — switch back to Demo");
+  }
+}
+
+/* ============================ mode switching ============================ */
+function setMode(mode){
+  S.mode = mode;
+  $("btnDemo").setAttribute("aria-pressed", String(mode === "demo"));
+  $("btnLive").setAttribute("aria-pressed", String(mode === "live"));
+  if (mode === "live"){ startPoll(); toast("Live link engaged"); }
+  else { clearInterval(S.timer); S.timer = null; S.series.length = 0; S.seen = 0; toast("Demo link engaged"); }
+}
+function startPoll(){
+  clearInterval(S.timer); S.fails = 0; S.seen = 0; S.series.length = 0;
+  poll();
+  S.timer = setInterval(poll, S.poll);
+}
+function setPaused(p, silent){
+  S.paused = p;
+  $("btnPause").setAttribute("aria-pressed", String(p));
+  $("btnPause").setAttribute("aria-label", p ? "Resume" : "Pause");
+  $("icPause").innerHTML = p
+    ? '<path d="M5 3.2 13 8l-8 4.8Z"/>'
+    : '<rect x="4" y="3" width="3" height="10" rx="1"/><rect x="9" y="3" width="3" height="10" rx="1"/>';
+  if (!silent) toast(p ? "Stream paused" : "Stream resumed");
+}
+
+let toastT;
+function toast(msg){
+  const t = $("toast");
+  t.textContent = msg; t.classList.add("up");
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("up"), 1900);
+}
+
+/* -------------------------------- sheet --------------------------------- */
+const sheet = $("sheet");
+function openSheet(){
+  sheet.hidden = false; requestAnimationFrame(() => sheet.classList.add("on"));
+  $("inpUrl").value = S.url; $("inpPoll").value = S.poll;
+  $("inpUrl").focus();
+}
+function closeSheet(){
+  sheet.classList.remove("on");
+  setTimeout(() => { sheet.hidden = true; }, 220);
+}
+$("btnLink").onclick = openSheet;
+$("btnCancel").onclick = closeSheet;
+sheet.onclick = (e) => { if (e.target === sheet) closeSheet(); };
+$("btnApply").onclick = () => {
+  const u = $("inpUrl").value.trim();
+  if (!u){ toast("Enter an endpoint URL"); return; }
+  S.url = u; S.poll = clamp(parseInt($("inpPoll").value, 10) || 1500, 400, 60000);
+  localStorage.setItem("tdubber.url", S.url);
+  localStorage.setItem("tdubber.poll", String(S.poll));
+  closeSheet(); setMode("live");
+};
+$("btnCopy").onclick = async () => {
+  try{
+    await navigator.clipboard.writeText(location.href);
+    toast("Dashboard URL copied");
+  } catch { toast("Clipboard blocked"); }
+};
+
+/* ------------------------------ controls -------------------------------- */
+$("btnDemo").onclick = () => setMode("demo");
+$("btnLive").onclick = () => { if (!S.url) openSheet(); else setMode("live"); };
+$("btnPause").onclick = () => setPaused(!S.paused);
+
+addEventListener("keydown", (e) => {
+  if (e.target.matches("input,textarea")) { if (e.key === "Escape") closeSheet(); return; }
+  const k = e.key.toLowerCase();
+  if (k === "d") setMode("demo");
+  else if (k === "l"){ if (!S.url) openSheet(); else setMode("live"); }
+  else if (k === "r"){ if (S.mode === "live") startPoll(); else toast("Nothing to reconnect"); }
+  else if (e.code === "Space"){ e.preventDefault(); setPaused(!S.paused); }
+  else if (e.key === "Escape") closeSheet();
+});
+
+// Don't burn Kaggle-quota cycles on a tab nobody is looking at.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  if (S.mode === "live" && S.timer) poll();
+});
+
+addEventListener("resize", sizeSpark, { passive:true });
+
+/* ------------------------------- ignition ------------------------------ */
+(function boot(){
+  S.url = localStorage.getItem("tdubber.url") || "";
+  S.poll = clamp(parseInt(localStorage.getItem("tdubber.poll"), 10) || 1500, 400, 60000);
+  if (S.url) $("inpUrl").value = S.url;
+
+  pushLog("info", "Mission Control online — awaiting worker telemetry");
+
+  // ?seek=N parks the demo at a given second, frozen and fully populated.
+  // Useful for reproducible status screenshots and bug reports:
+  //   dashboard/index.html?seek=26.2   -> mid Chop & Drop, chunk 3 of 7
+  const seek = parseFloat(new URLSearchParams(location.search).get("seek"));
+  if (Number.isFinite(seek)){
+    S.mode = "demo";
+    // Walk the timeline for its LOGS and a coarse throughput history, but
+    // render exactly once at the end. Calling render() per step would append
+    // one sparkline sample and one log line per step and bury the real data.
+    for (let t = 0, i = 0; t <= Math.max(0, seek); t += 0.1, i++){
+      if (i % 5 === 0) pushSeries(DEMO.snapAt(t).metrics.uplink_mbps);
+      while (demoEvt < DEMO.events.length && DEMO.events[demoEvt][0] <= t){
+        const e = DEMO.events[demoEvt++]; pushLog(e[1], e[2]);
+      }
+    }
+    S.series.length = 0;
+    render(DEMO.snapAt(seek));
+    // Replay the coarse series with real spacing so the sparkline is not flat.
+    for (let t = 0, i = 0; t <= Math.max(0, seek); t += 0.5, i++)
+      S.series.push({ t, v: num(DEMO.snapAt(t).metrics.uplink_mbps, 0) });
+    setText($("sparkPeak"), `peak ${Math.max(0, ...S.series.map(s => s.v)).toFixed(2)} MB/s · ${S.series.length} samples`);
+    demoT = seek;
+    S.pctShown = S.pctTarget;
+    $("trackBar").style.width = S.pctShown.toFixed(2) + "%";
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+    setPaused(true, true);            // silent: no toast on load
+    toast(`Parked at ${seek.toFixed(1)}s — press Space to run`);
+    return;
+  }
+
+  let prev = performance.now();
+  (function loop(t){
+    const dt = Math.min((t - prev) / 1000, 0.1); prev = t;
+    if (S.mode === "demo") demoStep(dt);
+    requestAnimationFrame(loop);
+  })(performance.now());
+})();
+</script>
+</body>
+</html>

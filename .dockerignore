@@ -1,0 +1,72 @@
+# T_Dubber worker image build context
+# Only the Go transporter's sources and the four Python entrypoints are COPYed,
+# but a lean context keeps `docker build` transfer fast — this repo carries 8
+# submodules, a 1.9 MB PNG, a 1.9 MB SQLite WAL, and run output under projects/.
+
+.git
+.github
+.gitattributes
+.gitmodules
+
+# Submodules: ui-buttons, mazinger, kotaemon-gradio-theme, css-loaders,
+# references/, Index-Translate — vendored trees we never build into the image.
+ui-buttons/
+mazinger/
+kotaemon-gradio-theme/
+css-loaders/
+references/
+Index-Translate/
+"TG Web Cloud/"
+
+# Python bytecode + caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Run output, models, media, logs
+projects/
+dst/
+kaggle_paperWork/
+kaggle_test_dataset/
+kaggle_worker_local/
+Index-Translate/
+VideoClip4Test/
+.tg_uploads/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.session
+*.session-journal
+*.mp4
+*.mkv
+*.wav
+*.zip
+*.png
+*.jpg
+*.gif
+dummy.mp4
+
+# Ops scripts and credentials. Never let an api_hash or a kaggle.json reach a
+# layer, even a discarded one — `docker history` reads them forever.
+config.json
+kaggle.json
+*.lock
+*.txt.lock
+boost.ps1
+start-boosted.ps1
+run_go.ps1
+doctor.ps1
+build.ps1
+install-autoboost.ps1
+auto_tuner.py
+
+# The dashboard is opened straight off disk in a browser; it is not part of
+# the container image.
+dashboard/
+index.html
+README.md
+Dockerfile
+.dockerignore

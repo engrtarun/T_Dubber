@@ -193,7 +193,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OMP_NUM_THREADS=4 \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
-    PATH="/opt/venv/bin:/usr/local/go/bin:/usr/local/cargo/bin:${PATH}" \
+    PATH="/opt/venv/bin:/usr/local/cargo/bin:${PATH}" \
     VIRTUAL_ENV=/opt/venv \
     TGUP_BIN=/usr/local/bin/tgup
 
@@ -283,8 +283,14 @@ RUN if [ "$WITH_RUST" = "1" ]; then \
             | sh -s -- -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" --no-modify-path; \
         chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"; \
         rustc --version; cargo --version; \
-        # cargo build --release --manifest-path /src/audio_stitch/Cargo.toml
     fi
+
+# To bake a real Rust binary in later: add `audio_stitch/Cargo.toml` to the repo,
+# COPY it in above, then add a second RUN:
+#   RUN cargo build --release --manifest-path /build/audio_stitch/Cargo.toml \
+#       && install -m755 /build/audio_stitch/target/release/audio_stitch /usr/local/bin/
+# Deliberately kept as its own instruction: a `#` comment sitting inside a
+# line continuation ends the logical line for several Dockerfile parsers.
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     CARGO_TERM_COLOR=always
@@ -299,6 +305,11 @@ RUN mkdir -p "$HF_HOME" /kaggle/working /kaggle/input /app/src /var/log/tdubber 
 
 WORKDIR /app/src
 COPY pipeline.py telegram_uploader.py go_planner.py tgup_bridge.py ./
+
+# NOTE: no Go toolchain in this image on purpose. `go build` ran in the
+# go-transporter builder stage; only the static `tgup` binary shipped. If you
+# need to rebuild it inside the container, use the builder stage instead:
+#   docker build --target go-transporter -t t-dubber-go .
 
 # Non-root user. We deliberately DO NOT switch to it by default: the NVIDIA
 # container runtime hands /dev/nvidia* over with host ownership, so a non-root
