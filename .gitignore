@@ -5,3 +5,33 @@ pack/
 
 __pycache__/
 *.pyc
+
+# CMake build tree for the C++ normalizer.
+#
+# This directory was committed by accident -- 22 files including CMakeCache.txt,
+# .ninja_deps, .ninja_log, a compiler-id binary and normalizer.exe itself. That
+# is not merely untidy: CMakeCache.txt records ABSOLUTE paths of the machine that
+# generated it, so the moment CI checked it out, cmake refused to configure --
+#
+#   CMake Error: The current CMakeCache.txt directory
+#   'D:/a/T_Dubber/T_Dubber/cpp_accelerator/build/CMakeCache.txt' is different
+#   than the directory 'C:/Program Files/Git/mingw64/lib/Git/cmake-build/...'
+#   where 'CMakeCache.txt' was created.
+#
+# The recorded path was a Git-Bash-mangled path from the original author's
+# machine, so it could never match any CI runner. A build tree is regenerated in
+# seconds by the CI job that needs it, so it has no business in history.
+cpp_accelerator/build/
+
+# Same reasoning for any other stray CMake tree.
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+.ninja_deps
+.ninja_log
+compile_commands.json
+
+# Out-of-tree build directory used by .github/workflows/build-native.yml. The
+# Windows job builds normalizer.exe here instead of inside cpp_accelerator/, so
+# a CMakeCache.txt can never be committed into the source tree by accident.
+.build/

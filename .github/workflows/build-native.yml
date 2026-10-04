@@ -227,12 +227,52 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $cfg = "${{ inputs.cmake_build_type || 'Release' }}"
-          cmake -S cpp_accelerator -B cpp_accelerator/build -DCMAKE_BUILD_TYPE=$cfg
-          cmake --build cpp_accelerator/build --config $cfg --parallel --target normalizer
-          $exe = "cpp_accelerator\build\$cfg\normalizer.exe"
-          if (-not (Test-Path $exe)) { $exe = "cpp_accelerator\build\normalizer.exe" }
-          if (-not (Test-Path $exe)) { throw "normalizer.exe was not produced" }
+
+          # Built OUT OF TREE, never inside cpp_accelerator/.
+          #
+          # CMakeCache.txt records absolute paths and cmake refuses to configure
+          # when the directory it finds the cache in is not the directory the
+          # cache was created in. This repo had exactly that failure: a committed
+          # cpp_accelerator/build/CMakeCache.txt pointed at
+          # 'C:/Program Files/Git/mingw64/lib/Git/cmake-build/...' -- a
+          # Git-Bash-mangled path from the machine that created it -- so it
+          # could never match any CI runner and the step died in one second.
+          #
+          # The cache file is now untracked and gitignored, but an out-of-tree
+          # build directory removes the whole class of problem: nothing can
+          # commit a build tree into it and nothing can restore one over it.
+          #
+          # Under GITHUB_WORKSPACE rather than RUNNER_TEMP, because MSBuild
+          # objects to an output directory in the temp directory:
+          #   warning MSB8029: The intermediate directory or Output directory
+          #   cannot reside under the Temporary directory as it could lead to
+          #   issues with incremental build.
+          # What actually matters is only that it is outside cpp_accelerator/ --
+          # an in-source-tree build directory is exactly how a committed
+          # CMakeCache.txt reached CI in the first place.
+          $buildDir = Join-Path $env:GITHUB_WORKSPACE ".build\normalizer"
+          if (Test-Path $buildDir) { Remove-Item -Recurse -Force $buildDir }
+
+          cmake -S cpp_accelerator -B $buildDir -DCMAKE_BUILD_TYPE=$cfg
+          cmake --build $buildDir --config $cfg --parallel --target normalizer
+
+          # A single-config generator (Ninja, Makefiles) writes the binary
+          # straight into the build root; a multi-config one (MSVC, Ninja
+          # Multi-Config) puts it in a per-config subdirectory. Accept either
+          # rather than assuming, which is what the old path check did.
+          $candidates = @(
+            (Join-Path $buildDir "$cfg\normalizer.exe"),
+            (Join-Path $buildDir "normalizer.exe")
+          )
+          $exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $exe) {
+            throw "normalizer.exe was not produced. Looked in: $($candidates -join ', ')"
+          }
           Write-Host ("  -> {0}  {1:N0} bytes" -f $exe, (Get-Item $exe).Length)
+
+          # Publish the resolved path so the smoke test and the staging step
+          # cannot each re-derive it differently.
+          "NORMALIZER_EXE=$exe" >> $env:GITHUB_ENV
 
       # Same trap as the Rust smoke test, one step further down. A usage error is the
       # CORRECT response to no arguments, so a non-zero exit here is expected
@@ -249,13 +289,11 @@ jobs:
         run: |
           $ErrorActionPreference = "Continue"
 
-          $candidates = @(
-            "cpp_accelerator\build\Release\normalizer.exe",
-            "cpp_accelerator\build\normalizer.exe"
-          )
-          $exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $exe) {
-            throw "normalizer.exe not found. Looked in: $($candidates -join ', ')"
+          # The path comes from the build step through GITHUB_ENV, so this check
+          # cannot disagree with where the binary actually landed.
+          $exe = $env:NORMALIZER_EXE
+          if (-not $exe -or -not (Test-Path $exe)) {
+            throw "NORMALIZER_EXE was not set by the build step (got '$exe')"
           }
 
           $out = (& $exe 2>&1 | Out-String)
@@ -290,10 +328,14 @@ jobs:
           foreach ($crate in @("stitcher", "subtitle_forge", "havaldar_core")) {
             Copy-Item "$crate\target\release\$crate.exe" "$stage\$crate.exe" -Force
           }
-          $normalizer = if (Test-Path "cpp_accelerator\build\Release\normalizer.exe") {
-                          "cpp_accelerator\build\Release\normalizer.exe"
-                        } else { "cpp_accelerator\build\normalizer.exe" }
-          Copy-Item $normalizer "$stage\normalizer.exe" -Force
+          # normalizer now lives in an out-of-tree build directory whose path is
+          # chosen by the build step, so it has to be passed along rather than
+          # reconstructed. A hardcoded guess here is how the staged artifact
+          # would silently go missing while every earlier step stayed green.
+          if (-not $env:NORMALIZER_EXE -or -not (Test-Path $env:NORMALIZER_EXE)) {
+            throw "NORMALIZER_EXE missing -- cannot stage normalizer.exe"
+          }
+          Copy-Item $env:NORMALIZER_EXE "$stage\normalizer.exe" -Force
 
           # A manifest makes a downloaded artifact self-describing: which commit,
           # which host, which SHA-256. Four loose .exe files in a Downloads

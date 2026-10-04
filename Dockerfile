@@ -65,9 +65,21 @@ ARG CUDA_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 # by any FROM line; it is not a valid image reference, which is why the
 # correction and this comment live together.
 ARG UBUNTU_TAG=22.04
-# Builder image for the Rust arsenal (stage 1b). `stable`, same philosophy as
-# RUST_TOOLCHAIN=1 below: newest stable in, MSRV surprises out.
-ARG RUST_PACK_IMAGE=rust:stable-bookworm
+# Builder image for the Rust arsenal (stage 1b).
+#
+# NOT `rust:stable-bookworm`: the official Rust image publishes no `stable` tag.
+# Its tags are the Rust RELEASE version -- 1.99.0, 1.99, 1.98.1, ... -- plus the
+# floating `bookworm`, `slim-bookworm` and `latest`. `1` is the tag that actually
+# means "newest stable 1.x", which is what this line always intended and exactly
+# what RUST_TOOLCHAIN=stable below asks rustup for.
+#
+# This is not a cosmetic tag. Docker resolves metadata for every stage up front,
+# so a bad tag fails the whole buildx invocation in about a second, before a
+# single line of Rust is compiled:
+#
+#   ERROR: Failed to solve: rust:stable-bookworm: failed to resolve source
+#   metadata for docker.io/library/rust:stable-bookworm: not found
+ARG RUST_PACK_IMAGE=rust:1-bookworm
 
 # Ubuntu 22.04 is deliberate, not lazy: its default python3 IS 3.10, which is
 # byte-for-byte the interpreter your Kaggle kernel already uses. Matching it

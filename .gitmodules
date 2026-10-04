@@ -25,3 +25,6 @@
 [submodule "references/pyvideotrans"]
 	path = references/pyvideotrans
 	url = https://github.com/jianchang512/pyvideotrans.git
+[submodule "mazinger"]
+	path = mazinger
+	url = https://github.com/bakrianoo/mazinger.git
