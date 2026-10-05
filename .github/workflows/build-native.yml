@@ -479,10 +479,32 @@ jobs:
 
           if [ "$rc" -ne 0 ]; then
             echo "::error::pack build failed (docker buildx exit $rc)"
+
+            # Print context AROUND the first real failure, not just the tail.
+            # A `--progress=plain` log for five compilers runs to thousands of
+            # lines and the reason is buried in the middle; the tail only ever
+            # shows BuildKit's own ERROR summary, which names the failing
+            # Dockerfile line but never says what went wrong there.
+            first=$(grep -nE 'ASSERT FAIL|error\[E[0-9]+\]|(^|[^a-zA-Z])error:|not found|panicked|No such file|cannot find' /tmp/pack-build.log \
+                    | grep -vE 'does not support target|ERROR: failed to build|failed to solve' \
+                    | head -n 1 | cut -d: -f1)
+            if [ -n "$first" ]; then
+              start=$(( first > 14 ? first - 14 : 1 ))
+              echo "----- context around the first failure (log line $first) -----"
+              sed -n "${start},$(( first + 30 ))p" /tmp/pack-build.log
+              echo "----- end context -----"
+            else
+              echo "no recognisable error line found; showing the last 60 lines"
+            fi
+
+            echo "----- error-ish lines across the whole log -----"
+            grep -nE 'ASSERT FAIL|error\[E[0-9]+\]|(^|[^a-zA-Z])error:|not found|panicked' /tmp/pack-build.log | head -n 40 || true
+
             echo "----- Dockerfile stage headers seen in this build -----"
             grep -nE '^#[0-9]+ \[|^#[0-9]+ (FROM|DONE|CACHED)|--- (Stage|STAGE)' /tmp/pack-build.log | tail -n 30 || true
-            echo "----- last 60 lines of the build log -----"
-            tail -n 60 /tmp/pack-build.log
+
+            echo "----- last 40 lines of the build log -----"
+            tail -n 40 /tmp/pack-build.log
             echo "----- end of build log -----"
             exit "$rc"
           fi

@@ -194,26 +194,98 @@ WORKDIR /arsenal
 # means booting the telemetry daemon inside a Docker build and hanging until the
 # job times out. The timeout caps that worst case at 10 seconds instead of 45
 # minutes and does not change the pass/fail outcome either way.
+#
+# The probes below are deliberately verbose, because a silent assertion is worse
+# than no assertion. The previous one-liner was:
+#
+#     "$B" 2>&1 | grep -qi "usage"
+#
+# and when it failed the build died with `exit code: 1` and NOTHING else. The
+# binary's own output went down the pipe into grep and was discarded, so a
+# missing binary, a binary that could not start, and a binary that simply did not
+# contain the word all looked identical from the outside. Each step below
+# therefore (a) checks the binary exists and says so, (b) prints what the binary
+# actually printed, and (c) tests for staticness by looking for a PT_INTERP
+# segment -- a fact about the ELF file, rather than an inference from whatever
+# `ldd` happens to exit with on this particular glibc.
 COPY stitcher/ ./stitcher/
 RUN cd stitcher && \
     cargo build --release --target "${MUSL_TARGET}" && \
     B="./target/${MUSL_TARGET}/release/stitcher" && \
-    "$B" 2>&1 | grep -qi "usage" && \
-    if timeout 10 ldd "$B" > /dev/null 2>&1; then echo "ERROR: $B is not static" >&2; exit 1; fi
+    { \
+        if [ ! -x "$B" ]; then \
+            echo "ASSERT FAIL: $B was not produced" >&2; \
+            echo "--- what cargo actually emitted under target/ ---" >&2; \
+            find ./target -maxdepth 3 -name 'stitcher*' >&2 || true; \
+            exit 1; \
+        fi; \
+        "$B" > /tmp/probe.txt 2>&1; \
+        echo "=== probe: $B ==="; cat /tmp/probe.txt; echo "=== end probe ==="; \
+        if ! grep -qi "usage" /tmp/probe.txt; then \
+            echo "ASSERT FAIL: no 'usage' in the probe output above" >&2; exit 1; \
+        fi; \
+        if command -v readelf > /dev/null 2>&1; then \
+            if readelf -l "$B" 2>/dev/null | grep -q INTERP; then \
+                echo "ASSERT FAIL: $B carries PT_INTERP, so it is dynamically linked" >&2; exit 1; \
+            fi; \
+            echo "static: no PT_INTERP -> OK"; \
+        elif timeout 10 ldd "$B" > /dev/null 2>&1; then \
+            echo "ASSERT FAIL: ldd exit 0, so $B is not static" >&2; exit 1; \
+        fi; \
+    }
 
 COPY subtitle_forge/ ./subtitle_forge/
 RUN cd subtitle_forge && \
     cargo build --release --target "${MUSL_TARGET}" && \
     B="./target/${MUSL_TARGET}/release/subtitle_forge" && \
-    "$B" --version | grep -qi "subtitle_forge" && \
-    if timeout 10 ldd "$B" > /dev/null 2>&1; then echo "ERROR: $B is not static" >&2; exit 1; fi
+    { \
+        if [ ! -x "$B" ]; then \
+            echo "ASSERT FAIL: $B was not produced" >&2; \
+            echo "--- what cargo actually emitted under target/ ---" >&2; \
+            find ./target -maxdepth 3 -name 'subtitle_forge*' >&2 || true; \
+            exit 1; \
+        fi; \
+        "$B" --version > /tmp/probe.txt 2>&1; \
+        echo "=== probe: $B --version ==="; cat /tmp/probe.txt; echo "=== end probe ==="; \
+        if ! grep -qi "subtitle_forge" /tmp/probe.txt; then \
+            echo "ASSERT FAIL: no 'subtitle_forge' in the probe output above" >&2; exit 1; \
+        fi; \
+        if command -v readelf > /dev/null 2>&1; then \
+            if readelf -l "$B" 2>/dev/null | grep -q INTERP; then \
+                echo "ASSERT FAIL: $B carries PT_INTERP, so it is dynamically linked" >&2; exit 1; \
+            fi; \
+            echo "static: no PT_INTERP -> OK"; \
+        elif timeout 10 ldd "$B" > /dev/null 2>&1; then \
+            echo "ASSERT FAIL: ldd exit 0, so $B is not static" >&2; exit 1; \
+        fi; \
+    }
 
 COPY havaldar_core/ ./havaldar_core/
 RUN cd havaldar_core && \
     cargo build --release --target "${MUSL_TARGET}" && \
     B="./target/${MUSL_TARGET}/release/havaldar_core" && \
-    "$B" --help | grep -qi "havaldar" && \
-    if timeout 10 ldd "$B" > /dev/null 2>&1; then echo "ERROR: $B is not static" >&2; exit 1; fi
+    { \
+        if [ ! -x "$B" ]; then \
+            echo "ASSERT FAIL: $B was not produced" >&2; \
+            echo "--- what cargo actually emitted under target/ ---" >&2; \
+            find ./target -maxdepth 3 -name 'havaldar_core*' >&2 || true; \
+            exit 1; \
+        fi; \
+        # --help, never bare: bare would BOOT the telemetry daemon and hang. \
+        "$B" --help > /tmp/probe.txt 2>&1; \
+        echo "=== probe: $B --help ==="; cat /tmp/probe.txt; echo "=== end probe ==="; \
+        if ! grep -qi "havaldar" /tmp/probe.txt; then \
+            echo "ASSERT FAIL: no 'havaldar' in the probe output above" >&2; exit 1; \
+        fi; \
+        if command -v readelf > /dev/null 2>&1; then \
+            if readelf -l "$B" 2>/dev/null | grep -q INTERP; then \
+                echo "ASSERT FAIL: $B carries PT_INTERP, so it is dynamically linked" >&2; exit 1; \
+            fi; \
+            echo "static: no PT_INTERP -> OK"; \
+        elif timeout 10 ldd "$B" > /dev/null 2>&1; then \
+            echo "ASSERT FAIL: ldd exit 0, so $B is not static" >&2; exit 1; \
+        fi; \
+    }
 
 
 # =============================================================================
