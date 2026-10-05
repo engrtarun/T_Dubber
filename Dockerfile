@@ -647,28 +647,66 @@ COPY --from=rust-arsenal   /arsenal/subtitle_forge/target/${MUSL_TARGET}/release
 COPY --from=rust-arsenal   /arsenal/havaldar_core/target/${MUSL_TARGET}/release/havaldar_core   ./havaldar_core
 COPY --from=cpp-forge      /src/build/normalizer                             ./normalizer
 
-RUN set -eu; \
-    chmod 755 tgup stitcher normalizer subtitle_forge havaldar_core; \
-    line_tgup="$(./tgup help 2>&1 | head -n 1 || true)"; \
-    line_stitcher="$(./stitcher 2>&1 | head -n 1 || true)"; \
-    line_normalizer="$(./normalizer --help 2>&1 | head -n 1 || true)"; \
-    line_subtitle_forge="$(./subtitle_forge --version 2>&1 | head -n 1 || true)"; \
-    line_havaldar_core="$(./havaldar_core --help 2>&1 | head -n 1 || true)"; \
+# NO `set -e` here, and that is the whole point of this rewrite.
+#
+# This one RUN used to do a dozen unrelated jobs in a single shell: chmod, five
+# binary probes, manifest generation, checksums, and five static-link checks.
+# Under `set -e`, ANY non-zero anywhere aborted the build with a bare
+# "exit code: 1" that named none of the dozen steps -- including non-zero exits
+# that are entirely benign, like a probe command legitimately exiting 1, or
+# `head -n 1` closing a pipe and its writer taking SIGPIPE. Four CI round trips
+# went into guessing which of the twelve it was.
+#
+# So `set -e` is gone and each step guards itself and SAYS WHICH STEP FAILED.
+#
+# The distinction that matters: the informational probes can no longer fail the
+# build at all (they only fill in a manifest column), while the two conditions
+# that actually determine shippability -- every binary present, every binary
+# static -- still fail hard, loudly and by name.
+RUN set -u; \
+    for b in tgup stitcher normalizer subtitle_forge havaldar_core; do \
+        if [ ! -f "$b" ]; then \
+            echo "PACK FAIL: '$b' is not in $(pwd)" >&2; \
+            echo "--- directory contents ---" >&2; ls -la >&2; \
+            exit 1; \
+        fi; \
+        chmod 755 "$b" || { echo "PACK FAIL: chmod $b" >&2; exit 1; }; \
+    done; \
+    echo "--- all five binaries present ---"; \
+    probe() { \
+        _n="$1"; shift; \
+        _o="$("$@" 2>&1 | head -n 1 || true)"; \
+        echo "probe $_n -> ${_o:-<no output>}"; \
+        printf '%s' "$_o" > "/tmp/probe_$_n"; \
+    }; \
+    probe tgup ./tgup help; \
+    probe stitcher ./stitcher; \
+    probe normalizer ./normalizer --help; \
+    probe subtitle_forge ./subtitle_forge --version; \
+    probe havaldar_core ./havaldar_core --help; \
     { \
         echo "T_Dubber native arsenal - five static linux/amd64 binaries"; \
         echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
         echo ""; \
         printf '%-16s %12s  %s\n' "tool" "bytes" "identifies as"; \
-        printf '%-16s %12s  %s\n' "tgup"          "$(wc -c < tgup)"          "$line_tgup"; \
-        printf '%-16s %12s  %s\n' "stitcher"      "$(wc -c < stitcher)"      "$line_stitcher"; \
-        printf '%-16s %12s  %s\n' "normalizer"    "$(wc -c < normalizer)"    "$line_normalizer"; \
-        printf '%-16s %12s  %s\n' "subtitle_forge" "$(wc -c < subtitle_forge)" "$line_subtitle_forge"; \
-        printf '%-16s %12s  %s\n' "havaldar_core" "$(wc -c < havaldar_core)"  "$line_havaldar_core"; \
-    } > /pack/MANIFEST.txt; \
-    sha256sum tgup stitcher normalizer subtitle_forge havaldar_core > /pack/SHA256SUMS; \
+        printf '%-16s %12s  %s\n' "tgup"           "$(wc -c < tgup)"           "$(cat /tmp/probe_tgup)"; \
+        printf '%-16s %12s  %s\n' "stitcher"       "$(wc -c < stitcher)"       "$(cat /tmp/probe_stitcher)"; \
+        printf '%-16s %12s  %s\n' "normalizer"     "$(wc -c < normalizer)"     "$(cat /tmp/probe_normalizer)"; \
+        printf '%-16s %12s  %s\n' "subtitle_forge" "$(wc -c < subtitle_forge)" "$(cat /tmp/probe_subtitle_forge)"; \
+        printf '%-16s %12s  %s\n' "havaldar_core"  "$(wc -c < havaldar_core)"  "$(cat /tmp/probe_havaldar_core)"; \
+    } > /pack/MANIFEST.txt || { echo "PACK FAIL: writing MANIFEST.txt" >&2; exit 1; }; \
+    sha256sum tgup stitcher normalizer subtitle_forge havaldar_core > /pack/SHA256SUMS \
+        || { echo "PACK FAIL: sha256sum" >&2; exit 1; }; \
     for b in tgup stitcher normalizer subtitle_forge havaldar_core; do \
-        if timeout 10 ldd "$b" > /dev/null 2>&1; then echo "ERROR: $b is not static" >&2; exit 1; fi; \
+        if command -v readelf > /dev/null 2>&1; then \
+            if readelf -l "$b" 2>/dev/null | grep -q INTERP; then \
+                echo "PACK FAIL: $b has PT_INTERP, so it is dynamically linked" >&2; exit 1; \
+            fi; \
+        elif timeout 10 ldd "$b" > /dev/null 2>&1; then \
+            echo "PACK FAIL: ldd exit 0, so $b is not static" >&2; exit 1; \
+        fi; \
     done; \
+    echo "--- all five binaries are static ---"; \
     cat /pack/MANIFEST.txt
 
 
