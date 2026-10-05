@@ -35,6 +35,9 @@ cpp_accelerator/build/
 # reasons, and never a source file.
 cpp_accelerator/build_scalar/
 
+# Scratch tree written by update_kaggle_pack.ps1 (8 MB tar.gz + unpacked copy).
+_pack_stage/
+
 # Same reasoning for any other stray CMake tree.
 CMakeCache.txt
 CMakeFiles/
