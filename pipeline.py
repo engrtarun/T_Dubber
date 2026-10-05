@@ -1,4 +1,4 @@
-﻿import os
+import os
 import time
 import json
 import datetime
@@ -689,7 +689,7 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         shutil.copytree(
             mazinger_src, 
             os.path.join(dataset_dir, "mazinger"), 
-            ignore=shutil.ignore_patterns(".git"),
+            ignore=shutil.ignore_patterns(".git", ".venv*", ".pytest_cache", "site-packages"),
             dirs_exist_ok=True
         )
     bundled_mazinger = os.path.join(dataset_dir, "mazinger", "pyproject.toml")
@@ -707,7 +707,7 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         for source_file in Path(mazinger_src).rglob("*"):
             relative_path = source_file.relative_to(mazinger_src)
             if not source_file.is_file() or any(
-                part in {".git", "__pycache__"} for part in relative_path.parts
+                part in {".git", "__pycache__", ".pytest_cache", "site-packages"} or part.startswith(".venv") for part in relative_path.parts
             ):
                 continue
             archive.write(source_file, relative_path.as_posix())
