@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/tmp/ipykernel_24/419996749.py", line 116, in <cell line: 0>
+    raise RuntimeError("Output failed full-duration/media/subtitle quality checks. Inspect report.json and artifacts; it will not be reported as a completed dub.")
+RuntimeError: Output failed full-duration/media/subtitle quality checks. Inspect report.json and artifacts; it will not be reported as a completed dub.

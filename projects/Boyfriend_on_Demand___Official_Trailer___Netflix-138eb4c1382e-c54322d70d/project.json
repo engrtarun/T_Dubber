@@ -1,0 +1,17 @@
+{
+  "project_id": "Boyfriend_on_Demand___Official_Trailer___Netflix-138eb4c1382e-c54322d70d",
+  "title": "Boyfriend_on_Demand___Official_Trailer___Netflix",
+  "run_id": "c54322d70d",
+  "state": "failed",
+  "source_video": "Boyfriend_on_Demand_Official_Trailer_Netflix.mp4",
+  "source_url": "https://youtu.be/A0GqKTgSpuE?si=QKbLmeYZgk4yjQKc",
+  "source_kind": "web",
+  "source_size": 6861098,
+  "target_language": "Hindi",
+  "speaker_detection": true,
+  "created_at": "2026-10-05T07:55:24+05:30",
+  "telegram_backup": "https://t.me/tgwebcloud1/16",
+  "kernel_id": "engrtarun/dubber-worker-homura",
+  "output_video": null,
+  "report_file": null
+}

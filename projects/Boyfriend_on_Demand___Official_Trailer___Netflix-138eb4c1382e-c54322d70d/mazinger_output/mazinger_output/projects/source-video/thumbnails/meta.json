@@ -1,0 +1,50 @@
+[
+  {
+    "path": "./mazinger_output/projects/source-video/thumbnails/thumb_000_11.8s.jpg",
+    "timestamp": "00:00:11",
+    "seconds": 11.8,
+    "reason": "uniform sample"
+  },
+  {
+    "path": "./mazinger_output/projects/source-video/thumbnails/thumb_001_23.7s.jpg",
+    "timestamp": "00:00:23",
+    "seconds": 23.7,
+    "reason": "uniform sample"
+  },
+  {
+    "path": "./mazinger_output/projects/source-video/thumbnails/thumb_002_35.5s.jpg",
+    "timestamp": "00:00:35",
+    "seconds": 35.5,
+    "reason": "uniform sample"
+  },
+  {
+    "path": "./mazinger_output/projects/source-video/thumbnails/thumb_003_47.4s.jpg",
+    "timestamp": "00:00:47",
+    "seconds": 47.4,
+    "reason": "uniform sample"
+  },
+  {
+    "path": "./mazinger_output/projects/source-video/thumbnails/thumb_004_59.2s.jpg",
+    "timestamp": "00:00:59",
+    "seconds": 59.2,
+    "reason": "uniform sample"
+  },
+  {
+    "path": "./mazinger_output/projects/source-video/thumbnails/thumb_005_71.1s.jpg",
+    "timestamp": "00:01:11",
+    "seconds": 71.1,
+    "reason": "uniform sample"
+  },
+  {
+    "path": "./mazinger_output/projects/source-video/thumbnails/thumb_006_82.9s.jpg",
+    "timestamp": "00:01:22",
+    "seconds": 82.9,
+    "reason": "uniform sample"
+  },
+  {
+    "path": "./mazinger_output/projects/source-video/thumbnails/thumb_007_94.8s.jpg",
+    "timestamp": "00:01:34",
+    "seconds": 94.8,
+    "reason": "uniform sample"
+  }
+]

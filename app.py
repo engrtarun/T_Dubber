@@ -71,277 +71,12 @@ def _ensure_db_seeded():
 # AI ASSISTANT & UI HELPERS
 # -------------------------------------------------------------------------
 
-# The HTML container for the Puter.js AI Assistant.
-PUTER_AI_HTML = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Baloo+Bhai+2:wght@400;600;800&display=swap');
-#puter-container {
-  font-family: 'Baloo Bhai 2', cursive;
-  padding: 18px; 
-  border-radius: 12px; 
-  background: var(--background-fill-secondary); 
-  border: 2px dashed var(--color-accent); 
-  box-shadow: var(--shadow-drop);
-}
-.load3 .loader {
-  font-size: 5px;
-  margin: 0px 10px;
-  text-indent: -9999em;
-  width: 4em;
-  height: 4em;
-  border-radius: 50%;
-  background: var(--color-accent);
-  background: -moz-linear-gradient(left, var(--color-accent) 10%, rgba(255, 255, 255, 0) 42%);
-  background: -webkit-linear-gradient(left, var(--color-accent) 10%, rgba(255, 255, 255, 0) 42%);
-  background: -o-linear-gradient(left, var(--color-accent) 10%, rgba(255, 255, 255, 0) 42%);
-  background: -ms-linear-gradient(left, var(--color-accent) 10%, rgba(255, 255, 255, 0) 42%);
-  background: linear-gradient(to right, var(--color-accent) 10%, rgba(255, 255, 255, 0) 42%);
-  position: relative;
-  -webkit-animation: load3 1.4s infinite linear;
-  animation: load3 1.4s infinite linear;
-  -webkit-transform: translateZ(0);
-  -ms-transform: translateZ(0);
-  transform: translateZ(0);
-  display: inline-block;
-  vertical-align: middle;
-}
-.load3 .loader:before {
-  width: 50%;
-  height: 50%;
-  background: var(--color-accent);
-  border-radius: 100% 0 0 0;
-  position: absolute;
-  top: 0;
-  left: 0;
-  content: '';
-}
-.load3 .loader:after {
-  background: var(--background-fill-secondary);
-  width: 75%;
-  height: 75%;
-  border-radius: 50%;
-  content: '';
-  margin: auto;
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  right: 0;
-}
-@-webkit-keyframes load3 {
-  0% { -webkit-transform: rotate(0deg); transform: rotate(0deg); }
-  100% { -webkit-transform: rotate(360deg); transform: rotate(360deg); }
-}
-@keyframes load3 {
-  0% { -webkit-transform: rotate(0deg); transform: rotate(0deg); }
-  100% { -webkit-transform: rotate(360deg); transform: rotate(360deg); }
-}
-</style>
-<style>
-  /* Persona chips: make the Gradio radio options look like pill buttons */
-  #puter_mode_selector .wrap { display: flex; flex-wrap: wrap; gap: 8px; }
-  #puter_mode_selector label {
-    border: 1px solid var(--border-color-primary);
-    border-radius: 999px; padding: 6px 14px; cursor: pointer;
-    background: var(--background-fill-secondary);
-    transition: background 0.2s, border-color 0.2s, transform 0.1s;
-  }
-  #puter_mode_selector label:hover { transform: translateY(-1px); border-color: var(--color-accent); }
-  #puter_mode_selector input[type="radio"] { accent-color: var(--color-accent); margin-right: 6px; }
-  #puter_mode_selector input[type="radio"]:checked + span { font-weight: 800; color: var(--color-accent); }
+# Browser-side markup (top bar, clock, settings drawer) and behaviour
+# (assistant, timer, theme) live in ui_static/ as real .html/.js files.
+# Gradio strips <script> out of gr.HTML, so the script travels through
+# demo.load(js=...) at the bottom of this file.
+from ui_static import APP_JS, PUTER_AI_HTML, TOP_BAR_HTML
 
-  #puter-container { font-family: 'Baloo Bhai 2', cursive; padding: 18px; border-radius: 12px; background: var(--background-fill-secondary); border: 2px dashed var(--color-accent); box-shadow: var(--shadow-drop); max-width: 100%; }
-  @media (max-width: 640px) {
-    #puter-container { padding: 12px; font-size: 14px; }
-    #puter-history { max-height: 180px !important; }
-  }
-  .puter-chip-btn {
-    cursor: pointer; border: 1px solid var(--color-accent); background: transparent;
-    color: var(--color-accent); border-radius: 999px; padding: 4px 12px; font-size: 12px; font-weight: 700;
-  }
-  .puter-chip-btn:hover { background: var(--color-accent); color: var(--background-fill-secondary); }
-  #puter-error { display:none; background: var(--error-background-fill, rgba(255,80,80,0.12)); color: var(--error-text-color, #d33); border: 1px solid var(--error-text-color, #d33); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; }
-  #puter-history div { border-bottom: 1px dashed var(--border-color-primary); padding: 6px 0; font-size: 13px; line-height: 1.4; }
-</style>
-<div id="puter-container">
-  <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px dashed var(--border-color-primary); padding-bottom: 10px; margin-bottom: 10px; flex-wrap:wrap; gap:6px;">
-    <span style="font-size:18px;font-weight:800;color:var(--color-accent);">🤖 Puter.js Assistant</span>
-    <span style="font-size:12px;color:var(--color-accent); font-weight:bold;">● <span id="puter-countdown">Waiting for logs...</span></span>
-  </div>
-  <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
-    <button id="puter-refresh-btn" class="puter-chip-btn">🔄 Refresh now</button>
-    <button id="puter-copy-btn" class="puter-chip-btn">📋 Copy latest</button>
-    <button id="puter-scrolllogs-btn" class="puter-chip-btn">📜 Go to logs</button>
-  </div>
-  <div id="puter-error">⚠️ AI insight fetch nahi ho paya. Internet check karo. <button id="puter-retry-btn" class="puter-chip-btn" style="margin-left:8px;">Retry</button></div>
-  <div id="puter-message" style="font-size: 16px; line-height: 1.5; min-height: 60px; color: var(--body-text-color);">
-    <i>💡 Video daalo, Start dabao — phir har 30s me main Hinglish me mast updates dunga. Persona bhi badal sakte ho! 😎</i>
-  </div>
-  <div style="margin-top:10px; border-top:1px dashed var(--border-color-primary); padding-top:8px;">
-    <div style="font-size:12px; font-weight:800; color:var(--color-accent); margin-bottom:4px;">🕒 Recent updates</div>
-    <div id="puter-history" style="max-height:220px; overflow-y:auto; font-size:13px;"><i style="color:var(--body-text-color-subdued);">Abhi koi update nahi.</i></div>
-  </div>
-</div>
-"""
-
-# The JavaScript to interact with Puter.js in the browser context.
-# Gradio 6.0 does not allow <script> tags inside gr.HTML, so we inject this via demo.load().
-PUTER_JS = """
-async () => {
-    if (window.puter_fetch_interval) clearInterval(window.puter_fetch_interval);
-    if (window.puter_tick_interval) clearInterval(window.puter_tick_interval);
-    
-    if (typeof puter === 'undefined') {
-        await new Promise(resolve => {
-            let s = document.createElement('script');
-            s.src = "https://js.puter.com/v2/";
-            s.onload = resolve;
-            s.onerror = resolve;
-            document.head.appendChild(s);
-        });
-    }
-
-    if (typeof puter === 'undefined') {
-        var messageEl = document.getElementById("puter-message");
-        var statusEl = document.getElementById("puter-countdown");
-        if (messageEl) messageEl.textContent = "Puter assistant unavailable; check browser internet access.";
-        if (statusEl) statusEl.textContent = "Offline";
-        return;
-    }
-
-    var countdown = 30;
-    window.puter_request_in_flight = window.puter_request_in_flight || false;
-    window.puter_last_successful_key = window.puter_last_successful_key || "";
-
-    function updateCountdown() {
-        var logBox = document.querySelector("#log_output_box textarea");
-        var hasLogs = logBox && logBox.value && logBox.value.trim() !== "";
-        
-        var countdownEl = document.getElementById("puter-countdown");
-        if (countdownEl) {
-            if (!hasLogs) {
-                countdownEl.innerText = "Waiting for logs...";
-                return;
-            }
-            if (countdown > 0) {
-                countdownEl.innerText = "Next update in " + countdown + "s...";
-                countdown--;
-            }
-        }
-    }
-
-    async function fetchPuterData() {
-        var logBox = document.querySelector("#log_output_box textarea");
-        if (!logBox) return;
-        var logs = logBox.value;
-        if (!logs || logs.trim() === "") return;
-        
-        // Read persona from the UI
-        var persona = "Funny";
-        var radioChecked = document.querySelector('#puter_mode_selector input[type="radio"]:checked');
-        if (radioChecked) {
-            persona = radioChecked.nextElementSibling ? radioChecked.nextElementSibling.innerText : radioChecked.value;
-        }
-
-        var recentLogs = logs.split('\\n').slice(-10).join('\\n');
-        
-        var promptMap = {
-            "Funny": "You are a highly entertaining and funny Indian AI assistant helping a user with a video dubbing tool. Read the following logs and explain what is happening in 1 or 2 lines. STRICTLY RESPOND IN HINGLISH (Hindi words written in English alphabet). DO NOT USE DEVNAGARI SCRIPT. Make it casual and funny.\\nLogs:\\n",
-            "Serious": "You are a professional DevOps AI assistant. Read the following logs and provide a 1-line status update. STRICTLY RESPOND IN HINGLISH (Hindi words written in English alphabet). DO NOT USE DEVNAGARI SCRIPT.\\nLogs:\\n",
-            "Roast": "You are a savage Indian AI assistant who loves roasting the user. Read the logs and explain the status while casually roasting the user in 1-2 lines. STRICTLY RESPOND IN HINGLISH (Hindi words written in English alphabet). DO NOT USE DEVNAGARI SCRIPT.\\nLogs:\\n"
-        };
-        var promptStr = promptMap[persona] || promptMap["Funny"];
-        var prompt = promptStr + recentLogs;
-        var requestKey = persona + "\\n" + recentLogs;
-        if (window.puter_request_in_flight || requestKey === window.puter_last_successful_key) return;
-        window.puter_request_in_flight = true;
-        
-        try {
-            var el = document.getElementById("puter-message");
-            var countdownEl = document.getElementById("puter-countdown");
-            
-            if (el) {
-                el.replaceChildren();
-                var spinner = document.createElement('span');
-                spinner.className = 'load3';
-                spinner.textContent = '⏳';
-                var loading = document.createElement('span');
-                loading.style.color = 'var(--color-accent)';
-                loading.style.fontWeight = 'bold';
-                loading.textContent = ' Fetching AI insight...';
-                el.append(spinner, loading);
-            }
-            if (countdownEl) {
-                countdownEl.innerText = "Analyzing...";
-            }
-            
-            var response = await puter.ai.chat(prompt);
-            countdown = 30;
-            window.puter_last_successful_key = requestKey;
-            var errEl = document.getElementById("puter-error");
-            if (errEl) errEl.style.display = "none";
-            var el = document.getElementById("puter-message");
-            var text = (typeof response === 'object' && response.message) ? response.message.content : String(response);
-            text = String(text);
-            window.puter_last_text = text;
-            // push to history (max 5), newest first
-            window.puter_history = window.puter_history || [];
-            var ts = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-            window.puter_history.unshift({persona: persona, ts: ts, text: text});
-            if (window.puter_history.length > 5) window.puter_history.pop();
-            var histEl = document.getElementById("puter-history");
-            if (histEl) {
-                histEl.replaceChildren();
-                window.puter_history.forEach(function(h){
-                    var d = document.createElement('div');
-                    d.innerHTML = '<b>[' + h.ts + '] ' + h.persona + ':</b> ' + h.text.replace(/</g,'&lt;');
-                    histEl.appendChild(d);
-                });
-            }
-            if (el) {
-                el.replaceChildren();
-                var i = 0;
-                function typeWriter() {
-                    if (i >= text.length) return;
-                    var ch = text[i++];
-                    if (ch === '\\n') { el.appendChild(document.createElement('br')); }
-                    else { el.appendChild(document.createTextNode(ch)); }
-                    setTimeout(typeWriter, ch === '.' || ch === '!' || ch === '?' ? 30 : 10);
-                }
-                typeWriter();
-            }
-        } catch (e) {
-            console.error("Puter Error:", e);
-            countdown = 10;
-            var errEl = document.getElementById("puter-error");
-            if (errEl) errEl.style.display = "block";
-        } finally {
-            window.puter_request_in_flight = false;
-        }
-    }
-
-    // Wire up buttons
-    var rb = document.getElementById("puter-refresh-btn"); if (rb) rb.onclick = function(){ countdown = 0; fetchPuterData(); };
-    var rt = document.getElementById("puter-retry-btn"); if (rt) rt.onclick = function(){ var e=document.getElementById("puter-error"); if(e) e.style.display="none"; countdown = 0; fetchPuterData(); };
-    var cp = document.getElementById("puter-copy-btn"); if (cp) cp.onclick = function(){ if(window.puter_last_text && navigator.clipboard) navigator.clipboard.writeText(window.puter_last_text); };
-    var sc = document.getElementById("puter-scrolllogs-btn"); if (sc) sc.onclick = function(){ var b=document.getElementById("log_output_box"); if(b) b.scrollIntoView({behavior:'smooth'}); };
-
-    // Add emoji prefixes to persona chips
-    var emojiMap = {"Funny":"😄","Serious":"🧐","Roast":"🔥"};
-    document.querySelectorAll('#puter_mode_selector label span').forEach(function(s){
-        var t = s.textContent.trim();
-        if (emojiMap[t] && s.textContent.indexOf(emojiMap[t]) === -1) s.textContent = emojiMap[t] + " " + t;
-    });
-
-    window.puter_tick_interval = setInterval(updateCountdown, 1000);
-    window.puter_fetch_interval = setInterval(() => {
-        var logBox = document.querySelector("#log_output_box textarea");
-        if (logBox && logBox.value && logBox.value.trim() !== "" && countdown <= 0) {
-            fetchPuterData();
-        }
-    }, 1000);
-}
-"""
 
 def parse_report_metrics(report_path):
     if not report_path or not os.path.exists(report_path):
@@ -2122,12 +1857,229 @@ SUPPORT_TABLE_HTML = f"""
 </details>
 """
 
+# -------------------------------------------------------------------------
+# DATABASE TAB: a read-only browser over t_dubber.db
+# -------------------------------------------------------------------------
+# "SQLite samajh nahi aata" is a UI problem, not a user problem: the file is
+# invisible until something shows it. Everything here only reads (through
+# db.describe_table / db.query_table) and every cell is escaped - a value
+# containing markup is text, never markup.
+
+_DB_CSS = """
+<style>
+.tdb-note { font-size: 13px; line-height: 1.55; color: var(--body-text-color-subdued); }
+.tdb-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 6px 0 12px; }
+.tdb-card { background: var(--background-fill-secondary); border: 1px solid var(--border-color-primary);
+            border-radius: 10px; padding: 10px 12px; text-align: center; }
+.tdb-card .v { font-size: 20px; font-weight: 800; color: var(--td-accent, var(--color-accent));
+               font-variant-numeric: tabular-nums; word-break: break-all; }
+.tdb-card .k { font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+               color: var(--body-text-color-subdued); margin-top: 4px; }
+.tdb-scroll { overflow-x: auto; border: 1px solid var(--border-color-primary); border-radius: 10px; }
+table.tdb { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.tdb th, table.tdb td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--border-color-primary);
+                             vertical-align: top; }
+table.tdb thead th { position: sticky; top: 0; background: var(--background-fill-secondary);
+                     z-index: 1; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px;
+                     color: var(--td-accent, var(--color-accent)); }
+table.tdb tbody tr:nth-child(odd) { background: color-mix(in srgb, var(--background-fill-secondary) 45%, transparent); }
+table.tdb tbody tr:hover { background: color-mix(in srgb, var(--td-accent, var(--color-accent)) 12%, transparent); }
+.tdb-val { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; word-break: break-word; }
+.tdb-num { text-align: right; }
+.tdb-null { color: var(--body-text-color-subdued); font-style: italic; }
+.tdb-tag { display: inline-block; font-size: 10.5px; font-weight: 800; border: 1px solid var(--td-accent, var(--color-accent));
+           color: var(--td-accent, var(--color-accent)); border-radius: 999px; padding: 1px 7px; margin-left: 6px; }
+.tdb-pager { display: flex; align-items: center; gap: 10px; font-size: 12.5px; font-weight: 700;
+             color: var(--body-text-color-subdued); margin: 4px 0 8px; }
+.tdb-empty { padding: 16px; text-align: center; color: var(--body-text-color-subdued); font-style: italic; }
+.tdb-error { border: 1px solid var(--error-text-color, #d33); border-radius: 8px; padding: 10px 12px;
+             color: var(--error-text-color, #d33); font-size: 13px; }
+.tdb-schema-row:hover { cursor: default; }
+</style>
+"""
+
+
+def _db_error_html(exc: Exception) -> str:
+    return f'<div class="tdb-error">⚠️ Database read failed: {html.escape(str(exc))}</div>'
+
+
+def _db_value_html(value, limit: int = 160) -> str:
+    """Render one cell. Truncated for display, full text kept as a tooltip."""
+    if value is None:
+        return '<span class="tdb-null">NULL</span>'
+    if isinstance(value, bool):
+        return "✔ yes" if value else "✘ no"
+    text = value if isinstance(value, str) else str(value)
+    numeric = isinstance(value, (int, float))
+    if len(text) > limit:
+        shown = html.escape(text[:limit]) + "…"
+        return (f'<span class="tdb-val{" tdb-num" if numeric else ""}" '
+                f'title="{html.escape(text, quote=True)}">{shown}</span>')
+    return f'<span class="tdb-val{" tdb-num" if numeric else ""}">{html.escape(text)}</span>'
+
+
+def _db_table_choices() -> list:
+    try:
+        return db.table_names()
+    except Exception:  # noqa: BLE001 - a broken database must not break the UI
+        logger.exception("Could not list tables for the Database tab")
+        return []
+
+
+def _db_overview_html() -> str:
+    """Cards for the file itself, plus a short 'what is this?' paragraph."""
+    try:
+        info = db.database_overview()
+    except Exception as exc:  # noqa: BLE001
+        return _DB_CSS + _db_error_html(exc)
+
+    biggest = max(info["row_counts"].items(), key=lambda kv: kv[1] or 0, default=None)
+    cards = [
+        ("File", os.path.basename(info["path"])),
+        ("Size", human_bytes(info["size_bytes"])),
+        ("Tables", str(info["tables"])),
+        ("Rows", str(info["total_rows"])),
+        ("Schema v", str(info["schema_version"])),
+        ("Journal", info["journal_mode"].upper()),
+    ]
+    card_html = "".join(
+        f'<div class="tdb-card"><div class="v">{html.escape(value)}</div>'
+        f'<div class="k">{html.escape(label)}</div></div>'
+        for label, value in cards
+    )
+    biggest_html = (
+        f'Largest table: <b>{html.escape(biggest[0])}</b> ({biggest[1]:,} rows)'
+        if biggest and biggest[1] else ""
+    )
+    return (
+        _DB_CSS
+        + '<div class="tdb-cards">' + card_html + "</div>"
+        + f'<p class="tdb-note">📄 <code>{html.escape(info["path"])}</code> — '
+          "app ka pura memory. Har run, har Telegram upload, har error yahin "
+          "SQLite me pada hai. Neeche koi bhi table chuno: uska matlab, har "
+          "column ka kaam, aur rows. <b>Sirf padhne ke liye</b> — is tab se "
+          "kuch bhi change nahi hota. " + biggest_html + "</p>"
+    )
+
+
+def _db_schema_html(table: str) -> str:
+    """What the table is for, what each column means, how tables link."""
+    try:
+        info = db.describe_table(table)
+    except Exception as exc:  # noqa: BLE001
+        return _DB_CSS + _db_error_html(exc)
+
+    rows = []
+    for column in info["columns"]:
+        tags = ""
+        if column["pk"]:
+            tags += '<span class="tdb-tag">PK</span>'
+        if column["notnull"]:
+            tags += '<span class="tdb-tag">NOT NULL</span>'
+        default = (
+            f' <span class="tdb-null">default {html.escape(str(column["default"]))}</span>'
+            if column["default"] is not None else ""
+        )
+        rows.append(
+            f'<tr class="tdb-schema-row"><td><b>{html.escape(column["name"])}</b>{tags}</td>'
+            f'<td>{html.escape(column["type"])}</td>'
+            f"<td>{html.escape(column['help'])}{default}</td></tr>"
+        )
+
+    links = ""
+    if info["foreign_keys"]:
+        link_bits = ", ".join(
+            f'<code>{html.escape(link["column"])}</code> → '
+            f'<code>{html.escape(link["ref_table"])}.{html.escape(link["ref_column"])}</code> '
+            f'(on delete {html.escape(link["on_delete"].lower())})'
+            for link in info["foreign_keys"]
+        )
+        links += f'<p class="tdb-note">🔗 Links: {link_bits}</p>'
+    if info["indexes"]:
+        index_bits = ", ".join(
+            f'<code>{html.escape(ix["name"])}</code>' + (" (unique)" if ix["unique"] else "")
+            for ix in info["indexes"]
+        )
+        links += f'<p class="tdb-note">📇 Indexes: {index_bits}</p>'
+
+    description = (
+        f'<p class="tdb-note">{html.escape(info["description"])}</p>'
+        if info["description"] else ""
+    )
+    return (
+        _DB_CSS
+        + f'<p style="font-size:15px; font-weight:800; margin:10px 0 2px;">'
+          f'📋 <code>{html.escape(info["name"])}</code></p>'
+        + description
+        + '<div class="tdb-scroll"><table class="tdb"><thead><tr>'
+          "<th>Column</th><th>Type</th><th>Meaning</th></tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody></table></div>"
+        + links
+    )
+
+
+def _db_pager_html(result: dict) -> str:
+    if not result["total"]:
+        return '<div class="tdb-pager">0 rows</div>'
+    first = (result["page"] - 1) * result["per_page"] + 1
+    last = min(result["total"], result["page"] * result["per_page"])
+    search = f' · filter "{html.escape(result["search"])}"' if result["search"] else ""
+    return (
+        f'<div class="tdb-pager">Showing {first}–{last} of {result["total"]} rows '
+        f'· page {result["page"]}/{result["pages"]}{search}</div>'
+    )
+
+
+def _db_rows_html(result: dict) -> str:
+    """The rows themselves, as a wide scrollable table."""
+    if not result["rows"]:
+        return _DB_CSS + '<div class="tdb-empty">Is filter par koi row nahi mili.</div>'
+
+    head = "".join(f"<th>{html.escape(column)}</th>" for column in result["columns"])
+    body = []
+    for row in result["rows"]:
+        cells = "".join(
+            f"<td>{_db_value_html(row.get(column))}</td>" for column in result["columns"]
+        )
+        body.append(f"<tr>{cells}</tr>")
+    return (
+        _DB_CSS
+        + '<div class="tdb-scroll"><table class="tdb"><thead><tr>'
+        + head
+        + "</tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table></div>"
+    )
+
+
+def render_db_tab(table: str, page=1, search: str = "") -> tuple:
+    """(pager, rows, schema, page) for the Database tab - one entry point.
+
+    Every failure mode lands in the HTML rather than raising, because a
+    Gradio event that raises replaces the tab with a red stack trace.
+    """
+    if not table:
+        blank = _DB_CSS + '<div class="tdb-empty">Table chuno (upar list hai).</div>'
+        return blank, blank, blank, 1
+    try:
+        result = db.query_table(table, search=search, page=page, per_page=25)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Database tab could not read %s", table)
+        error = _db_error_html(exc)
+        return error, error, _db_schema_html(table), 1
+    return _db_pager_html(result), _db_rows_html(result), _db_schema_html(table), result["page"]
+
+
 # Moved theme out of Blocks constructor for Gradio 6.0+ compatibility
 with gr.Blocks(title="Tarun Dubber AI") as demo:
 
+    # Sticky top bar: brand, live clock + date, running-job timer, and the
+    # settings drawer (theme / accent / scale / clock / assistant defaults).
+    gr.HTML(TOP_BAR_HTML)
+
     gr.Markdown(
         """
-        # 🎬 Tarun Dubber AI
         ### Movie dubbing on Kaggle GPU, with a Telegram cloud backup taken first
         """
     )
@@ -2178,7 +2130,8 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
                         )
                         gr.HTML(BACKUP_BADGE)
                         start_button = gr.Button(
-                            "🚀 Start Dubbing", variant="primary", size="lg"
+                            "🚀 Start Dubbing", variant="primary", size="lg",
+                            elem_id="td-start-btn",
                         )
 
                 with gr.Column(scale=2):
@@ -2452,8 +2405,88 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
                     outputs=[reattach_log, history_video, history_metrics, history_backup],
                 )
 
-    # Attach the JavaScript for Puter AI here (fixes HTML script warning and guarantees execution)
-    demo.load(js=PUTER_JS)
+        # --- TAB 4: Database (SQLite, read-only) ---
+        with gr.Tab("🗄️ Database"):
+            gr.Markdown(
+                "### 🗄️ Database (SQLite)\n\n"
+                "`t_dubber.db` ko yahan se browse karo — kaunsi tables hain, "
+                "har column ka kya matlab hai, aur usme kya pada hai. "
+                "**Ye tab sirf padhta hai; kuch bhi change nahi hota.**"
+            )
+
+            db_overview_ui = gr.HTML(_db_overview_html())
+
+            _db_tables = _db_table_choices()
+            _initial_table = _db_tables[0] if _db_tables else ""
+            _pager0, _rows0, _schema0, _page0 = render_db_tab(_initial_table, 1, "")
+
+            with gr.Row():
+                with gr.Column(scale=1):
+                    db_table = gr.Dropdown(
+                        choices=_db_tables,
+                        value=_initial_table or None,
+                        label="Table",
+                        elem_id="db-table-picker",
+                    )
+                    db_search = gr.Textbox(
+                        label="Search (Enter dabao)",
+                        placeholder="har column par LIKE filter…",
+                        lines=1,
+                    )
+                    with gr.Row():
+                        db_prev_btn = gr.Button("⬅ Prev")
+                        db_next_btn = gr.Button("Next ➡")
+                        db_refresh_btn = gr.Button("🔄 Refresh", variant="secondary")
+                    gr.Markdown(
+                        "**Padhne ka tareeka:** pehle *Meaning* column padho — "
+                        "usme har column ka kaam plain English me likha hai. "
+                        "Links wali line batati hai ye table kis se juda hai."
+                    )
+                with gr.Column(scale=2):
+                    db_pager_ui = gr.HTML(_pager0)
+                    db_rows_ui = gr.HTML(_rows0)
+                    db_schema_ui = gr.HTML(_schema0)
+
+            db_page = gr.State(_page0)
+
+            def _db_change(table, search):
+                return render_db_tab(table, 1, search)
+
+            def _db_refresh(table, page, search):
+                return (_db_overview_html(),) + render_db_tab(table, page, search)
+
+            _db_outputs = [db_pager_ui, db_rows_ui, db_schema_ui, db_page]
+
+            db_table.change(
+                fn=_db_change,
+                inputs=[db_table, db_search],
+                outputs=_db_outputs,
+            )
+            db_search.submit(
+                fn=_db_change,
+                inputs=[db_table, db_search],
+                outputs=_db_outputs,
+            )
+            db_prev_btn.click(
+                fn=lambda t, p, s: render_db_tab(t, int(p or 1) - 1, s),
+                inputs=[db_table, db_page, db_search],
+                outputs=_db_outputs,
+            )
+            db_next_btn.click(
+                fn=lambda t, p, s: render_db_tab(t, int(p or 1) + 1, s),
+                inputs=[db_table, db_page, db_search],
+                outputs=_db_outputs,
+            )
+            db_refresh_btn.click(
+                fn=_db_refresh,
+                inputs=[db_table, db_page, db_search],
+                outputs=[db_overview_ui, *_db_outputs],
+            )
+
+    # Attach the JavaScript here (gr.HTML strips <script>, demo.load does not).
+    # It owns the settings drawer, the live clock, the job timer and the
+    # Puter.js assistant - see ui_static/app.js.
+    demo.load(js=APP_JS)
 
 if __name__ == "__main__":
     # In Gradio 6.0, theme goes in launch()

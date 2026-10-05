@@ -1152,6 +1152,295 @@ def channel_quota_status(day: str = None) -> list:
     return status
 
 
+# ---------------------------------------------------------------------------
+# Read-only introspection for the Database tab
+# ---------------------------------------------------------------------------
+# SQLite stays scary until somebody opens it. These helpers expose the file
+# the way a person reads it - which tables exist, what every column means,
+# and one paginated page of rows - so the UI can *explain* the database
+# instead of only naming it. Read-only on purpose: nothing here ever writes.
+
+TABLE_HELP = {
+    "projects": "Ek row = ek dubbing run. Status, current stage, source video, "
+                "output video aur Telegram backup yahin rehte hain.",
+    "telegram_archives": "Har upload ka record: kaunsi file, kitne bytes, kaunse "
+                         "channel me, aur wo complete hui ya nahi. Same file same "
+                         "channel par dubara upload nahi hoti (fingerprint).",
+    "telegram_parts": "Badi file ke hisse. 90 GB = 49 parts + manifest, aur yahan "
+                      "har part ka message id, offset aur sha256 hai, taaki restore "
+                      "verify ho sake.",
+    "media_metadata": "Source ke baare me jo link se mila: page URL, title, "
+                      "duration, thumbnail aur extractor ka naam.",
+    "pipeline_stages": "Ek run ke 9 stages - kaunsa chal raha tha, kab shuru, kab "
+                       "khatam, kitna time laga. Resume aur ETA yahin se bante hain.",
+    "quality_metrics": "Har stage ki measurements (row per metric) - trends ko "
+                       "plain SQL me query karne ke liye JSON ke bajaye.",
+    "run_errors": "Structured error log: kaunsa stage fail hua, kyun, aur kitni "
+                  "baar retry hua.",
+    "voice_samples": "Reusable voice references (global across runs) - naam, "
+                     "language, gender aur file path.",
+    "speakers": "Ek run me detect hue speakers aur unhe kaunsi voice sample mili.",
+    "job_queue": "Batch queue. depends_on_id se episodes ek session me sequence "
+                 "me chalte hain.",
+    "kaggle_sweeper_logs": "space_sweeper.py ka audit trail - kitni space kis "
+                           "cheez se bachi, JSONL se yahan drain hoke.",
+    "channel_daily_quota": "Har channel ka aaj ka upload quota. Ek row per "
+                           "(channel, day), isliye midnight me rollover apne aap "
+                           "ho jata hai.",
+}
+
+COLUMN_HELP = {
+    "projects.id": "Project id: <movie>-<fingerprint>-<run>, har run ka unique naam.",
+    "projects.status": "processing | done | failed | archived.",
+    "projects.current_stage": "Abhi ka stage number (0..8), pipeline_stages se juda.",
+    "projects.backup_link": "Telegram par bana hua archive link.",
+    "projects.kernel_id": "Kaggle kernel jisme ye run chal raha tha (reattach isi se).",
+    "telegram_archives.fingerprint": "SHA-256 of the file - isi se duplicate upload rokta hai.",
+    "telegram_archives.channel": "Kaunse Telegram channel me ye gaya (balancer ka choice).",
+    "telegram_archives.chunked": "1 = file ko parts me toda gaya.",
+    "telegram_archives.manifest_link": "Manifest message ka link - restore isi se shuru hota hai.",
+    "telegram_parts.archive_id": "FK -> telegram_archives.id (kaunsi file ka ye part hai).",
+    "telegram_parts.message_id": "Telegram message id jisme ye part pada hai.",
+    "telegram_parts.offset_bytes": "File me is part ka byte offset.",
+    "telegram_parts.sha256": "Is part ka checksum - restore par verify hota hai.",
+    "pipeline_stages.project_id": "FK -> projects.id (ON DELETE CASCADE).",
+    "pipeline_stages.status": "pending | running | success | done | failed | skipped.",
+    "pipeline_stages.duration_sec": "Stage kitna chala (seconds).",
+    "quality_metrics.passed": "1 = threshold pass, 0 = fail, NULL = sirf measurement.",
+    "run_errors.retry_count": "Kitni baar dobara try kiya gaya.",
+    "speakers.voice_sample_id": "FK -> voice_samples.id (konsi voice lagani hai).",
+    "job_queue.depends_on_id": "FK -> job_queue.id (pehle ye job khatam honi chahiye).",
+    "job_queue.status": "queued | running | done | failed.",
+    "kaggle_sweeper_logs.bytes_freed": "Is action se kitni space bachi (bytes).",
+    "channel_daily_quota.used_mb": "Aaj is channel me kitne MB ja chuke.",
+    "channel_daily_quota.allocations": "Kitni baar quota ke against slot diya gaya.",
+    "media_metadata.source_sha256": "Source file ka checksum (identity ke liye).",
+}
+
+# Fallbacks for the rest: the point is that a column is never just a name.
+_ID_HELP = "Row identifier (primary key)."
+
+# Whole-word answers for columns whose name is not self-explanatory.
+_WORD_HELP = {
+    "id": _ID_HELP,
+    "title": "Human-readable title",
+    "name": "Human-readable name",
+    "message": "Status ya failure ka message",
+    "detail": "Extra detail (measurement ke saath)",
+    "description": "Free-text note",
+    "error": "Error text (NULL = koi error nahi)",
+    "day": "Calendar day, YYYY-MM-DD (quota isi par rollover hoti hai)",
+    "priority": "Lower number = pehle chalega",
+    "ref": "Kis cheez ke liye (file / archive / project ka reference)",
+    "kind": "Cheez ka type (video, audio, manifest...)",
+    "action": "Sweeper ne kya kiya (delete, keep...)",
+    "language": "Bhasha ka code ya naam",
+    "gender": "Voice ka labelled gender (unknown ho sakta hai)",
+    "chunked": "1 = file ko parts me toda gaya",
+    "target_language": "Dubbing ki target language",
+    "current_stage": "Stage number (0..8) jis par run khada hai",
+    "speaker_detection": "1 = multi-speaker detection on tha",
+    "status": "State machine value (jaise processing / done / failed)",
+    "state": "State machine value (jaise uploading / complete / error)",
+    "filename": "File ka naam (path nahi)",
+    "extractor": "Kis extractor ne link resolve kiya (yt-dlp...)",
+    "uploader": "Source platform par uploader ka naam",
+    "timestamp": "Timestamp (ISO-8601)",
+    "channel": "Telegram channel jisme upload gaya",
+    "stage_name": "Stage ka naam (readable form)",
+}
+
+# Suffix rules: they explain the majority of columns without a 150-row table.
+_SUFFIX_HELP = (
+    ("_sha256", "SHA-256 checksum of the bytes"),
+    ("_kind", "Category of the thing"),
+    ("_type", "Type"),
+    ("_label", "Label (jaise speaker ka naam)"),
+    ("_name", "Naam"),
+    ("_title", "Human-readable title"),
+    ("_video", "Video file path"),
+    ("_path", "File path"),
+    ("_file", "File path"),
+    ("_error", "Error text (NULL = koi error nahi)"),
+    ("_count", "Count"),
+    ("_number", "Number / index"),
+    ("_size", "Size (is column ke unit me)"),
+    ("_value", "Measured value"),
+    ("_sec", "Seconds"),
+    ("_bytes", "Size in bytes"),
+    ("_mb", "Megabytes"),
+    ("_link", "Clickable URL"),
+    ("_url", "URL"),
+    ("_id", "Identifier - dusre table se juda hua (foreign key)"),
+    ("_at", "Timestamp (ISO-8601)"),
+)
+
+
+def _column_help(table: str, column: str) -> str:
+    """Plain-English meaning of one column: specific hint first, then rules.
+
+    Every column of every table ends up with something - a Database tab that
+    shows a name and no meaning is exactly the thing that made SQLite feel
+    unreadable in the first place.
+    """
+    specific = COLUMN_HELP.get(f"{table}.{column}")
+    if specific:
+        return specific
+    generic = COLUMN_HELP.get(column)
+    if generic:
+        return generic
+
+    lowered = column.lower()
+    word = _WORD_HELP.get(lowered)
+    if word:
+        return word
+    for suffix, text in _SUFFIX_HELP:
+        if lowered.endswith(suffix):
+            return text
+    return "Value"
+
+
+def _ident(name: str) -> str:
+    """Quote a table name that already came out of sqlite_master.
+
+    The name is validated against ``table_names()`` before this is ever
+    called; quoting is the second lock on the same door.
+    """
+    return '"' + name.replace('"', '""') + '"'
+
+
+def table_names() -> list:
+    """User tables in the database, sorted (sqlite's own tables excluded)."""
+    conn = connect()
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ).fetchall()
+    return [row["name"] for row in rows]
+
+
+def _require_table(name: str) -> str:
+    """Resolve a caller-supplied table name or raise ValueError."""
+    if not isinstance(name, str):
+        raise ValueError("table name must be a string")
+    known = table_names()
+    if name not in known:
+        raise ValueError(f"no such table: {name!r} (known: {', '.join(known)})")
+    return name
+
+
+def database_overview() -> dict:
+    """File-level facts for the Database tab header cards."""
+    conn = connect()
+    counts = {}
+    for name in table_names():
+        try:
+            counts[name] = int(
+                conn.execute(f"SELECT COUNT(*) AS n FROM {_ident(name)}").fetchone()["n"]
+            )
+        except sqlite3.Error:  # a corrupt table must not hide the others
+            counts[name] = -1
+    try:
+        size = os.path.getsize(DB_PATH)
+    except OSError:
+        size = 0
+    return {
+        "path": DB_PATH,
+        "size_bytes": size,
+        "schema_version": int(conn.execute("PRAGMA user_version").fetchone()[0]),
+        "journal_mode": str(conn.execute("PRAGMA journal_mode").fetchone()[0]),
+        "foreign_keys": bool(conn.execute("PRAGMA foreign_keys").fetchone()[0]),
+        "tables": len(counts),
+        "total_rows": sum(v for v in counts.values() if v > 0),
+        "row_counts": counts,
+    }
+
+
+def describe_table(name: str) -> dict:
+    """Columns, types, keys and help text for one table."""
+    conn = connect()
+    name = _require_table(name)
+    ident = _ident(name)
+    columns = []
+    for row in conn.execute(f"PRAGMA table_info({ident})").fetchall():
+        column = dict(row)
+        columns.append({
+            "name": column["name"],
+            "type": column["type"] or "ANY",
+            "notnull": bool(column["notnull"]),
+            "pk": bool(column["pk"]),
+            "default": column["dflt_value"],
+            "help": _column_help(name, column["name"]),
+        })
+
+    keys = []
+    for row in conn.execute(f"PRAGMA foreign_key_list({ident})").fetchall():
+        keys.append({
+            "column": row["from"],
+            "ref_table": row["table"],
+            "ref_column": row["to"],
+            "on_delete": row["on_delete"],
+        })
+
+    indexes = []
+    for row in conn.execute(f"PRAGMA index_list({ident})").fetchall():
+        if row["origin"] == "pk":  # the primary key is already shown above
+            continue
+        indexes.append({"name": row["name"], "unique": bool(row["unique"])})
+
+    return {
+        "name": name,
+        "description": TABLE_HELP.get(name, ""),
+        "columns": columns,
+        "foreign_keys": keys,
+        "indexes": indexes,
+    }
+
+
+def query_table(name: str, search: str = "", page: int = 1, per_page: int = 25) -> dict:
+    """One page of rows, optionally filtered by a LIKE search over all columns.
+
+    Values are returned as JSON-safe dicts so the UI can render them; the
+    search is fully parameterised (the pattern is bound, never interpolated).
+    """
+    conn = connect()
+    name = _require_table(name)
+    ident = _ident(name)
+    columns = [column["name"] for column in describe_table(name)["columns"]]
+
+    per_page = max(1, min(int(per_page), 200))
+    page = max(1, int(page))
+
+    where, params = "", []
+    term = (search or "").strip()
+    if term and columns:
+        escaped = (term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+        clauses = [f'CAST({_ident(c)} AS TEXT) LIKE ? ESCAPE "\\"' for c in columns]
+        where = " WHERE " + " OR ".join(clauses)
+        params = [f"%{escaped}%"] * len(clauses)
+
+    total = int(conn.execute(f"SELECT COUNT(*) AS n FROM {ident}{where}", params).fetchone()["n"])
+    pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, pages)
+    offset = (page - 1) * per_page
+
+    rows = conn.execute(
+        f"SELECT * FROM {ident}{where} ORDER BY rowid LIMIT ? OFFSET ?",
+        [*params, per_page, offset],
+    ).fetchall()
+
+    return {
+        "table": name,
+        "columns": columns,
+        "rows": [dict(row) for row in rows],
+        "total": total,
+        "page": page,
+        "pages": pages,
+        "per_page": per_page,
+        "search": term,
+    }
+
+
 if __name__ == "__main__":
     conn = connect()
     print("database :", DB_PATH)

@@ -1,0 +1,324 @@
+<style>
+/* =========================================================================
+   Tarun Dubber - top bar, live clock, job timer, settings panel + theme
+   Injected with gr.HTML(). No script tags in here: Gradio refuses to run
+   those from gr.HTML, so all behaviour lives in ui_static/app.js (load).
+   ========================================================================= */
+
+/* ----------------------------------------------------------- design tokens */
+html {
+  --td-zoom: 1;
+  --td-accent: #7c5cff;
+  --td-radius: 14px;
+}
+html[data-td-theme="dark"] { --td-accent: #8b7bff; }
+
+/* Scale slider drives this. zoom keeps layout intact (no transform overlap). */
+.gradio-container { zoom: var(--td-zoom); }
+
+/* --------------------------------------------------------- dark palette */
+html[data-td-theme="dark"] {
+  color-scheme: dark;
+  --background-fill-primary: #0d1117 !important;
+  --background-fill-secondary: #161b22 !important;
+  --background-fill-secondary-hover: #1f2632 !important;
+  --body-background-fill: #0d1117 !important;
+  --body-text-color: #e6edf3 !important;
+  --body-text-color-subdued: #9aa4b2 !important;
+  --border-color-primary: #2b3240 !important;
+  --border-color-secondary: #232a36 !important;
+  --block-background-fill: #11161d !important;
+  --block-border-color: #2b3240 !important;
+  --block-label-text-color: #9aa4b2 !important;
+  --input-background-fill: #0d1117 !important;
+  --input-border-color: #2b3240 !important;
+  --button-secondary-background-fill: #161b22 !important;
+  --button-secondary-background-fill-hover: #1f2632 !important;
+  --button-secondary-border-color: #2b3240 !important;
+  --button-primary-text-color: #0d1117 !important;
+  --checkbox-background-color: #0d1117 !important;
+  --shadow-drop: none !important;
+  --color-accent: var(--td-accent) !important;
+}
+html[data-td-theme="dark"] body,
+html[data-td-theme="dark"] .gradio-container,
+html[data-td-theme="dark"] main {
+  background-color: #0d1117 !important;
+  color: #e6edf3 !important;
+}
+html[data-td-theme="dark"] pre,
+html[data-td-theme="dark"] code {
+  background: #0b0f14 !important;
+  color: #e6edf3 !important;
+}
+
+html[data-td-theme="light"] { color-scheme: light; }
+
+/* ------------------------------------------------------------ top bar */
+.td-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin: -10px -6px 6px;
+  border-bottom: 2px solid var(--td-accent);
+  border-radius: 12px 12px 0 0;
+  background: color-mix(in srgb, var(--background-fill-secondary) 90%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-drop);
+}
+.td-brand { display: flex; align-items: baseline; gap: 8px; font-family: 'Baloo Bhai 2', system-ui, sans-serif; }
+.td-brand .td-logo { font-size: 22px; }
+.td-brand b { font-size: 20px; letter-spacing: 0.3px; color: var(--body-text-color); }
+.td-brand em { font-style: normal; color: var(--td-accent); font-weight: 800; }
+.td-brand .td-sub { font-size: 12px; color: var(--body-text-color-subdued); }
+
+.td-clock {
+  margin-left: auto;
+  text-align: right;
+  line-height: 1.15;
+  padding: 4px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color-primary);
+  background: var(--background-fill-secondary);
+}
+.td-clock-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--td-accent);
+}
+.td-clock-date { font-size: 11.5px; color: var(--body-text-color-subdued); }
+
+.td-job {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--border-color-primary);
+  background: var(--background-fill-secondary);
+}
+.td-job-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--body-text-color);
+}
+.td-job-note { font-size: 11px; color: var(--body-text-color-subdued); }
+.td-job.is-live { border-color: var(--td-accent); border-style: solid; }
+.td-job.is-live .td-job-time { color: var(--td-accent); }
+
+.td-btn {
+  cursor: pointer;
+  border: 1px solid var(--td-accent);
+  background: transparent;
+  color: var(--td-accent);
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  transition: transform 0.12s, background 0.18s, color 0.18s;
+}
+.td-btn:hover { background: var(--td-accent); color: #fff; transform: translateY(-1px); }
+.td-btn.ghost { border-color: var(--border-color-primary); color: var(--body-text-color-subdued); }
+.td-btn.ghost:hover { background: var(--background-fill-secondary-hover); color: var(--body-text-color); }
+button.td-mini {
+  cursor: pointer;
+  border: 1px solid var(--border-color-primary);
+  background: transparent;
+  color: var(--body-text-color-subdued);
+  border-radius: 8px;
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+  line-height: 1;
+}
+button.td-mini:hover { border-color: var(--td-accent); color: var(--td-accent); }
+
+/* ------------------------------------------------------- settings panel */
+.td-panel {
+  border: 1px solid var(--border-color-primary);
+  border-left: 4px solid var(--td-accent);
+  border-radius: var(--td-radius);
+  background: var(--background-fill-secondary);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow-drop);
+}
+.td-panel[hidden] { display: none; }
+.td-panel-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.td-panel-head b { font-size: 16px; color: var(--td-accent); }
+.td-hint { font-size: 12px; color: var(--body-text-color-subdued); }
+
+.td-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px 18px;
+}
+.td-field { display: flex; flex-direction: column; gap: 7px; }
+.td-field > label {
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--body-text-color-subdued);
+}
+.td-field select,
+.td-field input[type="range"],
+.td-field input[type="color"] { width: 100%; }
+
+.td-seg { display: flex; gap: 6px; flex-wrap: wrap; }
+.td-seg button {
+  cursor: pointer;
+  border: 1px solid var(--border-color-primary);
+  background: var(--background-fill-primary);
+  color: var(--body-text-color);
+  border-radius: 999px;
+  padding: 5px 13px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.td-seg button.is-on { background: var(--td-accent); border-color: var(--td-accent); color: #fff; }
+
+.td-swatches { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+.td-swatches button {
+  cursor: pointer;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color-primary);
+  padding: 0;
+}
+.td-swatches button.is-on { border-color: var(--body-text-color); transform: scale(1.15); }
+.td-swatches .sw-default { background: linear-gradient(135deg, #7c5cff, #22d3ee); }
+
+.td-check { display: flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; color: var(--body-text-color); }
+.td-check input { accent-color: var(--td-accent); }
+
+.td-panel-foot { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+
+/* --------------------------------------------------------- log box polish */
+#log_output_box textarea {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace !important;
+  font-size: 13px !important;
+  line-height: 1.55 !important;
+}
+
+/* ------------------------------------------------------------- scrollbars */
+.gradio-container ::-webkit-scrollbar { width: 10px; height: 10px; }
+.gradio-container ::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--td-accent) 45%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.gradio-container ::-webkit-scrollbar-thumb:hover { background: var(--td-accent); background-clip: padding-box; }
+.gradio-container ::-webkit-scrollbar-track { background: transparent; }
+
+/* --------------------------------------------------------------- responsive */
+@media (max-width: 720px) {
+  .td-topbar { gap: 8px; padding: 8px; margin: -6px -4px 6px; }
+  .td-clock { margin-left: 0; text-align: left; }
+  .td-clock-time { font-size: 18px; }
+  .td-brand .td-sub { display: none; }
+}
+</style>
+
+<header class="td-topbar" id="td-topbar">
+  <div class="td-brand">
+    <span class="td-logo">🎬</span>
+    <b>Tarun Dubber <em>AI</em></b>
+    <span class="td-sub">dubbing studio</span>
+  </div>
+
+  <div class="td-clock" title="Abhi ka time aur date (browser clock)">
+    <div class="td-clock-time" id="td-clock-time">--:--:--</div>
+    <div class="td-clock-date" id="td-clock-date">loading…</div>
+  </div>
+
+  <div class="td-job" id="td-job" title="Current dubbing job ka elapsed time">
+    <div>
+      <div class="td-job-time" id="td-job-time">⏱ idle</div>
+      <div class="td-job-note" id="td-job-note">koi job nahi chal rahi</div>
+    </div>
+    <button type="button" class="td-mini" id="td-job-reset" title="Timer reset karo">↺</button>
+  </div>
+
+  <button type="button" class="td-btn" id="td-settings-btn" aria-expanded="false">⚙️ Customize</button>
+</header>
+
+<section class="td-panel" id="td-settings-panel" hidden aria-label="Customise the UI">
+  <div class="td-panel-head">
+    <b>⚙️ Customize</b>
+    <span class="td-hint">har setting isi browser me save hota hai (localStorage) — server par kuch nahi jata.</span>
+  </div>
+
+  <div class="td-grid">
+    <div class="td-field">
+      <label>Theme</label>
+      <div class="td-seg" id="td-set-theme">
+        <button type="button" data-v="system">🖥 System</button>
+        <button type="button" data-v="light">☀️ Light</button>
+        <button type="button" data-v="dark">🌙 Dark</button>
+      </div>
+    </div>
+
+    <div class="td-field">
+      <label>Accent colour</label>
+      <div class="td-swatches" id="td-set-accent">
+        <button type="button" data-v="" class="sw-default" title="Theme default"></button>
+        <button type="button" data-v="#7c5cff" style="background:#7c5cff" title="Violet"></button>
+        <button type="button" data-v="#e11d48" style="background:#e11d48" title="Rose"></button>
+        <button type="button" data-v="#f59e0b" style="background:#f59e0b" title="Amber"></button>
+        <button type="button" data-v="#10b981" style="background:#10b981" title="Emerald"></button>
+        <button type="button" data-v="#06b6d4" style="background:#06b6d4" title="Cyan"></button>
+        <button type="button" data-v="#ec4899" style="background:#ec4899" title="Pink"></button>
+      </div>
+      <input type="color" id="td-set-accent-custom" value="#7c5cff" title="Apna rang chuno">
+    </div>
+
+    <div class="td-field">
+      <label>UI scale — <span id="td-set-scale-val">100%</span></label>
+      <input type="range" id="td-set-scale" min="85" max="115" step="5" value="100">
+    </div>
+
+    <div class="td-field">
+      <label>Clock format</label>
+      <div class="td-seg" id="td-set-clock">
+        <button type="button" data-v="24">24h</button>
+        <button type="button" data-v="12">12h</button>
+      </div>
+      <label class="td-check"><input type="checkbox" id="td-set-seconds"> seconds bhi dikhao</label>
+    </div>
+
+    <div class="td-field">
+      <label>AI assistant</label>
+      <select id="td-set-refresh" title="Kitne seconds me naya insight">
+        <option value="15">har 15s</option>
+        <option value="30">har 30s</option>
+        <option value="60">har 60s</option>
+        <option value="120">har 2 min</option>
+      </select>
+      <label class="td-check"><input type="checkbox" id="td-set-typewriter"> typewriter effect</label>
+    </div>
+
+    <div class="td-field">
+      <label>Default persona</label>
+      <select id="td-set-persona">
+        <option value="Funny">😄 Funny</option>
+        <option value="Serious">🧐 Serious</option>
+        <option value="Roast">🔥 Roast</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="td-panel-foot">
+    <button type="button" class="td-btn ghost" id="td-settings-reset">↩ Reset to defaults</button>
+    <button type="button" class="td-btn" id="td-settings-close">Done</button>
+  </div>
+</section>

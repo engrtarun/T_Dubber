@@ -1,0 +1,135 @@
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Baloo+Bhai+2:wght@400;600;800&display=swap');
+
+/* Persona chips: make the Gradio radio options look like pill buttons */
+#puter_mode_selector .wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+#puter_mode_selector label {
+  border: 1px solid var(--border-color-primary);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+  background: var(--background-fill-secondary);
+  transition: background 0.2s, border-color 0.2s, transform 0.1s;
+}
+#puter_mode_selector label:hover { transform: translateY(-1px); border-color: var(--color-accent); }
+#puter_mode_selector input[type="radio"] { accent-color: var(--color-accent); margin-right: 6px; }
+#puter_mode_selector input[type="radio"]:checked + span { font-weight: 800; color: var(--color-accent); }
+
+#puter-container {
+  font-family: 'Baloo Bhai 2', system-ui, cursive;
+  padding: 18px;
+  border-radius: var(--td-radius, 14px);
+  background: var(--background-fill-secondary);
+  border: 2px dashed var(--td-accent, var(--color-accent));
+  box-shadow: var(--shadow-drop);
+  max-width: 100%;
+}
+@media (max-width: 640px) {
+  #puter-container { padding: 12px; font-size: 14px; }
+  #puter-history { max-height: 180px !important; }
+}
+
+.puter-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-bottom: 1px dashed var(--border-color-primary);
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+}
+.puter-title { font-size: 18px; font-weight: 800; color: var(--td-accent, var(--color-accent)); }
+.puter-status {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--td-accent, var(--color-accent));
+  font-variant-numeric: tabular-nums;
+}
+.puter-status::before { content: "● "; }
+.puter-status.is-busy::before { animation: td-pulse 1s infinite; }
+@keyframes td-pulse { 50% { opacity: 0.25; } }
+
+.puter-chip-btn {
+  cursor: pointer;
+  border: 1px solid var(--td-accent, var(--color-accent));
+  background: transparent;
+  color: var(--td-accent, var(--color-accent));
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  transition: background 0.15s, color 0.15s;
+}
+.puter-chip-btn:hover { background: var(--td-accent, var(--color-accent)); color: #fff; }
+
+#puter-error {
+  display: none;
+  background: var(--error-background-fill, rgba(255, 80, 80, 0.12));
+  color: var(--error-text-color, #d33);
+  border: 1px solid var(--error-text-color, #d33);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+}
+
+#puter-message {
+  font-size: 16px;
+  line-height: 1.55;
+  min-height: 60px;
+  color: var(--body-text-color);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+#puter-message .puter-thinking { color: var(--body-text-color-subdued); font-style: italic; }
+
+.puter-history-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--td-accent, var(--color-accent));
+  margin-bottom: 4px;
+}
+#puter-history { max-height: 220px; overflow-y: auto; font-size: 13px; }
+#puter-history .h-empty { color: var(--body-text-color-subdued); font-style: italic; }
+#puter-history div {
+  border-bottom: 1px dashed var(--border-color-primary);
+  padding: 6px 0;
+  line-height: 1.45;
+}
+#puter-history .h-meta { color: var(--body-text-color-subdued); font-size: 11.5px; }
+</style>
+
+<div id="puter-container">
+  <div class="puter-head">
+    <span class="puter-title">🤖 Puter.js Assistant</span>
+    <span class="puter-status" id="puter-countdown">Waiting for logs...</span>
+  </div>
+
+  <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+    <button type="button" id="puter-refresh-btn" class="puter-chip-btn">🔄 Refresh now</button>
+    <button type="button" id="puter-copy-btn" class="puter-chip-btn">📋 Copy latest</button>
+    <button type="button" id="puter-scrolllogs-btn" class="puter-chip-btn">📜 Go to logs</button>
+  </div>
+
+  <div id="puter-error">
+    ⚠️ AI insight nahi mila. Internet check karo.
+    <button type="button" id="puter-retry-btn" class="puter-chip-btn" style="margin-left:8px;">Retry</button>
+  </div>
+
+  <div id="puter-message">
+    <span class="puter-thinking">💡 Video daalo, Start dabao — phir har 30s me main Hinglish me mast updates dunga. Persona bhi badal sakte ho! 😎</span>
+  </div>
+
+  <div style="margin-top:10px; border-top:1px dashed var(--border-color-primary); padding-top:8px;">
+    <div class="puter-history-head">
+      <span>🕒 Recent updates</span>
+      <span id="puter-last" style="font-weight:600;"></span>
+    </div>
+    <div id="puter-history"><div class="h-empty">Abhi koi update nahi.</div></div>
+    <div class="h-empty" id="puter-auto-note" style="font-size:11.5px; margin-top:6px;"></div>
+  </div>
+</div>

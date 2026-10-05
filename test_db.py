@@ -426,6 +426,76 @@ def test_channels_roster_shapes(scratch):
     print("    dict, bare list, and '@'-mixing rosters all load")
 
 
+def test_database_introspection(scratch):
+    print("\n[12] introspection: the Database tab reads itself and explains itself")
+    for n in range(3):
+        db.upsert_project({
+            "project_id": f"demo-{n}-aaa111",
+            "title": f"demo {n}",
+            "state": "processing",
+            "target_language": "Hindi",
+            "source_kind": "upload",
+            "source_video": f"demo{n}.mkv",
+            "created_at": "2026-10-05T10:00:00+05:30",
+        })
+
+    tables = db.table_names()
+    assert "projects" in tables, "projects missing from the table list"
+    assert not any(name.startswith("sqlite_") for name in tables), \
+        "sqlite's own bookkeeping would show up as a browsable table"
+
+    info = db.database_overview()
+    assert info["path"] == db.DB_PATH, info["path"]
+    assert info["journal_mode"].lower() == "wal", info["journal_mode"]
+    assert info["schema_version"] == db.SCHEMA_VERSION
+    assert info["row_counts"]["projects"] == 3, info["row_counts"]
+    assert info["total_rows"] >= 3, info["total_rows"]
+
+    # The whole point of the tab: a column is never just a name.
+    unexplained = []
+    for table in tables:
+        schema = db.describe_table(table)
+        if not schema["description"]:
+            unexplained.append(table + " (table)")
+        for column in schema["columns"]:
+            if not column["help"]:
+                unexplained.append(f"{table}.{column['name']}")
+    assert not unexplained, f"no plain-English meaning for: {unexplained}"
+
+    projects = db.describe_table("projects")
+    assert projects["columns"][0]["name"] == "id" and projects["columns"][0]["pk"], \
+        "projects.id should be flagged as the primary key"
+    parts = db.describe_table("telegram_parts")
+    assert any(k["ref_table"] == "telegram_archives" for k in parts["foreign_keys"]), \
+        "telegram_parts should report its foreign key"
+
+    page1 = db.query_table("projects", page=1, per_page=2)
+    page2 = db.query_table("projects", page=2, per_page=2)
+    assert page1["total"] == 3 and page1["pages"] == 2, (page1["total"], page1["pages"])
+    assert len(page1["rows"]) == 2 and len(page2["rows"]) == 1
+    assert len({r["id"] for r in page1["rows"] + page2["rows"]}) == 3, "pages overlap"
+
+    hit = db.query_table("projects", "demo 1")
+    assert hit["total"] == 1 and hit["rows"][0]["title"] == "demo 1", hit["total"]
+
+    # LIKE metacharacters are escaped: '%' is text, not "match everything".
+    assert db.query_table("projects", "%")["total"] == 0, "wildcard was not escaped"
+
+    # The name is bound after being checked against sqlite_master, so an
+    # injection attempt is refused rather than executed.
+    for bad in ("projects; DROP TABLE projects", 'projects"', "sqlite_master", "nope"):
+        try:
+            db.query_table(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"table {bad!r} should have been refused")
+
+    assert db.stats()["projects"] == 3, "a read path wrote to the database"
+    print(f"    {len(tables)} tables, {info['total_rows']} rows, "
+          f"every column explained, search + pagination verified")
+
+
 # ---------------------------------------------------------------------------
 
 

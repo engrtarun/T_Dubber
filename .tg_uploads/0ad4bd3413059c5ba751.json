@@ -1,0 +1,48 @@
+{
+  "file_path": "C:\\Users\\pocot\\Music\\T_Dubber\\projects\\Boyfriend_on_Demand___Official_Trailer___Netflix-138eb4c1382e-c54322d70d\\Boyfriend_on_Demand_Official_Trailer_Netflix.mp4",
+  "filename": "Boyfriend_on_Demand_Official_Trailer_Netflix.mp4",
+  "size": 6861098,
+  "state": "complete",
+  "parts": [
+    {
+      "part": 1,
+      "name": "Boyfriend_on_Demand_Official_Trailer_Netflix.mp4",
+      "offset": 0,
+      "size": 6861098,
+      "sha256": "138eb4c1382e30b0865caaea07365c2d0a8d5ca272ea278fd0703132b52c4e78",
+      "message_id": 16,
+      "link": "https://t.me/tgwebcloud1/16"
+    }
+  ],
+  "updated_at": 1791167136.4300542,
+  "message_id": 16,
+  "message_link": "https://t.me/tgwebcloud1/16",
+  "channel": "@tgwebcloud1",
+  "manifest": {
+    "tg_dubber_manifest": 2,
+    "filename": "Boyfriend_on_Demand_Official_Trailer_Netflix.mp4",
+    "size": 6861098,
+    "chunk_size": 1992294400,
+    "chunked": false,
+    "chunk_count": 1,
+    "channel": "@tgwebcloud1",
+    "source_path": "C:\\Users\\pocot\\Music\\T_Dubber\\projects\\Boyfriend_on_Demand___Official_Trailer___Netflix-138eb4c1382e-c54322d70d\\Boyfriend_on_Demand_Official_Trailer_Netflix.mp4",
+    "thumbnail_path": "C:\\Users\\pocot\\Music\\T_Dubber\\projects\\_inbox\\20261005_075517\\Boyfriend_on_Demand_Official_Trailer_Netflix.webp",
+    "caption": "🎬 Boyfriend on Demand | Official Trailer | Netflix\n👤 Netflix · ⏱ 1m 47s · 🎥 720p · 💾 6.54 MB\n🔗 https://www.youtube.com/watch?v=A0GqKTgSpuE\n#T_Dubber #youtube #netflix #1min #720p",
+    "created_at": "2026-10-05T07:55:36+0530",
+    "app": "T_Dubber",
+    "parts": [
+      {
+        "part": 1,
+        "name": "Boyfriend_on_Demand_Official_Trailer_Netflix.mp4",
+        "offset": 0,
+        "size": 6861098,
+        "sha256": "138eb4c1382e30b0865caaea07365c2d0a8d5ca272ea278fd0703132b52c4e78",
+        "message_id": 16,
+        "link": "https://t.me/tgwebcloud1/16"
+      }
+    ]
+  },
+  "chunked": false,
+  "chunk_count": 1
+}
