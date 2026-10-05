@@ -342,12 +342,37 @@ COPY cpp_accelerator/ ./
 # normalizer_kernel_test compares the assembled kernel against the scalar
 # reference, so a kernel that would silently corrupt audio never reaches the
 # pack. It prints SKIP and exits 0 on a builder without AVX2.
-RUN CXX="$(command -v g++-12 || command -v g++ || echo g++)" \
-        cmake -S . -B build \
+#
+# A NOTE ON FAILURE VISIBILITY (this is a fix, not a style change):
+#
+# The chain used to end in `; ... ; echo "static: ... -> OK"`, so ANY failure
+# in cmake/build/test was swallowed -- the shell ran the trailing echo, exited
+# 0, and BuildKit cached a "successful" cpp-forge stage that contained no
+# binary at all. The build then died much later and much more confusingly at
+# the pack-manifest step with:
+#
+#     COPY --from=cpp-forge /src/build/normalizer: not found
+#
+# `set -e` plus an explicit existence check makes the stage fail HERE, where
+# the real compiler error is on screen.
+RUN set -e; \
+    export CXX="$(command -v g++-12 || command -v g++ || echo g++)"; \
+    cmake -S . -B build \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_EXE_LINKER_FLAGS="-static" && \
-    cmake --build build --config Release -j"$(nproc)" && \
-    ./build/normalizer_kernel_test && \
+        -DCMAKE_EXE_LINKER_FLAGS="-static"; \
+    cmake --build build --config Release -j"$(nproc)"; \
+    if [ ! -x build/normalizer ]; then \
+        echo "ASSERT FAIL: cmake reported success but build/normalizer is missing" >&2; \
+        ls -la build >&2; \
+        exit 1; \
+    fi; \
+    if [ ! -x build/normalizer_kernel_test ]; then \
+        echo "ASSERT FAIL: normalizer_kernel_test was not built -- the AVX2 kernel" >&2; \
+        echo "was disabled at configure time (nasm missing?). The pack must not" >&2; \
+        echo "ship a scalar-only normalizer silently." >&2; \
+        exit 1; \
+    fi; \
+    ./build/normalizer_kernel_test; \
     ./build/normalizer --help > /tmp/probe.txt 2>&1; \
     echo "=== probe: normalizer --help ==="; cat /tmp/probe.txt; echo "=== end probe ==="; \
     if ! command -v readelf > /dev/null 2>&1; then \

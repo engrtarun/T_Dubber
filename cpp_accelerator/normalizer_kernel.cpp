@@ -25,6 +25,15 @@
 // __cpuidex and _xgetbv live here on MSVC (they are intrinsics, not
 // library functions, but the declarations are not in any header we include).
 #include <intrin.h>
+#else
+// __get_cpuid_count lives here on GCC/Clang -- same story, opposite header.
+// Without this line the Linux pack build fails with "'__get_cpuid_count' was
+// not declared", which is exactly what happened the first time the Kaggle
+// pack pipeline compiled this file: the binary never got linked, and the
+// Dockerfile's trailing `; echo` turned that failed build into a "successful"
+// stage, so the failure only surfaced much later as
+//   COPY --from=cpp-forge /src/build/normalizer: not found
+#include <cpuid.h>
 #endif
 
 namespace {
