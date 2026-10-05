@@ -466,6 +466,22 @@ def upload_chunk(filepath: str) -> dict:
     size_bytes = os.path.getsize(filepath)
     size_mb = size_bytes / (1024 * 1024)
 
+    # tgup_bridge owns the session path and the "may we log in at all" rule.
+    # It is imported here rather than at module level so chop_drop still runs
+    # when the bridge is absent.
+    try:
+        import tgup_bridge
+    except ImportError:
+        tgup_bridge = None  # type: ignore[assignment]
+
+    # tgup can only send with a session it already holds. Starting one here
+    # would ask Telegram for a login code nobody at this end can answer -- an
+    # OTP spent, then an EOF failure -- so refuse BEFORE any quota is
+    # reserved. See tgup_bridge.session_refusal().
+    refusal = tgup_bridge.session_refusal("upload") if tgup_bridge else ""
+    if refusal:
+        raise RuntimeError(refusal)
+
     # 1) Round-robin channel with enough daily quota left.
     channel = db.get_next_telegram_channel(size_mb)
     if not channel:
@@ -489,6 +505,10 @@ def upload_chunk(filepath: str) -> dict:
         "--concurrency", str(TGUP_CONCURRENCY),
         "--result-out", result_file,
     ]
+    if tgup_bridge is not None:
+        # Named explicitly so a run from any working directory still finds the
+        # session it is expected to have, instead of looking beside itself.
+        cmd += ["--session", str(tgup_bridge.session_path())]
     if phone:
         cmd += ["--phone", phone]
     credentials = json.dumps({"api_id": api_id, "api_hash": api_hash}) + "\n"

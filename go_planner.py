@@ -130,10 +130,14 @@ def status() -> dict:
         "path": report.get("path", ""),
         "reason": reason,
         "session": bool(report.get("session")),
+        "session_path": report.get("session_path", ""),
         "needs_login": bool(report.get("needs_login")),
+        "login_allowed": bool(report.get("login_allowed")),
         "used_by": (
             "plan+hash always; multi-part public-channel upload via "
-            "upload_via_go(); Telethon fallback for everything else"
+            "upload_via_go() when a tgup session exists; Telethon fallback "
+            "for everything else (including a missing session, which would "
+            "otherwise cost an OTP nobody can answer)"
         ),
     }
 
@@ -293,11 +297,22 @@ def should_use_go_upload(
     
     Now attempts Go for ALL files unconditionally as requested,
     falling back to Telethon only if Go fails.
+
+    The one thing it never attempts is a login. tgup asks Telegram for a code
+    the moment its auth flow starts, and on a headless worker nobody can type
+    the answer -- so every run would have bought an OTP, hit EOF, and fallen
+    back anyway. With no session, Telethon is chosen up front instead: same
+    result, no wasted code, no wasted seconds.
     """
     if not use_go:
         return False, "caller did not opt into the Go path (use_go=False)"
     if not binary_runnable():
         return False, "tgup is not runnable here; Telethon fallback"
+    if not tgup_bridge.session_ready() and not tgup_bridge.login_allowed():
+        return False, (
+            f"no tgup session at {tgup_bridge.session_path()} yet; a fresh login "
+            "would send an OTP nobody here can answer — Telethon fallback"
+        )
     return True, "Attempting Go upload unconditionally for maximum speed"
 
 

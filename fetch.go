@@ -220,7 +220,9 @@ func cmdFetch(args []string) int {
 	concurrency := fs.Int("concurrency", 4, "parts downloaded at once")
 	resultOut := fs.String("result-out", "", "write the result here")
 	verify := fs.Bool("verify", true, "check every part's SHA-256")
+	session := addSessionFlag(fs)
 	_ = fs.Parse(args)
+	applySessionFlag(*session)
 
 	if *link == "" {
 		fmt.Fprintln(os.Stderr, "error: --link is required")
@@ -607,7 +609,9 @@ func cmdBench(args []string) int {
 	levels := fs.String("concurrency", "1,2,3,4",
 		"comma-separated concurrency levels to try")
 	resultOut := fs.String("result-out", "", "write the result here")
+	session := addSessionFlag(fs)
 	_ = fs.Parse(args)
+	applySessionFlag(*session)
 
 	var cred credentials
 	if err := creds.resolve(&cred); err != nil {

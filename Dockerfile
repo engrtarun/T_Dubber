@@ -455,6 +455,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     STITCHER_BIN=/usr/local/bin/stitcher \
     NORMALIZER_BIN=/usr/local/bin/normalizer
 
+# tgup's gotd session belongs where the kernel's own files live, not beside the
+# binary: /usr/local/bin is rebuilt with the image, /kaggle/working survives it,
+# and `.dockerignore` keeps every *.session out of the build context anyway. Set
+# here, the binary stops looking beside its working directory, finding no
+# session, and trying to log in on a machine with no terminal -- an OTP spent
+# and a login that can only end in EOF.
+ENV TGUP_SESSION=/kaggle/working/tgup.session
+
 # -----------------------------------------------------------------------------
 # STAGE 3a — SYSTEM PAYLOAD  (apt, one layer, lists cleaned in the same layer)
 # -----------------------------------------------------------------------------

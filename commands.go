@@ -12,10 +12,10 @@ import (
 )
 
 type credentialFlags struct {
-	apiID          *int
-	apiHash        *string
-	phone          *string
-	stdinCreds     *bool
+	apiID      *int
+	apiHash    *string
+	phone      *string
+	stdinCreds *bool
 }
 
 func addCredentialFlags(fs *flag.FlagSet) credentialFlags {
@@ -58,6 +58,29 @@ func (c credentialFlags) resolve(out *credentials) error {
 		out.phone = strings.TrimSpace(*c.phone)
 	}
 	return nil
+}
+
+// addSessionFlag registers --session on the subcommands that talk to Telegram.
+// `plan` deliberately does not get one: it never opens a connection, so a
+// session flag there would only suggest it does.
+func addSessionFlag(fs *flag.FlagSet) *string {
+	return fs.String("session", "",
+		"path to tgup's session file (default: $TGUP_SESSION, else ./tgup.session)")
+}
+
+// applySessionFlag points this run's session at the caller's answer. An
+// explicit --session wins, then TGUP_SESSION, then the working-directory
+// default -- so a worker can export TGUP_SESSION=/kaggle/working/tgup.session
+// once and have every invocation reuse the same authorized session instead of
+// standing somewhere new and trying to log in again.
+func applySessionFlag(value string) {
+	if v := strings.TrimSpace(value); v != "" {
+		sessionFile = v
+		return
+	}
+	if v := strings.TrimSpace(os.Getenv("TGUP_SESSION")); v != "" {
+		sessionFile = v
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -152,7 +175,9 @@ func cmdUpload(args []string) int {
 		"a multi-gigabyte part makes clients try to preview the movie instead)")
 	caption := fs.String("caption", "", "caption for the upload")
 	dryRun := fs.Bool("dry-run", false, "plan and hash only; send nothing")
+	session := addSessionFlag(fs)
 	_ = fs.Parse(args)
+	applySessionFlag(*session)
 
 	if *file == "" {
 		fmt.Fprintln(os.Stderr, "error: --file is required")

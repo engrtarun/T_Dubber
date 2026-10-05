@@ -11,10 +11,13 @@ These tests pin the shared contract:
   - a manifest written in Go's shape satisfies the Python restore path
   - a manifest written by Python satisfies the Go restore path
   - the Python bridge reports a clean, honest reason when Go cannot run
+  - and no run ever asks Telegram for a login code it cannot answer (see
+    TestNoOtpLogin, and login_test.go for the binary's half of that rule)
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -22,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -139,7 +143,7 @@ class TestPlanAgreement(unittest.TestCase):
     def test_default_chunk_size_matches_the_python_one(self):
         binary = _needs_binary(self)
         usage = subprocess.run(
-            [str(binary), "help"], capture_output=True, timeout=60
+            [*binary, "help"], capture_output=True, timeout=60
         ).stdout.decode("utf-8", "replace")
         self.assertEqual(tu.CHUNK_SIZE, 1900 * 1024 * 1024)
         # The chunk ceiling is what makes a 9 GB movie legal on a non-Premium
@@ -177,7 +181,7 @@ class TestPlanAgreement(unittest.TestCase):
     def test_plan_rejects_a_missing_file_and_a_zero_byte_file(self):
         binary = _needs_binary(self)
         missing = subprocess.run(
-            [str(binary), "plan", "--file", str(ROOT / "no-such-file.bin")],
+            [*binary, "plan", "--file", str(ROOT / "no-such-file.bin")],
             capture_output=True, timeout=60,
         )
         self.assertEqual(missing.returncode, 2)
@@ -186,7 +190,7 @@ class TestPlanAgreement(unittest.TestCase):
             empty = Path(work) / "empty.bin"
             empty.write_bytes(b"")
             result = subprocess.run(
-                [str(binary), "plan", "--file", str(empty)],
+                [*binary, "plan", "--file", str(empty)],
                 capture_output=True, timeout=60,
             )
             self.assertEqual(result.returncode, 2)
@@ -244,7 +248,7 @@ class TestManifestAgreement(unittest.TestCase):
     def test_go_marker_and_version_match_the_python_constants(self):
         binary = _needs_binary(self)
         usage = subprocess.run(
-            [str(binary), "help"], capture_output=True, timeout=60
+            [*binary, "help"], capture_output=True, timeout=60
         ).stdout.decode("utf-8", "replace")
         # The marker is the contract; if either side renames it, archives stop
         # being findable. Assert the literal so the coupling is visible.
@@ -290,6 +294,147 @@ class TestGoIsOptional(unittest.TestCase):
         # var that a child process could inherit by accident.
         self.assertNotIn("os.environ.get('TELEGRAM_API_HASH'", source)
         self.assertNotIn('os.environ.get("TELEGRAM_API_HASH"', source)
+
+
+class TestNoOtpLogin(unittest.TestCase):
+    """A login code must never be requested by a machine that cannot answer it.
+
+    Telegram dispatches the code as soon as the auth flow starts. Every run
+    that began without a session -- on a Kaggle kernel, or anywhere else with
+    no terminal -- therefore bought a real OTP, hit EOF on the prompt, and fell
+    back to Telethon. The upload worked anyway, which is exactly why the waste
+    was easy to miss.
+    """
+
+    def _with_env(self, **values):
+        """Context manager setting env vars, restoring the previous values."""
+
+        @contextlib.contextmanager
+        def scope():
+            saved = {key: os.environ.get(key) for key in values}
+            try:
+                os.environ.update(values)
+                yield
+            finally:
+                for key, value in saved.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+        return scope()
+
+    def test_session_path_follows_the_env_override(self):
+        with self._with_env(TGUP_SESSION="/kaggle/working/tgup.session"):
+            # Compared as a Path: the point is which file, not which separator.
+            self.assertEqual(
+                tgup_bridge.session_path(), Path("/kaggle/working/tgup.session")
+            )
+        # Without it, the session sits beside this file: one place, whatever
+        # directory the process happens to be standing in.
+        with self._with_env(TGUP_SESSION=""):
+            self.assertEqual(tgup_bridge.session_path(), tgup_bridge.TGUP_DIR / "tgup.session")
+
+    def test_no_session_means_no_login_attempt(self):
+        with tempfile.TemporaryDirectory() as work:
+            missing = str(Path(work) / "tgup.session")
+            with self._with_env(TGUP_SESSION=missing, TGUP_ALLOW_LOGIN=""):
+                reason = tgup_bridge.session_refusal("upload")
+        self.assertTrue(reason, "a missing session must be refused, not attempted")
+        self.assertIn(missing, reason)
+        self.assertIn("OTP", reason)
+
+    def test_an_existing_session_lifts_the_refusal(self):
+        with tempfile.TemporaryDirectory() as work:
+            session = Path(work) / "tgup.session"
+            session.write_bytes(b"")
+            with self._with_env(TGUP_SESSION=str(session), TGUP_ALLOW_LOGIN=""):
+                self.assertEqual(tgup_bridge.session_refusal("upload"), "")
+                self.assertTrue(tgup_bridge.session_ready())
+                self.assertFalse(tgup_bridge.needs_login())
+
+    def test_an_explicit_login_opt_in_lifts_the_refusal(self):
+        with tempfile.TemporaryDirectory() as work:
+            missing = str(Path(work) / "tgup.session")
+            with self._with_env(TGUP_SESSION=missing, TGUP_ALLOW_LOGIN="1"):
+                self.assertEqual(tgup_bridge.session_refusal("upload"), "")
+
+    def test_upload_refuses_without_spawning_the_binary(self):
+        # The refusal has to happen before the process exists: spawning tgup is
+        # what sends the code.
+        with tempfile.TemporaryDirectory() as work:
+            missing = str(Path(work) / "tgup.session")
+            with self._with_env(TGUP_SESSION=missing, TGUP_ALLOW_LOGIN=""):
+                with unittest.mock.patch.object(
+                    tgup_bridge,
+                    "run_command",
+                    side_effect=AssertionError("tgup must not be spawned"),
+                ):
+                    result = tgup_bridge.upload(
+                        file=ROOT / "tgup_bridge.py",
+                        channel="@tgwebcloud1",
+                        api_id=1,
+                        api_hash="hash",
+                        phone="+910000000000",
+                    )
+        self.assertFalse(result.ok)
+        self.assertTrue(result.used_go)
+        self.assertIn("OTP", result.error)
+        # A fallback reason is how the caller knows to use Telethon rather than
+        # treating this as a broken upload.
+        self.assertIn("Telethon", result.fallback_reason)
+
+    def test_go_path_declines_a_run_with_no_session(self):
+        import go_planner
+
+        with tempfile.TemporaryDirectory() as work:
+            missing = str(Path(work) / "tgup.session")
+            with self._with_env(TGUP_SESSION=missing, TGUP_ALLOW_LOGIN=""):
+                use_go, reason = go_planner.should_use_go_upload(
+                    4 * 1024 ** 3, channel="@tgwebcloud1"
+                )
+            self.assertFalse(use_go)
+            self.assertIn("OTP", reason)
+
+            session = Path(work) / "have.session"
+            session.write_bytes(b"")
+            with self._with_env(TGUP_SESSION=str(session), TGUP_ALLOW_LOGIN=""):
+                use_go, reason = go_planner.should_use_go_upload(
+                    4 * 1024 ** 3, channel="@tgwebcloud1"
+                )
+            self.assertTrue(use_go, reason)
+
+    def test_the_binary_accepts_the_session_flag_it_ships_with(self):
+        """The flag the bridge now passes must be one the binary understands.
+
+        An unknown flag is not a fallback, it is a dead end: tgup exits 2 and
+        the run loses the fast path entirely. login_test.go holds the other
+        half -- the rule that no code is requested without a terminal -- which
+        cannot be exercised here without a real network login.
+        """
+        binary = _needs_binary(self)
+        with tempfile.TemporaryDirectory() as work:
+            session = str(Path(work) / "no-session.session")
+            proc = subprocess.run(
+                [
+                    *binary, "upload",
+                    "--file", str(ROOT / "tgup_bridge.py"),
+                    "--channel", "@tgwebcloud1",
+                    "--api-id", "1",
+                    "--api-hash", "bogus",
+                    "--phone", "+910000000000",
+                    "--session", session,
+                    "--dry-run",   # hashes and stops: no connection, no login
+                ],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=120,
+            )
+            self.assertNotIn(b"not defined", proc.stderr)
+            self.assertEqual(
+                proc.returncode, 0,
+                proc.stderr.decode("utf-8", "replace"),
+            )
 
 
 if __name__ == "__main__":

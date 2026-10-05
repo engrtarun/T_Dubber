@@ -23,6 +23,22 @@ original, working path. Nothing in the Python pipeline changes.
 The Go binary uses its own session file (``tgup.session``) because the storage
 format is gotd's, not Telethon's. The first run therefore asks for a login code
 once; after that the session is reused.
+
+Where that session lives, and when a login may be attempted
+----------------------------------------------------------
+``session_path()`` answers both: ``$TGUP_SESSION`` when set, otherwise
+``tgup.session`` beside this file. The path is passed to the binary as
+``--session`` rather than left to the working directory, because a worker that
+starts somewhere else would otherwise look for the session somewhere else and
+decide it had never logged in.
+
+That decision used to cost a real OTP every run: Telegram dispatches a login
+code the instant the auth flow starts, a headless machine has no way to type
+the answer back, and the run then failed at EOF and fell through to Telethon --
+uploading fine, but leaving a fresh code in the user's Telegram each time for
+nothing. So an upload, fetch or bench only starts when a session already exists
+(or ``TGUP_ALLOW_LOGIN`` says a deliberate first login is wanted); otherwise the
+call is refused up front with a reason, and the caller uses Telethon.
 """
 
 from __future__ import annotations
@@ -42,6 +58,10 @@ from typing import Callable
 ROOT = Path(__file__).resolve().parent
 TGUP_DIR = ROOT
 BINARY_NAMES = ("tgup.exe", "tgup")
+DEFAULT_SESSION_NAME = "tgup.session"
+
+# Values accepted as "yes, this run may spend a login code".
+_TRUTHY = ("1", "true", "yes", "on")
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +81,11 @@ def get_base_command() -> list[str]:
         candidate = Path(override)
         if candidate.is_file():
             return [str(candidate)]
+        # An override pointing at nothing must NOT fall through to the search.
+        # The caller named a binary on purpose; handing back some other tgup
+        # (older, unpatched) instead is exactly the surprise this early return
+        # exists to prevent -- and it is the case check() reports by name.
+        return []
 
     for name in BINARY_NAMES:
         candidate = TGUP_DIR / name
@@ -197,14 +222,68 @@ class GoUploadResult:
 # ---------------------------------------------------------------------------
 
 
+def session_path() -> Path:
+    """Where tgup keeps its gotd session for this run.
+
+    ``$TGUP_SESSION`` wins so a worker can pin it to a directory that outlives
+    the process -- on a Kaggle kernel, ``/kaggle/working/tgup.session`` -- and
+    every run reuses the same authorized session instead of standing in a
+    fresh directory and concluding it has never logged in.
+    """
+    override = os.environ.get("TGUP_SESSION", "").strip()
+    if override:
+        return Path(override)
+    return TGUP_DIR / DEFAULT_SESSION_NAME
+
+
 def session_ready() -> bool:
     """True when tgup already holds a usable session."""
-    return (TGUP_DIR / "tgup.session").is_file()
+    return session_path().is_file()
+
+
+def login_allowed() -> bool:
+    """True when this run may deliberately perform a first login.
+
+    The default is no: a login without a terminal to type the code into can
+    only end in EOF, and it has already spent a real OTP by then. Someone who
+    genuinely wants the interactive first login says so with
+    ``TGUP_ALLOW_LOGIN=1``.
+    """
+    return os.environ.get("TGUP_ALLOW_LOGIN", "").strip().lower() in _TRUTHY
 
 
 def needs_login() -> bool:
     """True when the first run will ask the user for a login code."""
     return not session_ready()
+
+
+def session_refusal(command: str) -> str:
+    """Why ``command`` must not start, or "" when it may.
+
+    Refusing here, before the process is spawned, is the whole point: tgup
+    requests the code as soon as its auth flow runs, so a refusal after the
+    spawn would already have cost the OTP it was meant to save.
+    """
+    if session_ready() or login_allowed():
+        return ""
+    return (
+        f"tgup {command} skipped: no session at {session_path()} and this run "
+        "cannot answer a login code (no terminal), so starting one would only "
+        "send an OTP and then fail. Reuse an existing session via TGUP_SESSION, "
+        "log in once from a console, or set TGUP_ALLOW_LOGIN=1; Telethon takes "
+        "over meanwhile."
+    )
+
+
+def _refuse(command: str, on_human: Callable[[str], None] | None) -> str:
+    """Report a refusal through the human log and return the reason."""
+    reason = session_refusal(command)
+    if reason and on_human is not None:
+        try:
+            on_human(reason)
+        except Exception:  # noqa: BLE001 - a broken display never changes the answer
+            pass
+    return reason
 
 
 # ---------------------------------------------------------------------------
@@ -311,11 +390,17 @@ def upload(
     on_human: Callable[[str], None] | None = None,
 ) -> GoUploadResult:
     """Upload a file with tgup, returning a result shaped like Python's own."""
+    reason = _refuse("upload", on_human)
+    if reason:
+        return GoUploadResult(
+            used_go=True, ok=False, fallback_reason=reason, error=reason
+        )
     args = [
         "upload",
         "--file", str(file),
         "--channel", channel,
         "--credentials-stdin",
+        "--session", str(session_path()),
         "--concurrency", str(max(1, int(concurrency))),
     ]
     if phone:
@@ -350,11 +435,17 @@ def fetch(
     on_progress: Callable[[TransferProgress], None] | None = None,
 ) -> GoUploadResult:
     """Restore an archive with tgup."""
+    reason = session_refusal("fetch")
+    if reason:
+        return GoUploadResult(
+            used_go=True, ok=False, fallback_reason=reason, error=reason
+        )
     args = [
         "fetch",
         "--link", link,
         "--dest", str(dest),
         "--credentials-stdin",
+        "--session", str(session_path()),
         "--concurrency", str(max(1, int(concurrency))),
     ]
     if not verify:
@@ -379,10 +470,15 @@ def bench(
     on_human: Callable[[str], None] | None = None,
 ) -> dict:
     """Measure single-stream vs concurrent throughput against Telegram."""
+    reason = session_refusal("bench")
+    if reason:
+        return {"ok": False, "returncode": 2, "log": reason, "rows": {},
+                "fallback_reason": reason}
     args = [
         "bench",
         "--channel", channel,
         "--credentials-stdin",
+        "--session", str(session_path()),
         "--size", str(max(1, int(size_mb)) * 1024 * 1024),
         "--concurrency", levels,
     ]
@@ -462,6 +558,8 @@ def check() -> dict:
             "runnable": False,
             "reason": reason,
             "expected_at": str(ROOT / BINARY_NAMES[0]),
+            "session": session_ready(),
+            "session_path": str(session_path()),
         }
     version = binary_version(base_cmd)
     if version is None:
@@ -472,12 +570,16 @@ def check() -> dict:
                 "blocking it"
             ),
             "path": str(base_cmd),
+            "session": session_ready(),
+            "session_path": str(session_path()),
         }
     return {
         "runnable": True,
         "path": str(base_cmd),
         "session": session_ready(),
+        "session_path": str(session_path()),
         "needs_login": needs_login(),
+        "login_allowed": login_allowed(),
         "size_mb": round(Path(base_cmd[-1]).stat().st_size / (1024 * 1024), 2) if Path(base_cmd[-1]).exists() else 0.0,
     }
 

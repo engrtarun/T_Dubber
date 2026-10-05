@@ -92,18 +92,60 @@ What *is* verified:
 - part layout and digests are byte-identical to the Python planner (tested)
 - manifest shape accepted by the Python restore path (tested)
 - Telethon path unaffected when `tgup` is absent (tested)
-- 49 tests pass across `test_tgup.py`, `test_tg_cloud.py`, `test_flow_order.py`,
+- no login code is ever requested by a machine that cannot answer one — the
+  binary refuses it in `loginDecision()`, the bridge refuses to spawn the
+  binary at all (tested in `login_test.go` and `TestNoOtpLogin`)
+- 59 tests pass across `test_tgup.py`, `test_tg_cloud.py`, `test_flow_order.py`,
   `test_db.py`, `test_channel_caption.py`
 
-## First run needs a login code
+## Sessions: where the login lives, and when one may be attempted
 
-`tgup` keeps its own session file, `tgup/tgup.session`, because `gotd`'s storage
-format is not Telethon's and cannot read `telegram_uploader_session.session`.
-The first upload prints a prompt for the code Telegram sends; after that the
-session is reused. Multiple connections share that one auth key, so it is one
-login, not one per connection.
+`tgup` keeps its own session file because `gotd`'s storage format is not
+Telethon's and cannot read `telegram_uploader_session.session`. One session
+covers every connection in the pool — one login, not one per connection.
 
-`python go_planner.py check` reports `needs_login` so you know in advance.
+The file is resolved in this order:
+
+| | |
+|---|---|
+| `--session PATH` | most explicit; per invocation |
+| `$TGUP_SESSION` | export once, every run follows it |
+| `./tgup.session` | the working directory, as before |
+
+On a worker, point it at somewhere that survives the process:
+
+```bash
+export TGUP_SESSION=/kaggle/working/tgup.session
+```
+
+`tgup_bridge.py` passes the resolved path to the binary as `--session`, so
+starting in a different directory can no longer look like "never logged in".
+
+### No console, no login — the OTP rule
+
+Telegram sends the login code **the moment the auth flow starts**. A headless
+machine (a Kaggle kernel, a daemon, anything with stdin piped) has no way to
+type the answer back, so that run can only fail at EOF — after having spent a
+real code on the user's Telegram for nothing.
+
+Two guards stop that, and both fire *before* anything is sent:
+
+1. **Go** — `loginDecision()` refuses to start the auth flow unless stdin is a
+   terminal. It reports the session path it wanted instead of asking.
+2. **Python** — `tgup_bridge.session_refusal()` will not even spawn the binary
+   when no session file exists, so `upload`/`fetch`/`bench` return a reason and
+   the caller falls straight back to Telethon. `go_planner.should_use_go_upload()`
+   declines the same way before an upload is attempted.
+
+To log in deliberately, run once **from a console** (stdin is a terminal), or
+set `TGUP_ALLOW_LOGIN=1` for one run:
+
+```
+tgup upload --file clip.mp4 --channel @name --api-id N --api-hash H --phone +91...
+```
+
+`python go_planner.py check` reports `needs_login`, `session_path` and
+`login_allowed` so you know in advance which way this machine will go.
 
 ## Commands
 
@@ -141,6 +183,7 @@ tgup/
   fetch.go       restore + bench
   commands.go    plan + upload entry points
   main_entry.go  usage and dispatch
+  login_test.go  the "never request a code nobody can answer" rule, offline
   build.ps1      build, vet, then prove the binary starts
 tgup_bridge.py   finds the binary, runs it, parses its JSON progress/result
 go_planner.py    adapter telegram_uploader.py already calls; same API as before

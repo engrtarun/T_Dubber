@@ -30,7 +30,13 @@ half idle. The "bench" command measures whether it worked, rather than assuming.
 
 Credentials are never stored in the binary or in a config file: pass --api-id
 and --api-hash on the command line. The login code is asked for once and the
-resulting session is kept in `+"`tgup.session`"+`.
+resulting session is kept in `+"`tgup.session`"+` (override with --session or
+$TGUP_SESSION, e.g. /kaggle/working/tgup.session on a worker).
+
+A login code is only ever requested when stdin is a terminal. Telegram sends
+that code the moment the flow starts, and on a machine with no console the
+answer can only be EOF -- so a headless run with no session now fails up front
+instead of spending an OTP to get there.
 
 Examples
   tgup plan   --file big.mkv --plan-out plan.json

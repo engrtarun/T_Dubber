@@ -83,10 +83,21 @@ const (
 	// The Python path via Telethon still owns real artwork attachments.
 	MaxThumbnailBytes = int64(10 * 1024 * 1024)
 
-	sessionFile = "tgup.session"
 	manifestKey = "tg_dubber_manifest"
 	manifestVer = 2
 )
+
+// defaultSessionFile is where tgup looks for its session when neither --session
+// nor TGUP_SESSION says otherwise. It is relative on purpose: the binary has no
+// opinion about which directory it lives in, so the working directory -- the one
+// place every caller already controls -- decides.
+const defaultSessionFile = "tgup.session"
+
+// sessionFile is where this run reads and writes its gotd session. It is a var
+// because --session and TGUP_SESSION must be able to point it at a directory
+// that survives the process (on a worker: /kaggle/working), and every login and
+// every session copy is derived from it.
+var sessionFile = defaultSessionFile
 
 // maxConcurrency bounds sockets in flight. Telegram rate-limits bursts, so past
 // a point extra connections stop helping and start earning FloodWaitErrors.
@@ -406,16 +417,50 @@ func newClient(cred credentials, sessionPath string) *telegram.Client {
 	})
 }
 
-// ensureAuthorized logs in only when the stored session is not usable, so a
-// machine that has run this before is never asked for a code again.
-func ensureAuthorized(ctx context.Context, client *telegram.Client, phone string, in *bufio.Reader) error {
-	status, err := client.Auth().Status(ctx)
-	if err == nil && status != nil && status.Authorized {
+// canPromptForCode reports whether os.Stdin is a terminal -- that is, whether a
+// login code Telegram sends could actually be typed back in.
+//
+// This is the switch that stops the OTP spam. Telegram dispatches the code the
+// moment the auth flow starts, so asking for one with a pipe, a redirected file
+// or no console at all (every Kaggle worker) spends a real message on a request
+// that can only end in EOF. The failure was never the login itself; it was
+// starting one that had no way to finish.
+func canPromptForCode() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+// loginDecision is ensureAuthorized's reasoning, split out so the rule "never
+// request a code nobody can answer" is testable without a network. Nothing that
+// can dispatch a code runs before it.
+func loginDecision(authorized bool, phone string, promptable bool, sessionPath string) error {
+	if authorized {
 		return nil
 	}
 	if phone == "" {
 		return errors.New(
 			"not authorized yet and no --phone given; run once with --phone to log in")
+	}
+	if !promptable {
+		return fmt.Errorf(
+			"no authorized session at %s and stdin is not a terminal; refusing to "+
+				"request a login code (log in once from a console, or point "+
+				"--session/$TGUP_SESSION at a session that already exists)",
+			sessionPath)
+	}
+	return nil
+}
+
+// ensureAuthorized logs in only when the stored session is not usable, so a
+// machine that has run this before is never asked for a code again.
+func ensureAuthorized(ctx context.Context, client *telegram.Client, phone string, in *bufio.Reader) error {
+	status, err := client.Auth().Status(ctx)
+	authorized := err == nil && status != nil && status.Authorized
+	if decisionErr := loginDecision(authorized, phone, canPromptForCode(), sessionFile); decisionErr != nil {
+		return decisionErr
 	}
 	flow := auth.NewFlow(consoleAuth{phone: phone, in: in}, auth.SendCodeOptions{
 		AllowFlashCall: false,
@@ -475,6 +520,14 @@ func (p *pool) close() {
 // sessionCopies duplicates the base session file once per connection. It runs
 // before any client opens it, so no client ever sees a half-written file.
 func sessionCopies(count int) ([]string, error) {
+	// --session and TGUP_SESSION may name a directory that does not exist yet
+	// (a fresh /kaggle/working). Creating it here turns a confusing write error
+	// deep inside gotd into the obvious thing having happened.
+	if dir := filepath.Dir(sessionFile); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("creating session directory %s: %w", dir, err)
+		}
+	}
 	data, err := os.ReadFile(sessionFile)
 	if err != nil {
 		// No session yet: create empty ones. gotd treats a missing file as a
@@ -519,6 +572,7 @@ func openPool(ctx context.Context, cred credentials, channel string, count int, 
 
 	// The first connection does the login. Its session file becomes the one
 	// future runs reuse, so a second pass never asks for a code again.
+	logf("session   %s", sessionFile)
 	base := newClient(cred, sessionFile)
 	baseCtx, cancelBase := context.WithCancel(ctx)
 	baseErr := base.Run(baseCtx, func(ctx context.Context) error {

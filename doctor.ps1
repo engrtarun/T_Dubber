@@ -257,7 +257,11 @@ if ($goText -match '"runnable":\s*true') {
     # logged in. That is not a fault, it just means the first upload asks for a
     # Telegram code once.
     if ($goText -match '"needs_login":\s*true') {
-        Add-Result "tgup uploader" "warn" "built and runnable; first upload will ask for a Telegram login code once" ""
+        # Not a fault, but it is a real limitation: with no session tgup never
+        # starts a login (it would ask Telegram for a code nobody at this end
+        # can answer, then fail at EOF), so every upload goes via Telethon
+        # until someone logs in once from a console.
+        Add-Result "tgup uploader" "warn" "built and runnable, but has no session: uploads use Telethon until you log in once from a console" "tgup upload --file <any> --channel @name --api-id N --api-hash H --phone +CC...  (stdin must be a terminal)"
     } else {
         Add-Result "tgup uploader" "ok" "built, runnable, and already logged in (multi-connection uploads available)"
     }
