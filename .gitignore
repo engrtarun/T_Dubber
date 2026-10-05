@@ -42,3 +42,6 @@ compile_commands.json
 # Windows job builds normalizer.exe here instead of inside cpp_accelerator/, so
 # a CMakeCache.txt can never be committed into the source tree by accident.
 .build/
+
+# Security: ignore Kaggle credentials
+kaggle.json
