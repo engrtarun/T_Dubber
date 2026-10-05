@@ -30,6 +30,11 @@ __pycache__/
 # seconds by the CI job that needs it, so it has no business in history.
 cpp_accelerator/build/
 
+# The scalar-only (-DNORMALIZER_ASM=OFF) twin tree, used to byte-compare the
+# AVX2 kernel against the reference path: a generated tree for the same
+# reasons, and never a source file.
+cpp_accelerator/build_scalar/
+
 # Same reasoning for any other stray CMake tree.
 CMakeCache.txt
 CMakeFiles/
@@ -45,3 +50,9 @@ compile_commands.json
 
 # Security: ignore Kaggle credentials
 kaggle.json
+
+# Vendored NASM (tools/nasm/) -- downloaded by hand, ~1.5 MB of binaries that
+# cpp_accelerator/CMakeLists.txt finds through its HINTS. Assembler, not
+# source: regenerable from https://www.nasm.us/pub/nasm/releasebuilds/, so it
+# has no business in git. The .asm files it assembles DO live in git.
+tools/nasm/

@@ -315,11 +315,18 @@ RUN cd havaldar_core && \
 # FFTW, see cpp_accelerator/CMakeLists.txt -- so -static is a one-flag
 # affair. CMakeLists warnings are not -Werror, so the clang->gcc warning
 # dialect difference cannot turn a warning into a failed pack.
+#
+# nasm is here for cpp_accelerator/kernels/normalizer_gate_gain.asm, the AVX2
+# gate/gain kernel: it assembles to plain ELF object code, so it costs
+# nothing at run time and the -static assertion below still holds. If nasm is
+# ever missing, CMake silently falls back to the scalar C++ loop -- which is
+# why the equivalence test in the build below is run explicitly rather than
+# left to chance.
 FROM ubuntu:${UBUNTU_TAG} AS cpp-forge
 
 RUN apt-get update && \
-    { apt-get install -y --no-install-recommends g++-12 cmake make binutils || \
-      apt-get install -y --no-install-recommends g++ cmake make binutils; } && \
+    { apt-get install -y --no-install-recommends g++-12 cmake make binutils nasm || \
+      apt-get install -y --no-install-recommends g++ cmake make binutils nasm; } && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -331,11 +338,16 @@ COPY cpp_accelerator/ ./
 # above: ldd executes a static binary and reports the PROGRAM's exit code as its
 # own, so it is not a measurement of the file. binutils is installed above so
 # readelf is a guaranteed dependency rather than something inherited by luck.
+#
+# normalizer_kernel_test compares the assembled kernel against the scalar
+# reference, so a kernel that would silently corrupt audio never reaches the
+# pack. It prints SKIP and exits 0 on a builder without AVX2.
 RUN CXX="$(command -v g++-12 || command -v g++ || echo g++)" \
         cmake -S . -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_EXE_LINKER_FLAGS="-static" && \
     cmake --build build --config Release -j"$(nproc)" && \
+    ./build/normalizer_kernel_test && \
     ./build/normalizer --help > /tmp/probe.txt 2>&1; \
     echo "=== probe: normalizer --help ==="; cat /tmp/probe.txt; echo "=== end probe ==="; \
     if ! command -v readelf > /dev/null 2>&1; then \

@@ -34,13 +34,90 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(normalizer normalizer.cpp)
+add_executable(normalizer normalizer.cpp normalizer_kernel.cpp)
 
 # Warnings are the cheapest tests we own.
+#
+# Scoped to CXX on purpose: this target also contains a NASM source, and
+# CMake hands target_compile_options to every language in the target -- where
+# nasm would try to parse "/W4" as a filename.
 if(MSVC)
-    target_compile_options(normalizer PRIVATE /W4 /permissive- /Zc:__cplusplus)
+    set(NORMALIZER_WARNINGS /W4 /permissive- /Zc:__cplusplus)
 else()
-    target_compile_options(normalizer PRIVATE -Wall -Wextra -Wpedantic)
+    set(NORMALIZER_WARNINGS -Wall -Wextra -Wpedantic)
+endif()
+foreach(_warn IN LISTS NORMALIZER_WARNINGS)
+    target_compile_options(normalizer PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${_warn}>")
+endforeach()
+
+# ---------------------------------------------------------------------------
+# Optional AVX2 kernel: kernels/normalizer_gate_gain.asm, assembled by NASM.
+#
+# One source serves both builds this project ships -- win64 for the local
+# MSVC build, elf64 for the static Linux binary the Kaggle pack exports from
+# the Dockerfile -- so NASM is the only new requirement and it is a
+# BUILD-TIME one: nothing is executed at run time that was not in the object
+# file already.
+#
+# Every part of this degrades to the original behaviour: no NASM, a non-x86
+# target, or -DNORMALIZER_ASM=OFF all leave normalizer.cpp on its scalar
+# loop, and the runtime CPUID probe in normalizer_kernel.cpp can still say no
+# on a machine without AVX2.
+# ---------------------------------------------------------------------------
+option(NORMALIZER_ASM "Assemble the AVX2 gate/gain kernel with NASM" ON)
+option(NORMALIZER_BUILD_TESTS "Build tests/kernel_equivalence_test" ON)
+
+find_program(NASM_EXECUTABLE
+             NAMES nasm nasm.exe
+             HINTS "${CMAKE_CURRENT_SOURCE_DIR}/../tools/nasm"
+                   "${CMAKE_CURRENT_SOURCE_DIR}/tools/nasm")
+
+set(NORMALIZER_ASM_SOURCES "")
+set(NORMALIZER_HAVE_ASM OFF)
+
+if(NORMALIZER_ASM AND NASM_EXECUTABLE)
+    if(MSVC)
+        set(_nasm_format win64)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(_nasm_format elf64)
+    endif()
+
+    if(_nasm_format)
+        # Both must be set before enable_language(), or CMake probes for an
+        # assembler of its own choosing and ignores NASM_EXECUTABLE.
+        set(CMAKE_ASM_NASM_OBJECT_FORMAT "${_nasm_format}")
+        set(CMAKE_ASM_NASM_COMPILER "${NASM_EXECUTABLE}" CACHE FILEPATH
+            "NASM assembler" FORCE)
+        enable_language(ASM_NASM)
+
+        set(NORMALIZER_ASM_SOURCES kernels/normalizer_gate_gain.asm)
+        set(NORMALIZER_HAVE_ASM ON)
+        message(STATUS "normalizer: AVX2 kernel ON  (${NASM_EXECUTABLE}, ${_nasm_format})")
+    endif()
+endif()
+
+if(NOT NORMALIZER_HAVE_ASM)
+    message(STATUS "normalizer: AVX2 kernel OFF (nasm missing, unsupported target, "
+                   "or NORMALIZER_ASM=OFF) -- scalar path only")
+endif()
+
+if(NORMALIZER_HAVE_ASM)
+    target_sources(normalizer PRIVATE ${NORMALIZER_ASM_SOURCES})
+    target_compile_definitions(normalizer PRIVATE TD_NORMALIZER_HAVE_ASM=1)
+endif()
+
+# The equivalence test is meaningful only when there are two paths to
+# compare; a scalar-only build skips it instead of pretending to pass.
+if(NORMALIZER_HAVE_ASM AND NORMALIZER_BUILD_TESTS)
+    add_executable(normalizer_kernel_test
+                   tests/kernel_equivalence_test.cpp
+                   normalizer_kernel.cpp
+                   ${NORMALIZER_ASM_SOURCES})
+    target_include_directories(normalizer_kernel_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_definitions(normalizer_kernel_test PRIVATE TD_NORMALIZER_HAVE_ASM=1)
+    foreach(_warn IN LISTS NORMALIZER_WARNINGS)
+        target_compile_options(normalizer_kernel_test PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${_warn}>")
+    endforeach()
 endif()
 
 # Optional: squeeze out the last few percent on a machine that will never run

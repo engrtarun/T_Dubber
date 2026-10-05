@@ -1,0 +1,17 @@
+{
+  "project_id": "Love_Alarm___Official_Trailer___Netflix-7c6d5ad2fada-bac2b93b9e",
+  "title": "Love_Alarm___Official_Trailer___Netflix",
+  "run_id": "bac2b93b9e",
+  "state": "processing",
+  "source_video": "Love_Alarm_Official_Trailer_Netflix.mp4",
+  "source_url": "https://youtu.be/8sXTfzaLmiQ",
+  "source_kind": "web",
+  "source_size": 10427298,
+  "target_language": "Hindi",
+  "speaker_detection": true,
+  "created_at": "2026-10-05T11:18:09+05:30",
+  "telegram_backup": "https://t.me/tgwebcloud1/17",
+  "kernel_id": "engrtarun/dubber-worker-homura",
+  "output_video": null,
+  "report_file": null
+}

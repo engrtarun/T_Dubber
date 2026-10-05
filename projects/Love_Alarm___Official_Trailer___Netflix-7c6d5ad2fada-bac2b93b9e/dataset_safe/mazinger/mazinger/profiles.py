@@ -1,0 +1,1214 @@
+"""Download voice-cloning profiles from the HuggingFace dataset repo."""
+
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from urllib.error import HTTPError, URLError
+
+log = logging.getLogger(__name__)
+
+CUSTOM_PROFILES_REPO_URL = os.environ.get("MAZINGER_PROFILES_REPO_URL")
+DEFAULT_PROFILES_REPO_URL = "https://huggingface.co/datasets/bakrianoo/mazinger-dubber-profiles/resolve/main/profiles"
+PROFILES_REPO_URL = DEFAULT_PROFILES_REPO_URL
+HF_TOKEN = os.environ.get("HF_TOKEN")
+
+SCRIPT_FILENAME = "script.txt"
+VOICE_EXTENSIONS = ("wav", "m4a", "mp3")
+
+MIN_CLONE_DURATION = 20.0
+MAX_CLONE_DURATION = 60.0
+MIN_CLONE_WORDS = 20
+
+
+def _make_request(url: str, method: str = "GET") -> urllib.request.Request:
+    req = urllib.request.Request(url, method=method)
+    if HF_TOKEN:
+        req.add_header("Authorization", f"Bearer {HF_TOKEN}")
+    return req
+
+
+def _download_file(url: str, dest: str) -> None:
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    log.info("Downloading %s -> %s", url, dest)
+    with urllib.request.urlopen(_make_request(url), timeout=30) as response:
+        with open(dest, "wb") as f:
+            shutil.copyfileobj(response, f)
+
+
+def _convert_to_wav(src: str, dest: str) -> None:
+    """Convert any audio file to 16-kHz mono WAV using ffmpeg."""
+    log.info("Converting %s -> %s", src, dest)
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", src,
+            "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
+            dest,
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def _download_voice(base_url: str, profile_dir: str) -> str:
+    """Try each supported extension and return the path to the downloaded file."""
+    for ext in VOICE_EXTENSIONS:
+        dest = os.path.join(profile_dir, f"voice.{ext}")
+        if os.path.exists(dest) and os.path.getsize(dest) > 0:
+            log.info("Using cached voice: %s", dest)
+            return dest
+        try:
+            _download_file(f"{base_url}/voice.{ext}", dest)
+            return dest
+        except HTTPError:
+            # Remove any empty/partial file left by the failed download
+            if os.path.exists(dest):
+                os.remove(dest)
+            continue
+    raise FileNotFoundError(
+        f"No voice file found for profile at {base_url} "
+        f"(tried extensions: {', '.join(VOICE_EXTENSIONS)})"
+    )
+
+
+def _ensure_wav(voice_path: str) -> str:
+    """Return a WAV version of *voice_path*, converting if necessary."""
+    if voice_path.endswith(".wav"):
+        return voice_path
+    wav_path = os.path.splitext(voice_path)[0] + ".wav"
+    if os.path.exists(wav_path):
+        return wav_path
+    _convert_to_wav(voice_path, wav_path)
+    return wav_path
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Voice Themes (Qwen VoiceDesign)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_THEME_REF_TEXTS = {
+    "Chinese": (
+        "大家好，今天我们将一起探索一些非常精彩的内容。"
+        "从古老的丝绸之路到现代的量子物理学，"
+        "每一个发现都充满了惊喜和挑战。"
+        "请仔细聆听，因为这些知识将彻底改变你对世界的认知，"
+        "让我们共同踏上这段奇妙的旅程吧。"
+    ),
+    "English": (
+        "Welcome everyone, today we are going to explore something truly fascinating. "
+        "Throughout history, philosophers and scientists have questioned the very fabric of existence, "
+        "pushing boundaries through observation, experimentation, and sheer curiosity. "
+        "From the depths of the ocean to the vast stretches of outer space, "
+        "each breakthrough challenge reshapes our understanding of the world around us."
+    ),
+    "Japanese": (
+        "皆さんこんにちは、今日はとても魅力的なテーマを一緒に探っていきましょう。"
+        "歴史を通じて、哲学者や科学者たちは存在の本質を問い続けてきました。"
+        "深海の神秘から宇宙の果てまで、"
+        "観察と実験を重ねるたびに新しい発見が生まれ、"
+        "私たちの世界観は大きく変わってきたのです。"
+    ),
+    "Korean": (
+        "여러분 안녕하세요, 오늘은 정말 흥미로운 주제를 함께 살펴보겠습니다. "
+        "역사를 통해 철학자와 과학자들은 존재의 본질에 대해 끊임없이 질문해 왔습니다. "
+        "깊은 바다의 신비부터 광활한 우주의 끝자락까지, "
+        "관찰과 실험을 거듭할수록 새로운 발견이 탄생하며 "
+        "우리의 세계관은 크게 변화해 왔습니다."
+    ),
+    "German": (
+        "Herzlich willkommen, heute werden wir gemeinsam etwas wirklich Faszinierendes erkunden. "
+        "Im Laufe der Geschichte haben Philosophen und Wissenschaftler die Grundfesten unserer Existenz hinterfragt, "
+        "Grenzen durch Beobachtung, Experimente und pure Neugier verschoben. "
+        "Von den Tiefen der Ozeane bis zu den Weiten des Weltraums "
+        "verändert jeder Durchbruch unser Verständnis der Welt um uns herum."
+    ),
+    "French": (
+        "Bienvenue à tous, aujourd'hui nous allons explorer ensemble quelque chose de vraiment fascinant. "
+        "À travers l'histoire, philosophes et scientifiques ont questionné le tissu même de l'existence, "
+        "repoussant les frontières grâce à l'observation, l'expérimentation et la pure curiosité. "
+        "Des profondeurs de l'océan aux vastes étendues de l'espace, "
+        "chaque percée transforme notre compréhension du monde qui nous entoure."
+    ),
+    "Russian": (
+        "Добро пожаловать, сегодня мы вместе исследуем нечто поистине увлекательное. "
+        "На протяжении всей истории философы и учёные ставили под вопрос саму природу бытия, "
+        "раздвигая границы через наблюдение, эксперимент и чистое любопытство. "
+        "От глубин океана до бескрайних просторов космоса "
+        "каждое открытие меняет наше представление об окружающем мире."
+    ),
+    "Portuguese": (
+        "Bem-vindos, hoje vamos explorar juntos algo verdadeiramente fascinante. "
+        "Ao longo da história, filósofos e cientistas questionaram a própria essência da existência, "
+        "expandindo fronteiras através da observação, experimentação e pura curiosidade. "
+        "Das profundezas do oceano às vastas extensões do espaço, "
+        "cada avanço transforma a nossa compreensão do mundo que nos rodeia."
+    ),
+    "Spanish": (
+        "Bienvenidos a todos, hoy vamos a explorar juntos algo realmente fascinante. "
+        "A lo largo de la historia, filósofos y científicos han cuestionado la esencia misma de la existencia, "
+        "empujando las fronteras a través de la observación, la experimentación y la pura curiosidad. "
+        "Desde las profundidades del océano hasta las vastas extensiones del espacio, "
+        "cada descubrimiento transforma nuestra comprensión del mundo que nos rodea."
+    ),
+    "Italian": (
+        "Benvenuti a tutti, oggi esploreremo insieme qualcosa di davvero affascinante. "
+        "Nel corso della storia, filosofi e scienziati hanno messo in discussione l'essenza stessa dell'esistenza, "
+        "spingendo i confini attraverso l'osservazione, la sperimentazione e la pura curiosità. "
+        "Dalle profondità dell'oceano alle vaste distese dello spazio, "
+        "ogni scoperta trasforma la nostra comprensione del mondo che ci circonda."
+    ),
+    # ── OmniVoice-extended languages ──────────────────────────────────
+    "Arabic": (
+        "مرحباً بالجميع، اليوم سنستكشف معاً شيئاً مذهلاً حقاً. "
+        "على مرّ التاريخ، تساءل الفلاسفة والعلماء عن جوهر الوجود ذاته، "
+        "ودفعوا حدود المعرفة من خلال الملاحظة والتجربة والفضول الخالص. "
+        "من أعماق المحيطات إلى أقاصي الفضاء الشاسع، "
+        "كل اكتشاف يغيّر فهمنا للعالم من حولنا."
+    ),
+    "Cantonese": (
+        "大家好，今日我哋一齊嚟探索一啲真係好精彩嘅嘢。"
+        "喺歷史長河入面，哲學家同科學家一直都喺度質疑存在嘅本質，"
+        "透過觀察、實驗同純粹嘅好奇心去推動知識嘅邊界。"
+        "由深海嘅奧秘到浩瀚嘅宇宙，"
+        "每一個突破都改變咗我哋對世界嘅認識。"
+    ),
+    "Czech": (
+        "Vítejte všichni, dnes společně prozkoumáme něco opravdu fascinujícího. "
+        "V průběhu dějin filosofové a vědci zpochybňovali samotnou podstatu existence "
+        "a posouvali hranice poznání prostřednictvím pozorování, experimentů a čisté zvědavosti. "
+        "Od hlubin oceánu po rozlehlé prostory vesmíru "
+        "každý objev proměňuje naše chápání světa kolem nás."
+    ),
+    "Dutch": (
+        "Welkom allemaal, vandaag gaan we samen iets werkelijk fascinerends verkennen. "
+        "Door de hele geschiedenis heen hebben filosofen en wetenschappers de essentie van het bestaan bevraagd "
+        "en grenzen verlegd door observatie, experimenten en pure nieuwsgierigheid. "
+        "Van de diepten van de oceaan tot de uitgestrekte ruimte, "
+        "elke doorbraak verandert ons begrip van de wereld om ons heen."
+    ),
+    "Finnish": (
+        "Tervetuloa kaikki, tänään tutkimme yhdessä jotain todella kiehtovaa. "
+        "Kautta historian filosofit ja tieteilijät ovat kyseenalaistaneet olemassaolon olemuksen "
+        "ja siirtäneet tiedon rajoja havainnoinnin, kokeiden ja puhtaan uteliaisuuden avulla. "
+        "Valtamerten syvyyksistä avaruuden äärettömiin ulottuvuuksiin "
+        "jokainen läpimurto muuttaa käsitystämme ympäröivästä maailmasta."
+    ),
+    "Greek": (
+        "Καλώς ήρθατε όλοι, σήμερα θα εξερευνήσουμε μαζί κάτι πραγματικά συναρπαστικό. "
+        "Στο πέρασμα της ιστορίας, φιλόσοφοι και επιστήμονες αμφισβήτησαν την ίδια την ουσία της ύπαρξης, "
+        "ωθώντας τα όρια μέσω της παρατήρησης, του πειραματισμού και της αμιγούς περιέργειας. "
+        "Από τα βάθη του ωκεανού μέχρι τις απέραντες εκτάσεις του διαστήματος, "
+        "κάθε ανακάλυψη μεταμορφώνει την κατανόησή μας για τον κόσμο γύρω μας."
+    ),
+    "Hindi": (
+        "सभी का स्वागत है, आज हम मिलकर कुछ वाकई अद्भुत खोजने वाले हैं। "
+        "पूरे इतिहास में दार्शनिकों और वैज्ञानिकों ने अस्तित्व के सार पर सवाल उठाए हैं, "
+        "अवलोकन, प्रयोग और विशुद्ध जिज्ञासा के माध्यम से ज्ञान की सीमाओं को आगे बढ़ाया है। "
+        "समुद्र की गहराइयों से लेकर अंतरिक्ष के विशाल विस्तार तक, "
+        "हर खोज हमारे आसपास की दुनिया की समझ को बदल देती है।"
+    ),
+    "Indonesian": (
+        "Selamat datang semuanya, hari ini kita akan menjelajahi sesuatu yang benar-benar menakjubkan. "
+        "Sepanjang sejarah, para filsuf dan ilmuwan telah mempertanyakan hakikat keberadaan itu sendiri, "
+        "mendorong batas-batas pengetahuan melalui pengamatan, eksperimen, dan rasa ingin tahu yang murni. "
+        "Dari kedalaman lautan hingga hamparan luas angkasa, "
+        "setiap terobosan mengubah pemahaman kita tentang dunia di sekitar kita."
+    ),
+    "Polish": (
+        "Witajcie wszyscy, dziś wspólnie odkryjemy coś naprawdę fascynującego. "
+        "Na przestrzeni dziejów filozofowie i naukowcy kwestionowali samą istotę istnienia, "
+        "przesuwając granice poznania poprzez obserwację, eksperyment i czystą ciekawość. "
+        "Od głębin oceanu po bezkresne przestrzenie kosmosu "
+        "każde odkrycie zmienia nasze rozumienie otaczającego nas świata."
+    ),
+    "Romanian": (
+        "Bun venit tuturor, astăzi vom explora împreună ceva cu adevărat fascinant. "
+        "De-a lungul istoriei, filozofii și oamenii de știință au pus la îndoială însăși esența existenței, "
+        "împingând granițele cunoașterii prin observație, experimentare și pură curiozitate. "
+        "Din adâncurile oceanului până la întinderile vaste ale spațiului, "
+        "fiecare descoperire ne transformă înțelegerea lumii din jurul nostru."
+    ),
+    "Thai": (
+        "สวัสดีทุกท่าน วันนี้เราจะมาสำรวจสิ่งที่น่าทึ่งอย่างแท้จริงร่วมกัน "
+        "ตลอดประวัติศาสตร์ นักปรัชญาและนักวิทยาศาสตร์ได้ตั้งคำถามถึงแก่นแท้ของการดำรงอยู่ "
+        "ผลักดันขอบเขตความรู้ผ่านการสังเกต การทดลอง และความอยากรู้อยากเห็นอันบริสุทธิ์ "
+        "จากส่วนลึกของมหาสมุทรไปจนถึงห้วงอวกาศอันกว้างใหญ่ "
+        "ทุกการค้นพบเปลี่ยนแปลงความเข้าใจของเราเกี่ยวกับโลกรอบตัว"
+    ),
+    "Turkish": (
+        "Herkese hoş geldiniz, bugün birlikte gerçekten büyüleyici bir şeyi keşfedeceğiz. "
+        "Tarih boyunca filozoflar ve bilim insanları varoluşun özünü sorgulamış, "
+        "gözlem, deney ve saf merak yoluyla bilginin sınırlarını zorlamıştır. "
+        "Okyanusların derinliklerinden uzayın uçsuz bucaksız genişliklerine kadar "
+        "her buluş çevremizdeki dünyaya bakışımızı değiştirmektedir."
+    ),
+    "Ukrainian": (
+        "Ласкаво просимо всіх, сьогодні ми разом дослідимо щось по-справжньому захопливе. "
+        "Впродовж історії філософи та науковці ставили під сумнів саму сутність буття, "
+        "розсуваючи межі пізнання через спостереження, експерименти та чисту допитливість. "
+        "Від глибин океану до безмежних просторів космосу "
+        "кожне відкриття змінює наше розуміння світу навколо нас."
+    ),
+    "Vietnamese": (
+        "Xin chào tất cả mọi người, hôm nay chúng ta sẽ cùng khám phá điều gì đó thực sự tuyệt vời. "
+        "Xuyên suốt lịch sử, các nhà triết học và khoa học đã đặt câu hỏi về bản chất của sự tồn tại, "
+        "mở rộng ranh giới tri thức thông qua quan sát, thí nghiệm và sự tò mò thuần khiết. "
+        "Từ vực sâu đại dương đến những khoảng không bao la của vũ trụ, "
+        "mỗi khám phá đều thay đổi cách chúng ta hiểu về thế giới xung quanh."
+    ),
+}
+
+VOICE_THEMES: dict[str, dict] = {
+    "narrator-m": {
+        "gender": "male",
+        "instructs": {
+            "Chinese": "男性，35岁，男中音，温暖沉稳，专业播音，吐字清晰",
+            "English": "Male, 35 years old, baritone, warm and steady, professional narrator with clear enunciation",
+            "Japanese": "男性、35歳、バリトン、温かく安定した声、プロのナレーター、明瞭な発音",
+            "Korean": "남성, 35세, 바리톤, 따뜻하고 안정적인 목소리, 전문 내레이터, 명확한 발음",
+            "German": "Männlich, 35 Jahre, Bariton, warm und ruhig, professioneller Erzähler mit klarer Aussprache",
+            "French": "Homme, 35 ans, baryton, voix chaude et posée, narrateur professionnel avec diction claire",
+            "Russian": "Мужчина, 35 лет, баритон, тёплый и уверенный голос, профессиональный диктор, чёткая дикция",
+            "Portuguese": "Masculino, 35 anos, barítono, voz quente e firme, narrador profissional com dicção clara",
+            "Spanish": "Masculino, 35 años, barítono, voz cálida y firme, narrador profesional con dicción clara",
+            "Italian": "Maschile, 35 anni, baritono, voce calda e stabile, narratore professionale con dizione chiara",
+            "Arabic": "male, 35 years old, baritone, warm and steady, professional narrator",
+            "Cantonese": "male, 35 years old, baritone, warm and steady, professional narrator",
+            "Czech": "male, 35 years old, baritone, warm and steady, professional narrator",
+            "Dutch": "male, 35 years old, baritone, warm and steady, professional narrator",
+            "Finnish": "male, 35 years old, baritone, warm and steady, professional narrator",
+            "Greek": "male, 35 years old, baritone, warm and steady, professional narrator",
+            "Hindi": "male, 35 years old, baritone, warm and steady, professional narrator",
+            "Indonesian": "male, 35 years old, baritone, warm and steady, professional narrator",
+            "Polish": "male, 35 years old, baritone, warm and steady, professional narrator",
+            "Romanian": "male, 35 years old, baritone, warm and steady, professional narrator",
+            "Thai": "male, 35 years old, baritone, warm and steady, professional narrator",
+            "Turkish": "male, 35 years old, baritone, warm and steady, professional narrator",
+            "Ukrainian": "male, 35 years old, baritone, warm and steady, professional narrator",
+            "Vietnamese": "male, 35 years old, baritone, warm and steady, professional narrator",
+        },
+    },
+    "narrator-f": {
+        "gender": "female",
+        "instructs": {
+            "Chinese": "女性，30岁，女中音，流畅动人，专业播音，自信从容",
+            "English": "Female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator with confident delivery",
+            "Japanese": "女性、30歳、メゾソプラノ、滑らかで魅力的な声、プロのナレーター、自信のある話し方",
+            "Korean": "여성, 30세, 메조소프라노, 부드럽고 매력적인 목소리, 전문 내레이터, 자신감 있는 전달",
+            "German": "Weiblich, 30 Jahre, Mezzosopran, geschmeidig und fesselnd, professionelle Erzählerin mit selbstbewusstem Vortrag",
+            "French": "Femme, 30 ans, mezzo-soprano, voix fluide et captivante, narratrice professionnelle au débit assuré",
+            "Russian": "Женщина, 30 лет, меццо-сопрано, плавный и увлекательный голос, профессиональный диктор, уверенная подача",
+            "Portuguese": "Feminino, 30 anos, mezzo-soprano, voz suave e envolvente, narradora profissional com entrega confiante",
+            "Spanish": "Femenino, 30 años, mezzosoprano, voz suave y cautivadora, narradora profesional con entrega segura",
+            "Italian": "Femminile, 30 anni, mezzosoprano, voce fluida e coinvolgente, narratrice professionale con tono sicuro",
+            "Arabic": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+            "Cantonese": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+            "Czech": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+            "Dutch": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+            "Finnish": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+            "Greek": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+            "Hindi": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+            "Indonesian": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+            "Polish": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+            "Romanian": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+            "Thai": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+            "Turkish": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+            "Ukrainian": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+            "Vietnamese": "female, 30 years old, mezzo-soprano, smooth and engaging, professional narrator",
+        },
+    },
+    "young-m": {
+        "gender": "male",
+        "instructs": {
+            "Chinese": "男性，22岁，男高音，充满活力，轻松自然，年轻的对话风格",
+            "English": "Male, 22 years old, tenor, energetic and casual, natural youthful conversational tone",
+            "Japanese": "男性、22歳、テノール、エネルギッシュでカジュアル、自然で若々しい会話調",
+            "Korean": "남성, 22세, 테너, 활기차고 캐주얼한, 자연스럽고 젊은 대화체",
+            "German": "Männlich, 22 Jahre, Tenor, energisch und locker, natürlicher jugendlicher Gesprächston",
+            "French": "Homme, 22 ans, ténor, énergique et décontracté, ton conversationnel jeune et naturel",
+            "Russian": "Мужчина, 22 года, тенор, энергичный и непринуждённый, естественный молодёжный разговорный тон",
+            "Portuguese": "Masculino, 22 anos, tenor, enérgico e descontraído, tom conversacional jovem e natural",
+            "Spanish": "Masculino, 22 años, tenor, enérgico y relajado, tono conversacional joven y natural",
+            "Italian": "Maschile, 22 anni, tenore, energico e disinvolto, tono conversazionale giovane e naturale",
+            "Arabic": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+            "Cantonese": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+            "Czech": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+            "Dutch": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+            "Finnish": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+            "Greek": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+            "Hindi": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+            "Indonesian": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+            "Polish": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+            "Romanian": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+            "Thai": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+            "Turkish": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+            "Ukrainian": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+            "Vietnamese": "male, 22 years old, tenor, energetic and casual, youthful conversational tone",
+        },
+    },
+    "young-f": {
+        "gender": "female",
+        "instructs": {
+            "Chinese": "女性，22岁，女高音，明亮开朗，友好亲切，年轻的对话风格",
+            "English": "Female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Japanese": "女性、22歳、ソプラノ、明るく快活、フレンドリーで若々しい会話スタイル",
+            "Korean": "여성, 22세, 소프라노, 밝고 쾌활한, 친근하고 젊은 대화 스타일",
+            "German": "Weiblich, 22 Jahre, Sopran, hell und fröhlich, freundlicher jugendlicher Gesprächsstil",
+            "French": "Femme, 22 ans, soprano, voix claire et joyeuse, style conversationnel jeune et amical",
+            "Russian": "Женщина, 22 года, сопрано, яркий и жизнерадостный голос, дружелюбный молодёжный разговорный стиль",
+            "Portuguese": "Feminino, 22 anos, soprano, voz brilhante e alegre, estilo conversacional jovem e amigável",
+            "Spanish": "Femenino, 22 años, soprano, voz brillante y alegre, estilo conversacional joven y amigable",
+            "Italian": "Femminile, 22 anni, soprano, voce brillante e allegra, stile conversazionale giovane e amichevole",
+            "Arabic": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Cantonese": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Czech": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Dutch": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Finnish": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Greek": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Hindi": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Indonesian": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Polish": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Romanian": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Thai": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Turkish": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Ukrainian": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+            "Vietnamese": "female, 22 years old, soprano, bright and cheerful, friendly youthful conversational style",
+        },
+    },
+    "deep-m": {
+        "gender": "male",
+        "instructs": {
+            "Chinese": "男性，45岁，低男中音，深沉有力，威严从容，节奏沉稳",
+            "English": "Male, 45 years old, bass-baritone, deep and commanding, authoritative presence with measured pacing",
+            "Japanese": "男性、45歳、バスバリトン、深く力強い声、威厳のある存在感、落ち着いたペース",
+            "Korean": "남성, 45세, 베이스바리톤, 깊고 위엄 있는 목소리, 권위 있는 존재감, 차분한 속도",
+            "German": "Männlich, 45 Jahre, Bassbariton, tief und bestimmend, autoritäre Ausstrahlung mit gemessenem Tempo",
+            "French": "Homme, 45 ans, baryton-basse, voix profonde et imposante, présence autoritaire au rythme mesuré",
+            "Russian": "Мужчина, 45 лет, бас-баритон, глубокий и властный голос, авторитетное присутствие, размеренный темп",
+            "Portuguese": "Masculino, 45 anos, baixo-barítono, voz profunda e imponente, presença autoritária com ritmo comedido",
+            "Spanish": "Masculino, 45 años, bajo-barítono, voz profunda e imponente, presencia autoritaria con ritmo mesurado",
+            "Italian": "Maschile, 45 anni, basso-baritono, voce profonda e imponente, presenza autorevole con ritmo misurato",
+            "Arabic": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+            "Cantonese": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+            "Czech": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+            "Dutch": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+            "Finnish": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+            "Greek": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+            "Hindi": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+            "Indonesian": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+            "Polish": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+            "Romanian": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+            "Thai": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+            "Turkish": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+            "Ukrainian": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+            "Vietnamese": "male, 45 years old, bass-baritone, deep and commanding, authoritative with measured pacing",
+        },
+    },
+    "deep-f": {
+        "gender": "female",
+        "instructs": {
+            "Chinese": "女性，45岁，女低音，低沉有力，威严沉着，节奏稳健",
+            "English": "Female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Japanese": "女性、45歳、コントラルト、深く響く声、威厳のある存在感、意図的なペース",
+            "Korean": "여성, 45세, 콘트랄토, 깊고 울림 있는 목소리, 위엄 있는 존재감, 신중한 속도",
+            "German": "Weiblich, 45 Jahre, Kontraalt, tief und resonant, gebietende Ausstrahlung mit bedächtigem Tempo",
+            "French": "Femme, 45 ans, contralto, voix profonde et résonnante, présence imposante au rythme délibéré",
+            "Russian": "Женщина, 45 лет, контральто, глубокий и звучный голос, властное присутствие, размеренный темп",
+            "Portuguese": "Feminino, 45 anos, contralto, voz profunda e ressonante, presença imponente com ritmo deliberado",
+            "Spanish": "Femenino, 45 años, contralto, voz profunda y resonante, presencia imponente con ritmo deliberado",
+            "Italian": "Femminile, 45 anni, contralto, voce profonda e risonante, presenza imponente con ritmo deliberato",
+            "Arabic": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Cantonese": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Czech": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Dutch": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Finnish": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Greek": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Hindi": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Indonesian": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Polish": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Romanian": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Thai": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Turkish": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Ukrainian": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+            "Vietnamese": "female, 45 years old, contralto, deep and resonant, commanding presence with deliberate pacing",
+        },
+    },
+    "warm-m": {
+        "gender": "male",
+        "instructs": {
+            "Chinese": "男性，38岁，男中音，温暖柔和，亲切安抚，节奏舒缓",
+            "English": "Male, 38 years old, baritone, warm and gentle, comforting pace with a reassuring tone",
+            "Japanese": "男性、38歳、バリトン、温かく穏やかな声、安心感のあるペース、落ち着いたトーン",
+            "Korean": "남성, 38세, 바리톤, 따뜻하고 부드러운 목소리, 편안한 속도, 안심시키는 톤",
+            "German": "Männlich, 38 Jahre, Bariton, warm und sanft, beruhigendes Tempo mit tröstlichem Klang",
+            "French": "Homme, 38 ans, baryton, voix chaude et douce, rythme apaisant avec un ton rassurant",
+            "Russian": "Мужчина, 38 лет, баритон, тёплый и мягкий голос, успокаивающий темп, утешительная интонация",
+            "Portuguese": "Masculino, 38 anos, barítono, voz quente e suave, ritmo reconfortante com tom acolhedor",
+            "Spanish": "Masculino, 38 años, barítono, voz cálida y suave, ritmo reconfortante con tono acogedor",
+            "Italian": "Maschile, 38 anni, baritono, voce calda e gentile, ritmo rassicurante con tono confortante",
+            "Arabic": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+            "Cantonese": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+            "Czech": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+            "Dutch": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+            "Finnish": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+            "Greek": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+            "Hindi": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+            "Indonesian": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+            "Polish": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+            "Romanian": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+            "Thai": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+            "Turkish": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+            "Ukrainian": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+            "Vietnamese": "male, 38 years old, baritone, warm and gentle, comforting pace with reassuring tone",
+        },
+    },
+    "warm-f": {
+        "gender": "female",
+        "instructs": {
+            "Chinese": "女性，38岁，女低音，温暖舒缓，轻柔安抚，节奏从容",
+            "English": "Female, 38 years old, alto, warm and soothing, gentle pace with a comforting tone",
+            "Japanese": "女性、38歳、アルト、温かく落ち着いた声、穏やかなペース、安心感のあるトーン",
+            "Korean": "여성, 38세, 알토, 따뜻하고 부드러운 목소리, 편안한 속도, 위로하는 톤",
+            "German": "Weiblich, 38 Jahre, Alt, warm und beruhigend, sanftes Tempo mit tröstlichem Klang",
+            "French": "Femme, 38 ans, alto, voix chaude et apaisante, rythme doux avec un ton réconfortant",
+            "Russian": "Женщина, 38 лет, альт, тёплый и успокаивающий голос, мягкий темп, утешительная интонация",
+            "Portuguese": "Feminino, 38 anos, contralto, voz quente e reconfortante, ritmo suave com tom acolhedor",
+            "Spanish": "Femenino, 38 años, contralto, voz cálida y reconfortante, ritmo suave con tono acogedor",
+            "Italian": "Femminile, 38 anni, contralto, voce calda e rassicurante, ritmo dolce con tono confortante",
+            "Arabic": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+            "Cantonese": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+            "Czech": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+            "Dutch": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+            "Finnish": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+            "Greek": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+            "Hindi": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+            "Indonesian": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+            "Polish": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+            "Romanian": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+            "Thai": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+            "Turkish": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+            "Ukrainian": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+            "Vietnamese": "female, 38 years old, alto, warm and soothing, gentle pace with comforting tone",
+        },
+    },
+    "news-m": {
+        "gender": "male",
+        "instructs": {
+            "Chinese": "男性，40岁，男中音，清晰有力，新闻播报风格，权威客观，节奏明快",
+            "English": "Male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Japanese": "男性、40歳、バリトン、クリアで明瞭、ニュースキャスター風、権威的で客観的なトーン",
+            "Korean": "남성, 40세, 바리톤, 선명하고 명료한, 뉴스 앵커 스타일, 권위적이고 객관적인 톤",
+            "German": "Männlich, 40 Jahre, Bariton, klar und deutlich, Nachrichtensprecher-Stil, sachlich und autoritativ",
+            "French": "Homme, 40 ans, baryton, voix nette et articulée, style présentateur de journal, ton autoritaire et objectif",
+            "Russian": "Мужчина, 40 лет, баритон, чёткий и отчётливый, стиль диктора новостей, авторитетный и объективный тон",
+            "Portuguese": "Masculino, 40 anos, barítono, voz nítida e articulada, estilo âncora de telejornal, tom autoritário e objetivo",
+            "Spanish": "Masculino, 40 años, barítono, voz nítida y articulada, estilo presentador de noticias, tono autoritario y objetivo",
+            "Italian": "Maschile, 40 anni, baritono, voce nitida e articolata, stile giornalista televisivo, tono autorevole e obiettivo",
+            "Arabic": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Cantonese": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Czech": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Dutch": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Finnish": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Greek": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Hindi": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Indonesian": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Polish": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Romanian": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Thai": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Turkish": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Ukrainian": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+            "Vietnamese": "male, 40 years old, baritone, crisp and articulate, broadcast news anchor style, authoritative and objective",
+        },
+    },
+    "news-f": {
+        "gender": "female",
+        "instructs": {
+            "Chinese": "女性，36岁，女中音，清晰利落，新闻播报风格，沉稳专业，节奏紧凑",
+            "English": "Female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Japanese": "女性、36歳、メゾソプラノ、明瞭で洗練された声、ニュースキャスター風、落ち着きのあるプロの話し方",
+            "Korean": "여성, 36세, 메조소프라노, 명확하고 세련된, 뉴스 앵커 스타일, 침착하고 전문적인 전달",
+            "German": "Weiblich, 36 Jahre, Mezzosopran, klar und geschliffen, Nachrichtensprecherin-Stil, gelassen und professionell",
+            "French": "Femme, 36 ans, mezzo-soprano, voix claire et soignée, style présentatrice de journal, posée et professionnelle",
+            "Russian": "Женщина, 36 лет, меццо-сопрано, чёткий и отточенный голос, стиль ведущей новостей, собранная и профессиональная",
+            "Portuguese": "Feminino, 36 anos, mezzo-soprano, voz clara e polida, estilo âncora de telejornal, composta e profissional",
+            "Spanish": "Femenino, 36 años, mezzosoprano, voz clara y pulida, estilo presentadora de noticias, serena y profesional",
+            "Italian": "Femminile, 36 anni, mezzosoprano, voce chiara e curata, stile giornalista televisiva, composta e professionale",
+            "Arabic": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Cantonese": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Czech": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Dutch": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Finnish": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Greek": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Hindi": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Indonesian": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Polish": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Romanian": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Thai": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Turkish": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Ukrainian": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+            "Vietnamese": "female, 36 years old, mezzo-soprano, clear and polished, broadcast news anchor style, composed and professional",
+        },
+    },
+    "storyteller-m": {
+        "gender": "male",
+        "instructs": {
+            "Chinese": "男性，50岁，男中音，富有表现力，戏剧性的抑扬顿挫，引人入胜的讲故事风格",
+            "English": "Male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Japanese": "男性、50歳、バリトン、表現力豊か、ドラマチックな抑揚、引き込まれる語り口",
+            "Korean": "남성, 50세, 바리톤, 표현력이 풍부한, 극적인 억양, 매력적인 이야기 전달 스타일",
+            "German": "Männlich, 50 Jahre, Bariton, ausdrucksstark und dramatisch, lebhafte Stimmführung mit fesselndem Erzählrhythmus",
+            "French": "Homme, 50 ans, baryton, expressif et dramatique, dynamique vocale riche avec une cadence narrative captivante",
+            "Russian": "Мужчина, 50 лет, баритон, выразительный и драматичный, богатая голосовая динамика, захватывающая манера повествования",
+            "Portuguese": "Masculino, 50 anos, barítono, expressivo e dramático, rica dinâmica vocal com cadência narrativa cativante",
+            "Spanish": "Masculino, 50 años, barítono, expresivo y dramático, rica dinámica vocal con cadencia narrativa cautivadora",
+            "Italian": "Maschile, 50 anni, baritono, espressivo e drammatico, ricca dinamica vocale con cadenza narrativa avvincente",
+            "Arabic": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Cantonese": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Czech": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Dutch": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Finnish": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Greek": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Hindi": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Indonesian": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Polish": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Romanian": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Thai": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Turkish": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Ukrainian": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+            "Vietnamese": "male, 50 years old, baritone, expressive and dramatic, rich vocal dynamics with captivating storytelling cadence",
+        },
+    },
+    "storyteller-f": {
+        "gender": "female",
+        "instructs": {
+            "Chinese": "女性，48岁，女中音，富有感染力，情感丰富的抑扬顿挫，娓娓道来的叙事风格",
+            "English": "Female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Japanese": "女性、48歳、メゾソプラノ、表現力豊かで情感的、感動的な声域、魅惑的な語りのリズム",
+            "Korean": "여성, 48세, 메조소프라노, 표현력이 풍부하고 감성적인, 감동적인 음역, 매혹적인 이야기 리듬",
+            "German": "Weiblich, 48 Jahre, Mezzosopran, ausdrucksstark und stimmungsvoll, emotionaler Stimmumfang mit bezauberndem Erzählrhythmus",
+            "French": "Femme, 48 ans, mezzo-soprano, expressive et évocatrice, tessiture émotive avec un rythme narratif envoûtant",
+            "Russian": "Женщина, 48 лет, меццо-сопрано, выразительный и проникновенный голос, эмоциональный диапазон, завораживающий ритм повествования",
+            "Portuguese": "Feminino, 48 anos, mezzo-soprano, expressiva e evocativa, alcance vocal emotivo com ritmo narrativo encantador",
+            "Spanish": "Femenino, 48 años, mezzosoprano, expresiva y evocadora, rango vocal emotivo con ritmo narrativo encantador",
+            "Italian": "Femminile, 48 anni, mezzosoprano, espressiva ed evocativa, gamma vocale emotiva con ritmo narrativo incantevole",
+            "Arabic": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Cantonese": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Czech": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Dutch": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Finnish": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Greek": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Hindi": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Indonesian": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Polish": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Romanian": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Thai": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Turkish": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Ukrainian": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+            "Vietnamese": "female, 48 years old, mezzo-soprano, expressive and evocative, emotive vocal range with enchanting storytelling rhythm",
+        },
+    },
+    "kid-m": {
+        "gender": "male",
+        "instructs": {
+            "Chinese": "男孩，8岁，童声高音，天真活泼，好奇心强，语速偏快，清脆明亮",
+            "English": "Boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Japanese": "男の子、8歳、高い子供の声、無邪気で元気、好奇心旺盛、明るくはっきりした声",
+            "Korean": "남자아이, 8세, 높은 어린이 목소리, 순수하고 활발한, 호기심 가득한, 밝고 또렷한 목소리",
+            "German": "Junge, 8 Jahre, hohe Kinderstimme, unschuldig und lebhaft, neugierig und begeistert, klar und hell",
+            "French": "Garçon, 8 ans, voix aiguë d'enfant, innocent et vif, curieux et enthousiaste, voix claire et lumineuse",
+            "Russian": "Мальчик, 8 лет, высокий детский голос, наивный и живой, любознательный и увлечённый, звонкий и чистый",
+            "Portuguese": "Menino, 8 anos, voz aguda infantil, inocente e animado, curioso e entusiasmado, voz clara e brilhante",
+            "Spanish": "Niño, 8 años, voz aguda infantil, inocente y vivaz, curioso y entusiasta, voz clara y brillante",
+            "Italian": "Bambino, 8 anni, voce acuta infantile, innocente e vivace, curioso ed entusiasta, voce chiara e brillante",
+            "Arabic": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Cantonese": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Czech": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Dutch": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Finnish": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Greek": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Hindi": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Indonesian": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Polish": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Romanian": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Thai": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Turkish": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Ukrainian": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+            "Vietnamese": "boy, 8 years old, high-pitched child voice, innocent and lively, curious and enthusiastic, bright and clear",
+        },
+    },
+    "kid-f": {
+        "gender": "female",
+        "instructs": {
+            "Chinese": "女孩，8岁，童声高音，甜美可爱，活泼好动，语速偏快，清脆悦耳",
+            "English": "Girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Japanese": "女の子、8歳、高い子供の声、可愛らしく明るい、活発で楽しげ、澄んだ心地よい声",
+            "Korean": "여자아이, 8세, 높은 어린이 목소리, 사랑스럽고 밝은, 활발하고 즐거운, 맑고 상쾌한 목소리",
+            "German": "Mädchen, 8 Jahre, hohe Kinderstimme, süß und fröhlich, verspielt und lebhaft, klar und angenehm",
+            "French": "Fille, 8 ans, voix aiguë d'enfant, douce et joyeuse, espiègle et animée, voix nette et agréable",
+            "Russian": "Девочка, 8 лет, высокий детский голос, милая и весёлая, игривая и живая, чистый и приятный голос",
+            "Portuguese": "Menina, 8 anos, voz aguda infantil, doce e alegre, brincalhona e animada, voz nítida e agradável",
+            "Spanish": "Niña, 8 años, voz aguda infantil, dulce y alegre, juguetona y animada, voz nítida y agradable",
+            "Italian": "Bambina, 8 anni, voce acuta infantile, dolce e allegra, giocosa e vivace, voce nitida e piacevole",
+            "Arabic": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Cantonese": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Czech": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Dutch": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Finnish": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Greek": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Hindi": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Indonesian": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Polish": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Romanian": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Thai": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Turkish": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Ukrainian": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+            "Vietnamese": "girl, 8 years old, high-pitched child voice, sweet and cheerful, playful and animated, crisp and pleasant",
+        },
+    },
+    "teen-m": {
+        "gender": "male",
+        "instructs": {
+            "Chinese": "男性，16岁，男高音偏高，声音略带沙哑，自信随性，青少年对话风格",
+            "English": "Male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Japanese": "男性、16歳、高めのテノール、やや掠れた声、自信があり気さく、ティーンの会話スタイル",
+            "Korean": "남성, 16세, 높은 테너, 약간 허스키한, 자신감 있고 편안한, 십대 대화 스타일",
+            "German": "Männlich, 16 Jahre, höherer Tenor, leicht rau, selbstbewusst und lässig, jugendlicher Gesprächsstil",
+            "French": "Homme, 16 ans, ténor aigu, voix légèrement rauque, confiant et décontracté, style conversationnel adolescent",
+            "Russian": "Юноша, 16 лет, высокий тенор, слегка хрипловатый, уверенный и непринуждённый, подростковый разговорный стиль",
+            "Portuguese": "Masculino, 16 anos, tenor mais agudo, levemente rouco, confiante e descontraído, estilo conversacional adolescente",
+            "Spanish": "Masculino, 16 años, tenor más agudo, levemente ronco, seguro y relajado, estilo conversacional adolescente",
+            "Italian": "Maschile, 16 anni, tenore più acuto, leggermente roco, sicuro e disinvolto, stile conversazionale adolescenziale",
+            "Arabic": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Cantonese": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Czech": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Dutch": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Finnish": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Greek": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Hindi": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Indonesian": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Polish": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Romanian": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Thai": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Turkish": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Ukrainian": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+            "Vietnamese": "male, 16 years old, higher tenor, slightly husky, confident and laid-back, teenage conversational style",
+        },
+    },
+    "teen-f": {
+        "gender": "female",
+        "instructs": {
+            "Chinese": "女性，16岁，女高音，清澈明亮，热情外向，青少年对话风格",
+            "English": "Female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Japanese": "女性、16歳、ソプラノ、透き通った明るい声、熱心で社交的、ティーンの会話スタイル",
+            "Korean": "여성, 16세, 소프라노, 투명하고 밝은 목소리, 열정적이고 사교적인, 십대 대화 스타일",
+            "German": "Weiblich, 16 Jahre, Sopran, kristallklar und hell, begeistert und aufgeschlossen, jugendlicher Gesprächsstil",
+            "French": "Femme, 16 ans, soprano, voix cristalline et lumineuse, enthousiaste et extravertie, style conversationnel adolescent",
+            "Russian": "Девушка, 16 лет, сопрано, кристально чистый и яркий голос, увлечённая и общительная, подростковый разговорный стиль",
+            "Portuguese": "Feminino, 16 anos, soprano, voz cristalina e brilhante, entusiasmada e extrovertida, estilo conversacional adolescente",
+            "Spanish": "Femenino, 16 años, soprano, voz cristalina y brillante, entusiasta y extrovertida, estilo conversacional adolescente",
+            "Italian": "Femminile, 16 anni, soprano, voce cristallina e brillante, entusiasta e socievole, stile conversazionale adolescenziale",
+            "Arabic": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Cantonese": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Czech": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Dutch": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Finnish": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Greek": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Hindi": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Indonesian": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Polish": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Romanian": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Thai": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Turkish": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Ukrainian": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+            "Vietnamese": "female, 16 years old, soprano, crystal clear and bright, enthusiastic and outgoing, teenage conversational style",
+        },
+    },
+}
+
+
+def list_themes() -> list[dict]:
+    return [
+        {"name": name, "gender": t["gender"], "languages": sorted(t["instructs"])}
+        for name, t in VOICE_THEMES.items()
+    ]
+
+
+def get_theme_instruct(theme_name: str, language: str) -> str:
+    """Return the voice-design instruct string for a theme + language pair.
+
+    This is used by OmniVoice's built-in voice design mode, which accepts
+    an ``instruct`` string describing the desired voice attributes.
+
+    Raises:
+        ValueError: If *theme_name* or *language* is not found.
+    """
+    if theme_name not in VOICE_THEMES:
+        raise ValueError(
+            f"Unknown voice theme {theme_name!r}. "
+            f"Available: {', '.join(VOICE_THEMES)}"
+        )
+    theme = VOICE_THEMES[theme_name]
+    if language not in theme["instructs"]:
+        raise ValueError(
+            f"Language {language!r} not supported for theme {theme_name!r}. "
+            f"Available: {', '.join(sorted(theme['instructs']))}"
+        )
+    return theme["instructs"][language]
+
+
+def _theme_profile_name(theme_name: str, language: str, gender: str) -> str:
+    """Build the HuggingFace profile directory name for a theme."""
+    return f"general-{language}-{gender}-{theme_name}"
+
+
+def _try_download_theme_profile(
+    profile_name: str,
+    cache_dir: str,
+) -> tuple[str, str] | None:
+    """Try to download a pre-generated theme profile from HuggingFace.
+
+    Returns ``(wav_path, script_path)`` on success, or ``None`` if the
+    remote profile does not exist.
+    """
+    profile_dir = os.path.join(cache_dir, "themes", profile_name)
+    wav_path = os.path.join(profile_dir, "voice.wav")
+    script_path = os.path.join(profile_dir, SCRIPT_FILENAME)
+
+    # Already downloaded previously
+    if (
+        os.path.isfile(wav_path) and os.path.getsize(wav_path) > 0
+        and os.path.isfile(script_path)
+    ):
+        log.info("Using cached remote theme profile: %s", profile_dir)
+        return wav_path, script_path
+
+    base_url = f"{PROFILES_REPO_URL}/general/{profile_name}"
+
+    try:
+        _download_file(f"{base_url}/{SCRIPT_FILENAME}", script_path)
+        _download_file(f"{base_url}/voice.wav", wav_path)
+        log.info("Downloaded theme profile from HuggingFace: %s", profile_name)
+        return wav_path, script_path
+    except HTTPError:
+        # Clean up partial downloads
+        for p in (wav_path, script_path):
+            if os.path.exists(p):
+                os.remove(p)
+        log.info(
+            "Theme profile %s not found on HuggingFace, will generate locally",
+            profile_name,
+        )
+        return None
+
+
+def resolve_theme(
+    theme_name: str,
+    language: str,
+    *,
+    device: str = "cuda:0",
+    dtype: str = "bfloat16",
+    cache_dir: str | None = None,
+) -> tuple[str, str]:
+    """Return ``(voice_sample_path, ref_text)`` for a theme + language pair.
+
+    Resolution order:
+
+    1. **Local cache** — reuse a previously downloaded or generated file.
+    2. **HuggingFace** — download the pre-generated profile from
+       ``profiles/general/general-{lang}-{gender}-{theme}/``.
+    3. **Local generation** — synthesise with the Qwen3-TTS VoiceDesign
+       model and cache the result.
+    """
+    if theme_name not in VOICE_THEMES:
+        raise ValueError(
+            f"Unknown voice theme {theme_name!r}. "
+            f"Available: {', '.join(VOICE_THEMES)}"
+        )
+    theme = VOICE_THEMES[theme_name]
+    if language not in theme["instructs"]:
+        raise ValueError(
+            f"Language {language!r} not supported for theme {theme_name!r}. "
+            f"Available: {', '.join(sorted(theme['instructs']))}"
+        )
+
+    instruct = theme["instructs"][language]
+    ref_text = _THEME_REF_TEXTS[language]
+
+    if cache_dir is None:
+        cache_dir = os.path.join(
+            tempfile.gettempdir(), "mazinger-dubber-profiles"
+        )
+
+    # ── 1. Check local cache ────────────────────────────────────────
+    theme_dir = os.path.join(cache_dir, "themes", theme_name)
+    wav_path = os.path.join(theme_dir, f"{language}.wav")
+
+    if os.path.exists(wav_path) and os.path.getsize(wav_path) > 0:
+        log.info("Using cached voice theme: %s", wav_path)
+        return wav_path, ref_text
+
+    # ── 2. Try downloading pre-generated profile from HuggingFace ───
+    hf_name = _theme_profile_name(theme_name, language, theme["gender"])
+    result = _try_download_theme_profile(hf_name, cache_dir)
+    if result is not None:
+        hf_wav, _ = result
+        # Copy into the standard theme cache location for future reuse
+        os.makedirs(theme_dir, exist_ok=True)
+        import shutil
+        shutil.copy2(hf_wav, wav_path)
+        log.info("Theme profile cached from HuggingFace: %s", wav_path)
+        return wav_path, ref_text
+
+    # ── 3. Fall back to local generation ────────────────────────────
+    from mazinger.tts import design_voice
+    import soundfile as sf
+
+    log.info("Generating voice for theme %s / %s", theme_name, language)
+    audio, sr = design_voice(
+        text=ref_text, language=language, instruct=instruct,
+        device=device, dtype=dtype,
+    )
+    os.makedirs(theme_dir, exist_ok=True)
+    sf.write(wav_path, audio, sr)
+    log.info("Voice theme cached: %s", wav_path)
+    return wav_path, ref_text
+
+
+def generate_profile(
+    theme_name: str,
+    language: str,
+    output_dir: str,
+    *,
+    device: str = "cuda:0",
+    dtype: str = "bfloat16",
+) -> tuple[str, str]:
+    """Generate a reusable profile directory from a voice theme.
+
+    Writes ``voice.wav`` and ``script.txt`` into *output_dir* so the
+    directory can later be passed as ``--clone-profile <path>``.
+
+    Returns:
+        ``(voice_wav_path, script_txt_path)``
+    """
+    wav_path, ref_text = resolve_theme(
+        theme_name, language, device=device, dtype=dtype,
+    )
+
+    os.makedirs(output_dir, exist_ok=True)
+    dest_wav = os.path.join(output_dir, "voice.wav")
+    dest_script = os.path.join(output_dir, SCRIPT_FILENAME)
+
+    import shutil
+    shutil.copy2(wav_path, dest_wav)
+    with open(dest_script, "w", encoding="utf-8") as fh:
+        fh.write(ref_text)
+
+    log.info("Profile written to %s", output_dir)
+    return dest_wav, dest_script
+
+
+def _load_local_profile(profile_dir: str) -> tuple[str, str]:
+    """Load voice sample and script from a local profile directory."""
+    script_path = os.path.join(profile_dir, SCRIPT_FILENAME)
+    if not os.path.isfile(script_path):
+        raise FileNotFoundError(f"No {SCRIPT_FILENAME} in {profile_dir}")
+
+    for ext in VOICE_EXTENSIONS:
+        voice_path = os.path.join(profile_dir, f"voice.{ext}")
+        if os.path.isfile(voice_path):
+            return _ensure_wav(voice_path), script_path
+
+    raise FileNotFoundError(
+        f"No voice file in {profile_dir} "
+        f"(tried: {', '.join(f'voice.{e}' for e in VOICE_EXTENSIONS)})"
+    )
+
+
+def create_auto_clone_profile(
+    audio_path: str,
+    srt_path: str,
+    output_dir: str,
+) -> str:
+    """Create a voice profile by extracting a segment from *audio_path*.
+
+    Selects a contiguous block of SRT entries spanning 20–60 s with the
+    highest word count, extracts the matching audio slice, and writes
+    ``voice.wav`` into *output_dir*.
+
+    Returns:
+        Path to the extracted ``voice.wav``.
+    """
+    from mazinger.srt import parse_file
+
+    entries = parse_file(srt_path)
+    if not entries:
+        raise ValueError("Cannot auto-clone: SRT file is empty")
+
+    total_dur = entries[-1]["end"] - entries[0]["start"]
+    if total_dur < MIN_CLONE_DURATION:
+        raise ValueError(
+            f"Cannot auto-clone: source audio is {total_dur:.1f}s "
+            f"(need at least {MIN_CLONE_DURATION:.0f}s). "
+            "Provide --voice-sample + --voice-script instead."
+        )
+
+    best_i = best_j = 0
+    best_words = 0
+
+    for i in range(len(entries)):
+        words = 0
+        for j in range(i, len(entries)):
+            span = entries[j]["end"] - entries[i]["start"]
+            words += len(entries[j]["text"].split())
+            if span > MAX_CLONE_DURATION:
+                break
+            if span >= MIN_CLONE_DURATION and words > best_words:
+                best_words = words
+                best_i, best_j = i, j
+
+    if best_words < MIN_CLONE_WORDS:
+        raise ValueError(
+            f"Cannot auto-clone: best segment has {best_words} words "
+            f"(need at least {MIN_CLONE_WORDS}). "
+            "Provide --voice-sample + --voice-script instead."
+        )
+
+    start_t = entries[best_i]["start"]
+    end_t = entries[best_j]["end"]
+
+    os.makedirs(output_dir, exist_ok=True)
+    wav_path = os.path.join(output_dir, "voice.wav")
+
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", audio_path,
+            "-ss", str(start_t), "-to", str(end_t),
+            "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
+            wav_path,
+        ],
+        check=True, capture_output=True,
+    )
+
+    log.info(
+        "Auto-cloned voice profile: %.1fs, %d words -> %s",
+        end_t - start_t, best_words, output_dir,
+    )
+    return wav_path
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Keeping a run's voice so single segments can be re-dubbed later
+# ═══════════════════════════════════════════════════════════════════════════════
+
+REFERENCE_MIN_DURATION = 3.0
+REFERENCE_MAX_DURATION = 10.0
+
+
+def keep_voice_reference(
+    voice_sample: str,
+    ref_text: str | None,
+    output_dir: str,
+) -> tuple[str, str | None]:
+    """Copy a user-supplied voice sample (and its transcript) into *output_dir*.
+
+    Uploaded samples usually live in a temporary directory that is gone by
+    the time a segment is re-dubbed, so the project keeps its own copy.
+    Any previously kept reference is replaced.
+
+    Returns:
+        ``(voice_path, script_path)`` — *script_path* is ``None`` when there
+        is no transcript.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    ext = os.path.splitext(voice_sample)[1].lower() or ".wav"
+    dest = os.path.join(output_dir, f"voice{ext}")
+
+    if os.path.abspath(voice_sample) != os.path.abspath(dest):
+        for name in os.listdir(output_dir):
+            if name.startswith("voice."):
+                os.remove(os.path.join(output_dir, name))
+        shutil.copy2(voice_sample, dest)
+
+    script_path = os.path.join(output_dir, SCRIPT_FILENAME)
+    if ref_text and ref_text.strip():
+        with open(script_path, "w", encoding="utf-8") as fh:
+            fh.write(ref_text.strip())
+    else:
+        if os.path.exists(script_path):
+            os.remove(script_path)
+        script_path = None
+
+    log.info("Kept voice reference: %s", dest)
+    return dest, script_path
+
+
+def save_voice_instruct(instruct: str, path: str) -> str:
+    """Write an OmniVoice voice-design instruct string to *path*."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(instruct.strip())
+    return path
+
+
+def select_reference_segment(
+    segment_info: list[dict],
+    srt_entries: list[dict],
+    output_dir: str,
+    *,
+    min_duration: float = REFERENCE_MIN_DURATION,
+    max_duration: float = REFERENCE_MAX_DURATION,
+) -> tuple[str, str] | None:
+    """Promote one synthesized segment to a voice reference.
+
+    OmniVoice's auto-voice mode invents a voice per run without any reference
+    clip, so re-dubbing a single segment would come out in a different voice.
+    Picking one of the run's own segments as a cloning reference keeps later
+    re-dubs consistent with the rest of the dub.
+
+    The loudest segment whose duration lies within
+    [*min_duration*, *max_duration*] wins; when none does, the one whose
+    duration is closest to that range is used.  Silent segments are ignored.
+
+    Returns:
+        ``(voice_path, script_path)`` written into *output_dir*, or ``None``
+        when there is no usable segment.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    texts = {str(e["idx"]): e["text"].strip() for e in srt_entries}
+
+    def _distance(dur: float) -> float:
+        if dur < min_duration:
+            return min_duration - dur
+        if dur > max_duration:
+            return dur - max_duration
+        return 0.0
+
+    candidates = [
+        seg for seg in segment_info
+        if seg.get("wav_path") and os.path.isfile(seg["wav_path"])
+        and texts.get(str(seg["idx"]))
+    ]
+    if not candidates:
+        return None
+
+    nearest = min(_distance(seg["actual_dur"]) for seg in candidates)
+    candidates = [seg for seg in candidates if _distance(seg["actual_dur"]) == nearest]
+
+    best: dict | None = None
+    best_rms = 1e-4  # below this a segment is treated as silence
+    for seg in candidates:
+        audio, _ = sf.read(seg["wav_path"], dtype="float32", always_2d=True)
+        rms = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
+        if rms > best_rms:
+            best, best_rms = seg, rms
+    if best is None:
+        return None
+
+    os.makedirs(output_dir, exist_ok=True)
+    voice_path = os.path.join(output_dir, "voice.wav")
+    script_path = os.path.join(output_dir, SCRIPT_FILENAME)
+    shutil.copy2(best["wav_path"], voice_path)
+    with open(script_path, "w", encoding="utf-8") as fh:
+        fh.write(texts[str(best["idx"])])
+
+    log.info(
+        "Voice reference promoted from segment %s (%.1fs) -> %s",
+        best["idx"], best["actual_dur"], output_dir,
+    )
+    return voice_path, script_path
+
+
+def fetch_profile(profile_name: str, cache_dir: str | None = None) -> tuple[str, str]:
+    """Return ``(voice_sample_path, voice_script_path)`` for *profile_name*.
+
+    *profile_name* can be:
+
+    - A **local directory path** containing ``voice.wav`` and ``script.txt``
+      (e.g. generated by :func:`generate_profile`).
+    - A **remote profile name** from the HuggingFace dataset (e.g. ``abubakr``).
+
+    Remote files are downloaded once into *cache_dir* (default: a persistent
+    temp directory) and reused on subsequent calls.
+
+    Returns:
+        A ``(voice_sample, voice_script)`` tuple of local file paths.
+        The voice sample is always a WAV file.
+    """
+    if os.path.isdir(profile_name):
+        return _load_local_profile(profile_name)
+
+    def _profile_exists(base_url: str) -> tuple[bool, str]:
+        url = f"{base_url}/{profile_name}/{SCRIPT_FILENAME}"
+        try:
+            with urllib.request.urlopen(_make_request(url, "HEAD"), timeout=10) as response:
+                pass
+            return True, ""
+        except HTTPError as e:
+            return False, str(e.code)
+        except URLError as e:
+            return False, str(e.reason)
+        except Exception as e:
+            return False, str(e)
+
+    default_url = DEFAULT_PROFILES_REPO_URL
+    custom_url = CUSTOM_PROFILES_REPO_URL
+
+    default_err = ""
+    custom_err = ""
+
+    if custom_url:
+        in_custom, custom_err = _profile_exists(custom_url)
+        if in_custom:
+            base_url = custom_url
+        else:
+            in_default, default_err = _profile_exists(default_url)
+            if in_default:
+                base_url = default_url
+            else:
+                msg = f"Profile '{profile_name}' not found in any repo."
+                if custom_err:
+                    if "401" in custom_err:
+                        msg += " Custom repo requires auth - set HF_TOKEN."
+                    elif "404" in custom_err:
+                        msg += " Custom repo: check name and that files are named 'script.txt' and 'voice.wav'."
+                if default_err:
+                    msg += f" Default repo error: {default_err}"
+                raise FileNotFoundError(msg)
+    else:
+        in_default, default_err = _profile_exists(default_url)
+        if in_default:
+            base_url = default_url
+        else:
+            msg = f"Profile '{profile_name}' not found in any repo."
+            if default_err:
+                msg += f" Default repo error: {default_err}"
+            raise FileNotFoundError(msg)
+
+    if cache_dir is None:
+        cache_dir = os.path.join(
+            tempfile.gettempdir(), "mazinger-dubber-profiles"
+        )
+
+    profile_dir = os.path.join(cache_dir, profile_name)
+    base = f"{base_url}/{profile_name}"
+
+    # Download script
+    script_path = os.path.join(profile_dir, SCRIPT_FILENAME)
+    if not os.path.exists(script_path):
+        _download_file(f"{base}/{SCRIPT_FILENAME}", script_path)
+    else:
+        log.info("Using cached script: %s", script_path)
+
+    # Download voice (try wav/m4a/mp3) and convert to WAV
+    raw_voice = _download_voice(base, profile_dir)
+    voice_path = _ensure_wav(raw_voice)
+
+    return voice_path, script_path

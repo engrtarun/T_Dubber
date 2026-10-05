@@ -80,6 +80,8 @@
 #include <system_error>
 #include <vector>
 
+#include "normalizer_kernel.h"
+
 namespace {
 
 // ---------------------------------------------------------------------------
@@ -424,6 +426,12 @@ struct Stats {
 /// -Rpass-analysis=loop-vectorize: "value that could not be identified as
 /// reduction is used outside the loop"). Integer max/add reductions are
 /// recognised unconditionally, so the kernel compiles to packed SIMD.
+///
+/// When the build carries kernels/normalizer_gate_gain.asm and the CPU can
+/// run it, whole 16-sample groups take the AVX2 path instead; the loop below
+/// then only finishes the block's tail. Nothing else about this function
+/// changes -- it stays the reference implementation, and
+/// tests/kernel_equivalence_test.cpp proves the two paths agree.
 void process_block(const std::int16_t* in, std::int16_t* out, std::size_t count,
                    float gate_level, float gain, Stats& st) {
     std::int32_t peak_in  = 0;   // max |input|  in int16 LSBs
@@ -431,7 +439,35 @@ void process_block(const std::int16_t* in, std::int16_t* out, std::size_t count,
     std::uint64_t gated   = 0;
     std::uint64_t clipped = 0;
 
-    for (std::size_t i = 0; i < count; ++i) {
+    std::size_t i = 0;
+
+#if defined(TD_NORMALIZER_HAVE_ASM)
+    // Optional AVX2 fast path (kernels/normalizer_gate_gain.asm). Whole
+    // 16-sample groups only: the kernel rounds count down to that multiple,
+    // and the loop below then finishes the tail with the reference
+    // arithmetic, so an unaligned block is still processed exactly once.
+    // The gate/gain/round/clamp chain is the same in both paths -- if they
+    // ever disagree, tests/kernel_equivalence_test.cpp reports it.
+    if (count >= 16 && td_normalizer_kernel_ready() != 0) {
+        const std::size_t vector_count = count - (count % 16);
+        TdNormKernelStats ks{};
+        TdNormKernelParams params{};
+        params.in        = in;
+        params.out       = out;
+        params.count     = static_cast<std::uint64_t>(vector_count);
+        params.gate_level = gate_level;
+        params.gain      = gain;
+        params.stats     = &ks;
+        td_normalizer_gate_gain(&params);
+        st.gated    += ks.gated;
+        st.clipped  += ks.clipped;
+        st.peak_in   = std::max(st.peak_in, static_cast<float>(ks.peak_in));
+        st.peak_out  = std::max(st.peak_out, static_cast<float>(ks.peak_out));
+        i = vector_count;
+    }
+#endif
+
+    for (; i < count; ++i) {
         const std::int32_t raw = in[i];
         const std::int32_t magnitude = (raw < 0) ? -raw : raw;
 
