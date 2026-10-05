@@ -43,14 +43,25 @@
 
 .NOTES
     After the export: upload `pack\` as a Kaggle dataset once (kaggle CLI
-    needs %USERPROFILE%\.kaggle\kaggle.json), then in kaggle_worker.ipynb
-    Cell 0, before anything else runs:
+    needs %USERPROFILE%\.kaggle\kaggle.json), then attach that dataset to
+    kaggle_worker.ipynb. Cell 0 already does the rest -- it extracts the
+    pack to /kaggle/working/tdubber_pack, prepends its bin/ to PATH and pins
+    NORMALIZER_BIN etc. with absolute paths. PATH alone is NOT enough:
+    Kaggle's base image ships a foreign `normalizer` (argparse, `-t
+    THRESHOLD`) that shadows the pack and silently drops the run onto the
+    slow Python engine, which is why the worker verifies the pinned binary's
+    CLI before proceeding. If you are doing this by hand instead, the
+    equivalent setup is:
 
-        import os
-        os.environ["PATH"] = "/kaggle/input/<dataset>/pack/bin:" + os.environ["PATH"]
+        import os, shutil, tarfile, zipfile
+        # 1. extract the mounted pack to a writable dir, e.g. via the zip
+        #    wrapper kaggle-tdubber-pack.zip -> kaggle-tdubber-pack.tar.gz
+        # 2. chmod +x /kaggle/working/tdubber_pack/bin/*
+        # 3. os.environ["NORMALIZER_BIN"] = ".../bin/normalizer"   (and
+        #    STITCHER_BIN / TGUP_BIN / SUBTITLE_FORGE_BIN the same way)
+        # 4. os.environ["PATH"] = ".../bin:" + os.environ["PATH"]
 
-    and every cell that follows has the whole arsenal on PATH -- no toolchain,
-    no compilation, no network.
+    No toolchain, no compilation, no network.
 #>
 [CmdletBinding()]
 param(
@@ -198,11 +209,13 @@ try {
     Write-Host '  1. kaggle datasets create -p "<folder>\pack"' -ForegroundColor DarkGray
     Write-Host '     (needs %USERPROFILE%\.kaggle\kaggle.json; 3 top-level entries,' -ForegroundColor DarkGray
     Write-Host "      well under Kaggle's 50-file top-level limit)" -ForegroundColor DarkGray
-    Write-Host '  2. kaggle_worker.ipynb, Cell 0 -- before anything else runs:' -ForegroundColor DarkGray
-    Write-Host '       import os' -ForegroundColor DarkGray
-    Write-Host '       os.environ["PATH"] = "/kaggle/input/<dataset>/pack/bin:" + os.environ["PATH"]' -ForegroundColor DarkGray
+    Write-Host '  2. Attach that dataset to kaggle_worker.ipynb. Cell 0 extracts it' -ForegroundColor DarkGray
+    Write-Host '     to /kaggle/working/tdubber_pack, prepends bin/ to PATH and pins' -ForegroundColor DarkGray
+    Write-Host '     NORMALIZER_BIN / STITCHER_BIN / TGUP_BIN by absolute path.' -ForegroundColor DarkGray
+    Write-Host '     (PATH alone is not enough: Kaggle ships a foreign normalizer' -ForegroundColor DarkGray
+    Write-Host '      that shadows the pack and forces the slow Python engine.)' -ForegroundColor DarkGray
     Write-Host '  3. tgup / stitcher / normalizer / subtitle_forge / havaldar_core are' -ForegroundColor DarkGray
-    Write-Host '     then on PATH for the whole session. No toolchain, no compile.' -ForegroundColor DarkGray
+    Write-Host '     then pinned for the whole session. No toolchain, no compile.' -ForegroundColor DarkGray
 }
 finally {
     Pop-Location

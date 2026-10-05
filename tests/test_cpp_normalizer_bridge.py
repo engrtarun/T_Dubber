@@ -185,6 +185,107 @@ def case_stitcher_discovery() -> None:
         reset()
 
 
+def case_foreign_normalizer_shadowing() -> None:
+    """A foreign PATH `normalizer` must be rejected, never silently used.
+
+    Kaggle's base image ships a Python argparse tool also named `normalizer`
+    (``-t THRESHOLD``). It shadowed the pack, exited 2 on our four-argument
+    call, and dropped every run onto the slow Python engine. Discovery must
+    recognize the impostor by its CLI and refuse it, while an explicit
+    ``NORMALIZER_BIN`` and a repo-local build still outrank a hostile PATH.
+    """
+    root = tempfile.mkdtemp(prefix="norm_")
+    empty_root = tempfile.mkdtemp(prefix="root_")
+    try:
+        import unittest.mock as mock
+
+        foreign_dir = os.path.join(root, "foreign_path")
+        os.makedirs(foreign_dir)
+        foreign_marker = os.path.join(foreign_dir, "foreign_calls.txt")
+        if sys.platform == "win32":
+            foreign = os.path.join(foreign_dir, "normalizer.bat")
+            with open(foreign, "w", encoding="utf-8") as fh:
+                fh.write(
+                    "@echo off\r\n"
+                    f'echo foreign>>"{foreign_marker}"\r\n'
+                    "echo usage: normalizer [-h] [-v] [-a] [-n] [-m] [-r] [-f] [-i] [-t THRESHOLD] 1>&2\r\n"
+                    "echo normalizer: error: the following arguments are required: files 1>&2\r\n"
+                    "exit /b 2\r\n"
+                )
+        else:
+            foreign = os.path.join(foreign_dir, "normalizer")
+            with open(foreign, "w", encoding="utf-8") as fh:
+                fh.write(
+                    "#!/bin/sh\n"
+                    f'echo foreign >> "{foreign_marker}"\n'
+                    "echo 'usage: normalizer [-h] [-v] [-a] [-n] [-m] [-r] [-f] [-i] [-t THRESHOLD]' >&2\n"
+                    "echo 'normalizer: error: the following arguments are required: files' >&2\n"
+                    "exit 2\n"
+                )
+            os.chmod(foreign, 0o755)
+
+        hostile_path = {"PATH": foreign_dir}
+
+        # 1. The impostor alone: rejected, and it was the probe that proved it.
+        with mock.patch.dict(os.environ, hostile_path), \
+                mock.patch.object(assemble, "_repo_root", lambda: empty_root):
+            reset()
+            assemble._normalizer_binary_cache.clear()
+            found = assemble._normalizer_binary()
+        check("foreign PATH normalizer is rejected", found is None, str(found))
+        check("the impostor was probed (its CLI caused the rejection)",
+              os.path.exists(foreign_marker), foreign_marker)
+
+        # 2. An explicit override is the operator's deliberate choice: it is
+        #    trusted without a probe and wins over the hostile PATH.
+        with mock.patch.dict(os.environ, hostile_path), \
+                mock.patch.object(assemble, "_repo_root", lambda: empty_root):
+            reset(NORMALIZER_BIN=FAKE_NORMALIZER)
+            assemble._normalizer_binary_cache.clear()
+            found_override = assemble._normalizer_binary()
+        check("explicit NORMALIZER_BIN wins over the hostile PATH",
+              found_override == FAKE_NORMALIZER, str(found_override))
+
+        # 3. A repository build outranks a PATH hit of any kind.
+        built = os.path.join(empty_root, "cpp_accelerator", "build")
+        os.makedirs(built)
+        exe = "normalizer.exe" if sys.platform == "win32" else "normalizer"
+        target = os.path.join(built, exe)
+        with open(target, "wb") as fh:
+            fh.write(b"MZ")
+        with mock.patch.dict(os.environ, hostile_path), \
+                mock.patch.object(assemble, "_repo_root", lambda: empty_root):
+            reset()
+            assemble._normalizer_binary_cache.clear()
+            found_repo = assemble._normalizer_binary()
+        check("repo-local build outranks the hostile PATH",
+              found_repo == target, str(found_repo))
+
+        # 4. End to end: with only the impostor on PATH, the public entry
+        #    point must clean the file via Python -- correct output, impostor
+        #    never invoked with our four arguments.
+        fresh_root = tempfile.mkdtemp(prefix="root_")
+        try:
+            input_path = speech_like(root)
+            out = os.path.join(root, "out.wav")
+            with mock.patch.dict(os.environ, hostile_path), \
+                    mock.patch.object(assemble, "_repo_root", lambda: fresh_root):
+                reset()
+                assemble._normalizer_binary_cache.clear()
+                result = assemble.normalize_audio(input_path, out)
+            check("normalize_audio falls back to Python instead of the impostor",
+                  result == out and os.path.exists(out) and sf.info(out).subtype == "PCM_16",
+                  str(result))
+            check("the fallback output actually gated the quiet tail",
+                  not np.any(read_i16(out)[int(0.7 * SR):]))
+        finally:
+            shutil.rmtree(fresh_root, ignore_errors=True)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(empty_root, ignore_errors=True)
+        reset()
+
+
 # ---------------------------------------------------------------------------
 # 4-6: the two engines
 # ---------------------------------------------------------------------------
@@ -616,6 +717,7 @@ def main() -> int:
     run_case("1. repo root regression", case_repo_root)
     run_case("2. normalizer binary discovery", case_normalizer_discovery)
     run_case("3. stitcher binary discovery (dirname bug)", case_stitcher_discovery)
+    run_case("3b. foreign PATH normalizer is rejected", case_foreign_normalizer_shadowing)
     run_case("4. binary absent -> Python fallback", case_binary_absent)
     if run_case("5. binary present -> C++ fast path", case_binary_present):
         run_case("6. both engines agree exactly", case_parity)

@@ -820,12 +820,15 @@ COPY --from=pack-manifest /pack /pack
 #
 #   # Native arsenal -- ONE-TIME setup, no toolchain ever again:
 #   # upload the pack/ folder that build_kaggle_pack.ps1 exported as a
-#   # Kaggle dataset, then in Python (Cell 0, before anything else runs):
-#   #   import os
-#   #   os.environ["PATH"] = "/kaggle/input/<dataset>/pack/bin:" + os.environ["PATH"]
-#   # tgup/stitcher/normalizer/subtitle_forge/havaldar_core are then on PATH
-#   # for the whole session. The pack binaries are static: no glibc, no
-#   # rustup, no go, no gcc -- and no compile at startup.
+#   # Kaggle dataset, attach it to the kernel, and let the worker's first
+#   # cell do the rest. It extracts the pack to /kaggle/working/tdubber_pack,
+#   # prepends bin/ to PATH and pins NORMALIZER_BIN / STITCHER_BIN / TGUP_BIN
+#   # / SUBTITLE_FORGE_BIN with absolute paths. PATH alone is not enough:
+#   # Kaggle's base image ships a foreign `normalizer` (argparse, -t THRESHOLD)
+#   # that shadows the pack, exits 2 on our four-argument call, and silently
+#   # drops the run onto the slow Python engine. The pinned binaries are
+#   # static: no glibc, no rustup, no go, no gcc -- and no compile at
+#   # startup.
 #
 #   # The brain
 #   pip install --no-cache-dir "vllm==0.29.0" \

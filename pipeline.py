@@ -317,6 +317,36 @@ def kernel_id_for(username):
     return f"{username}/dubber-worker-homura"
 
 
+# ---------------------------------------------------------------------------
+# Kaggle pack dataset
+# ---------------------------------------------------------------------------
+# The pre-compiled native arsenal (tgup / stitcher / normalizer /
+# subtitle_forge / havaldar_core) is uploaded to Kaggle once as its own
+# private dataset and mounted read-only into the worker kernel. The worker
+# notebook extracts it, prepends its bin/ to PATH and pins the absolute
+# paths (see the first cell of kaggle_worker.ipynb); this side only has to
+# keep the dataset ATTACHED to the kernel.
+#
+# Stage 4 rewrites kernel-metadata.json on every push. That is exactly how
+# the pack got detached once: dataset_sources was replaced with just the
+# per-job input dataset, the next push dropped the pack, the worker fell
+# back to the foreign `normalizer` on Kaggle's PATH, and every run silently
+# used the slow Python engine. The push below therefore merges, never
+# replaces.
+#
+# Override the slug without editing code:
+#     set TDUBBER_PACK_DATASET=<owner>/<dataset-name>
+# If the dataset does not exist yet, kernels push will reject it; create it
+# once with `kaggle datasets create -p <folder>` or unset the override.
+PACK_DATASET_ID = os.environ.get("TDUBBER_PACK_DATASET", "engrtarun/tdubber-pack").strip()
+if not PACK_DATASET_ID:
+    print(
+        "[pipeline] TDUBBER_PACK_DATASET is empty; the native pack will not be "
+        "attached to the worker kernel and the Python fallback may be used.",
+        file=sys.stderr,
+    )
+
+
 def _collect_kernel_logs(project_dir):
     """Read whatever the Kaggle output download left behind, newest wins."""
     for path in [os.path.join(project_dir, "error_log.txt")] + sorted(
@@ -794,7 +824,17 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         kmeta["is_private"] = "true"
         kmeta["enable_gpu"] = "true"
         kmeta["enable_internet"] = "true"
-        kmeta["dataset_sources"] = [dataset_id]
+        # Merge, never replace: preserve whatever was attached before and add
+        # BOTH the per-job input and the native pack. A plain
+        # `[dataset_id]` assignment is how the pack got detached once, which
+        # dropped the run onto the Python normalizer. sorted() keeps the
+        # file byte-stable between pushes.
+        required_sources = {dataset_id}
+        if PACK_DATASET_ID:
+            required_sources.add(PACK_DATASET_ID)
+        kmeta["dataset_sources"] = sorted(
+            {*(kmeta.get("dataset_sources") or []), *required_sources}
+        )
         
         with open(kmeta_path, "w") as f:
             json.dump(kmeta, f, indent=4)
