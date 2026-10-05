@@ -466,9 +466,31 @@ async () => {
   let nextAt = Date.now() + S.refresh * 1000;
   let inFlight = false;
   let lastKey = "";
+  let failStreak = 0;
 
   function schedule(sec) { nextAt = Date.now() + Math.max(0, sec) * 1000; }
   function secsLeft() { return Math.max(0, Math.ceil((nextAt - Date.now()) / 1000)); }
+
+  // puter.ai.chat() can hang forever (auth popup dismissed, flaky network).
+  // Without this the card froze on "Analyzing..." and inFlight stayed true,
+  // so the ticker never recovered - one dead request killed the assistant.
+  const CHAT_TIMEOUT_MS = 30000;
+
+  function withTimeout(promise, ms) {
+    let timer = 0;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("timeout after " + Math.round(ms / 1000) + "s")), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  function showReason(message) {
+    const errEl = document.getElementById("puter-error");
+    if (!errEl) return;
+    errEl.style.display = "block";
+    const detail = document.getElementById("puter-error-detail");
+    if (detail) detail.textContent = message ? String(message).slice(0, 160) : "";
+  }
 
   async function insight(force) {
     // One call at a time, and NEVER a re-entry just because nothing changed:
@@ -494,24 +516,44 @@ async () => {
     setStatus("Analyzing...", true);
     showThinking();
     try {
-      const response = await puter.ai.chat(PERSONAS[persona] + recent);
+      const response = await withTimeout(
+        puter.ai.chat(PERSONAS[persona] + recent),
+        CHAT_TIMEOUT_MS
+      );
       const text = (extractText(response) || "").trim() || "(khaali reply - dobara try karo)";
       lastKey = key;
       window.puter_last_successful_key = key;
       window.puter_last_text = text;
       const errEl = document.getElementById("puter-error");
       if (errEl) errEl.style.display = "none";
+      const detail = document.getElementById("puter-error-detail");
+      if (detail) detail.textContent = "";
       pushHistory(persona, text);
       renderMessage(text);
+      failStreak = 0;
       const lastEl = document.getElementById("puter-last");
       if (lastEl) lastEl.textContent = "updated " + new Date().toLocaleTimeString();
       schedule(S.refresh);
     } catch (e) {
+      const why = (e && e.message) ? e.message : "request failed";
       console.error("Puter error:", e);
-      const errEl = document.getElementById("puter-error");
-      if (errEl) errEl.style.display = "block";
-      schedule(10);
-      setStatus("Error - retry in " + secsLeft() + "s", false);
+      // 10s, then 30s, then 60s: a dead endpoint must not be hammered, and
+      // the countdown keeps telling the user when the next try happens.
+      failStreak += 1;
+      schedule(failStreak < 2 ? 10 : failStreak < 4 ? 30 : 60);
+      showReason(why);
+      setStatus("Error: " + why + " - retry in " + secsLeft() + "s", false);
+      // The spinner must not sit there claiming progress that is not happening.
+      const msg = document.getElementById("puter-message");
+      if (msg && !window.puter_last_text) {
+        typeGen += 1;
+        msg.replaceChildren();
+        const hint = document.createElement("span");
+        hint.className = "puter-thinking";
+        hint.textContent = "⚠️ Insight nahi mila (" + why + "). Neeche Retry dabao — "
+          + "ya upar countdown khatam hone par main khud dobara try karunga.";
+        msg.appendChild(hint);
+      }
     } finally {
       inFlight = false;
     }
@@ -543,6 +585,8 @@ async () => {
   if (retryBtn) retryBtn.onclick = () => {
     const e = document.getElementById("puter-error");
     if (e) e.style.display = "none";
+    const d = document.getElementById("puter-error-detail");
+    if (d) d.textContent = "";
     schedule(0);
     void insight(true);
   };
