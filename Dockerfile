@@ -171,6 +171,7 @@ ARG MUSL_TARGET
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         musl-tools \
+        binutils \
     && rm -rf /var/lib/apt/lists/* \
     && rustup target add "${MUSL_TARGET}"
 
@@ -181,22 +182,35 @@ WORKDIR /arsenal
 #
 # Every crate RUN ends with two assertions, because a green `cargo build` is
 # not the same thing as a shippable binary:
-#   1. the binary STARTS -- its help/usage line, piped through grep;
-#   2. `ldd` FAILS on it. ldd exits 0 for a dynamic binary and 1 for a
-#      static one, so `if ldd ...; then exit 1; fi` is the static assertion.
+#   1. the binary STARTS -- its help/usage line, matched in the captured output;
+#   2. the binary is STATIC -- verified by `readelf -l` finding no PT_INTERP.
 # Wrong link = red build HERE, not a dead session on Kaggle.
 #
-# `timeout` bounds assertion 2. Modern glibc ldd inspects the ELF headers rather
-# than executing the file, so a static binary just yields "not a dynamic
-# executable" and exit 1. But ldd works by setting LD_TRACE_LOADED_OBJECTS and
-# running the binary, and only the dynamic loader intercepts that -- so on a
-# genuinely static binary the program would really run. For havaldar_core that
-# means booting the telemetry daemon inside a Docker build and hanging until the
-# job times out. The timeout caps that worst case at 10 seconds instead of 45
-# minutes and does not change the pass/fail outcome either way.
+# WHY readelf and NOT ldd, which is the important part:
+#
+# `ldd` looks like the obvious way to ask "is this static?" and it is not. ldd
+# works by setting LD_TRACE_LOADED_OBJECTS=1 and RUNNING the file, expecting the
+# dynamic loader to intercept that and print the dependency list instead of
+# starting the program. A statically linked binary has no dynamic loader to
+# intercept anything, so ldd's probe runs the program for real and the
+# PROGRAM'S exit code comes back out as ldd's own.
+#
+# That is not theoretical. In the pack-manifest stage, `ldd` reported a
+# statically linked musl `stitcher` as dynamic, and the build died with:
+#     PACK FAIL: ldd exit 0, so stitcher is not static
+# ...even though the very same binary had already passed a readelf INTERP check
+# two stages earlier. `ldd` also executed havaldar_core, which boots a telemetry
+# daemon. Anything inferred from ldd's exit code is an inference about a program
+# that may have run, not a fact about the file.
+#
+# PT_INTERP is the fact: a dynamically linked ELF carries a PT_INTERP program
+# header naming its interpreter (ld-linux.so.1 or the musl loader), and a static
+# one does not. So readelf is required, not optional -- a missing readelf is a
+# hard failure, because silently skipping the assertion would let a dynamically
+# linked binary ship to Kaggle and die there with a version error instead.
 #
 # The probes below are deliberately verbose, because a silent assertion is worse
-# than no assertion. The previous one-liner was:
+# than no assertion. The original one-liner was:
 #
 #     "$B" 2>&1 | grep -qi "usage"
 #
@@ -205,9 +219,7 @@ WORKDIR /arsenal
 # missing binary, a binary that could not start, and a binary that simply did not
 # contain the word all looked identical from the outside. Each step below
 # therefore (a) checks the binary exists and says so, (b) prints what the binary
-# actually printed, and (c) tests for staticness by looking for a PT_INTERP
-# segment -- a fact about the ELF file, rather than an inference from whatever
-# `ldd` happens to exit with on this particular glibc.
+# actually printed, and (c) tests for staticness from the ELF program headers.
 COPY stitcher/ ./stitcher/
 RUN cd stitcher && \
     cargo build --release --target "${MUSL_TARGET}" && \
@@ -224,14 +236,15 @@ RUN cd stitcher && \
         if ! grep -qi "usage" /tmp/probe.txt; then \
             echo "ASSERT FAIL: no 'usage' in the probe output above" >&2; exit 1; \
         fi; \
-        if command -v readelf > /dev/null 2>&1; then \
-            if readelf -l "$B" 2>/dev/null | grep -q INTERP; then \
-                echo "ASSERT FAIL: $B carries PT_INTERP, so it is dynamically linked" >&2; exit 1; \
-            fi; \
-            echo "static: no PT_INTERP -> OK"; \
-        elif timeout 10 ldd "$B" > /dev/null 2>&1; then \
-            echo "ASSERT FAIL: ldd exit 0, so $B is not static" >&2; exit 1; \
+        if ! command -v readelf > /dev/null 2>&1; then \
+            echo "ASSERT FAIL: readelf is missing, so staticness cannot be verified" >&2; exit 1; \
         fi; \
+        if readelf -l "$B" 2>/dev/null | grep -q INTERP; then \
+            echo "ASSERT FAIL: $B carries PT_INTERP, so it is dynamically linked" >&2; \
+            readelf -l "$B" 2>/dev/null | sed -n '1,12p' >&2; \
+            exit 1; \
+        fi; \
+        echo "static: no PT_INTERP -> OK"; \
     }
 
 COPY subtitle_forge/ ./subtitle_forge/
@@ -250,14 +263,15 @@ RUN cd subtitle_forge && \
         if ! grep -qi "subtitle_forge" /tmp/probe.txt; then \
             echo "ASSERT FAIL: no 'subtitle_forge' in the probe output above" >&2; exit 1; \
         fi; \
-        if command -v readelf > /dev/null 2>&1; then \
-            if readelf -l "$B" 2>/dev/null | grep -q INTERP; then \
-                echo "ASSERT FAIL: $B carries PT_INTERP, so it is dynamically linked" >&2; exit 1; \
-            fi; \
-            echo "static: no PT_INTERP -> OK"; \
-        elif timeout 10 ldd "$B" > /dev/null 2>&1; then \
-            echo "ASSERT FAIL: ldd exit 0, so $B is not static" >&2; exit 1; \
+        if ! command -v readelf > /dev/null 2>&1; then \
+            echo "ASSERT FAIL: readelf is missing, so staticness cannot be verified" >&2; exit 1; \
         fi; \
+        if readelf -l "$B" 2>/dev/null | grep -q INTERP; then \
+            echo "ASSERT FAIL: $B carries PT_INTERP, so it is dynamically linked" >&2; \
+            readelf -l "$B" 2>/dev/null | sed -n '1,12p' >&2; \
+            exit 1; \
+        fi; \
+        echo "static: no PT_INTERP -> OK"; \
     }
 
 COPY havaldar_core/ ./havaldar_core/
@@ -277,14 +291,15 @@ RUN cd havaldar_core && \
         if ! grep -qi "havaldar" /tmp/probe.txt; then \
             echo "ASSERT FAIL: no 'havaldar' in the probe output above" >&2; exit 1; \
         fi; \
-        if command -v readelf > /dev/null 2>&1; then \
-            if readelf -l "$B" 2>/dev/null | grep -q INTERP; then \
-                echo "ASSERT FAIL: $B carries PT_INTERP, so it is dynamically linked" >&2; exit 1; \
-            fi; \
-            echo "static: no PT_INTERP -> OK"; \
-        elif timeout 10 ldd "$B" > /dev/null 2>&1; then \
-            echo "ASSERT FAIL: ldd exit 0, so $B is not static" >&2; exit 1; \
+        if ! command -v readelf > /dev/null 2>&1; then \
+            echo "ASSERT FAIL: readelf is missing, so staticness cannot be verified" >&2; exit 1; \
         fi; \
+        if readelf -l "$B" 2>/dev/null | grep -q INTERP; then \
+            echo "ASSERT FAIL: $B carries PT_INTERP, so it is dynamically linked" >&2; \
+            readelf -l "$B" 2>/dev/null | sed -n '1,12p' >&2; \
+            exit 1; \
+        fi; \
+        echo "static: no PT_INTERP -> OK"; \
     }
 
 
@@ -303,23 +318,35 @@ RUN cd havaldar_core && \
 FROM ubuntu:${UBUNTU_TAG} AS cpp-forge
 
 RUN apt-get update && \
-    { apt-get install -y --no-install-recommends g++-12 cmake make || \
-      apt-get install -y --no-install-recommends g++ cmake make; } && \
+    { apt-get install -y --no-install-recommends g++-12 cmake make binutils || \
+      apt-get install -y --no-install-recommends g++ cmake make binutils; } && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 COPY cpp_accelerator/ ./
 
-# Same two assertions as the Rust stage: starts, and is provably static.
+# Same two assertions as the Rust stage: it starts, and it is provably static.
+#
+# readelf rather than ldd, for the reason spelled out in the rust-arsenal stage
+# above: ldd executes a static binary and reports the PROGRAM's exit code as its
+# own, so it is not a measurement of the file. binutils is installed above so
+# readelf is a guaranteed dependency rather than something inherited by luck.
 RUN CXX="$(command -v g++-12 || command -v g++ || echo g++)" \
         cmake -S . -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_EXE_LINKER_FLAGS="-static" && \
     cmake --build build --config Release -j"$(nproc)" && \
-    ./build/normalizer --help 2>&1 | grep -q "Usage" && \
-    if timeout 10 ldd build/normalizer > /dev/null 2>&1; then \
-        echo "ERROR: build/normalizer is not static" >&2; exit 1; \
-    fi
+    ./build/normalizer --help > /tmp/probe.txt 2>&1; \
+    echo "=== probe: normalizer --help ==="; cat /tmp/probe.txt; echo "=== end probe ==="; \
+    if ! command -v readelf > /dev/null 2>&1; then \
+        echo "ASSERT FAIL: readelf is missing, so staticness cannot be verified" >&2; exit 1; \
+    fi; \
+    if readelf -l build/normalizer 2>/dev/null | grep -q INTERP; then \
+        echo "ASSERT FAIL: build/normalizer carries PT_INTERP, so it is dynamically linked" >&2; \
+        readelf -l build/normalizer 2>/dev/null | sed -n '1,12p' >&2; \
+        exit 1; \
+    fi; \
+    echo "static: no PT_INTERP -> OK"
 
 
 # =============================================================================
@@ -639,6 +666,30 @@ FROM debian:bookworm-slim AS pack-manifest
 # directory.
 ARG MUSL_TARGET
 
+# binutils, for readelf. NOT an optimisation and NOT optional.
+#
+# debian:bookworm-slim ships no binutils, so an earlier version of this stage had
+# to fall back to `ldd` to answer "is this binary static?" -- and ldd gave the
+# wrong answer, reporting a statically linked musl stitcher as dynamic:
+#
+#     PACK FAIL: ldd exit 0, so stitcher is not static
+#
+# ldd works by setting LD_TRACE_LOADED_OBJECTS=1 and running the file, expecting
+# the dynamic loader to intercept and print dependencies instead of starting the
+# program. A static binary has no dynamic loader, so the probe runs the program
+# for real and the PROGRAM's exit code comes back as ldd's own. Whether that
+# number means "dynamic" or "static" therefore depends on what the tool does
+# with no arguments -- which is why tgup happened to look static and stitcher
+# happened to look dynamic, despite both being static.
+#
+# `readelf -l | grep INTERP` is a measurement of the file instead: a dynamically
+# linked ELF carries a PT_INTERP program header, a static one does not. Installing
+# binutils here costs one small layer and buys a check that cannot be fooled by
+# exit codes.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends binutils && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /pack/bin
 
 COPY --from=go-transporter /out/tgup                                         ./tgup
@@ -697,14 +748,15 @@ RUN set -u; \
     } > /pack/MANIFEST.txt || { echo "PACK FAIL: writing MANIFEST.txt" >&2; exit 1; }; \
     sha256sum tgup stitcher normalizer subtitle_forge havaldar_core > /pack/SHA256SUMS \
         || { echo "PACK FAIL: sha256sum" >&2; exit 1; }; \
+    command -v readelf > /dev/null 2>&1 \
+        || { echo "PACK FAIL: readelf is missing, so staticness cannot be verified" >&2; exit 1; }; \
     for b in tgup stitcher normalizer subtitle_forge havaldar_core; do \
-        if command -v readelf > /dev/null 2>&1; then \
-            if readelf -l "$b" 2>/dev/null | grep -q INTERP; then \
-                echo "PACK FAIL: $b has PT_INTERP, so it is dynamically linked" >&2; exit 1; \
-            fi; \
-        elif timeout 10 ldd "$b" > /dev/null 2>&1; then \
-            echo "PACK FAIL: ldd exit 0, so $b is not static" >&2; exit 1; \
+        if readelf -l "$b" 2>/dev/null | grep -q INTERP; then \
+            echo "PACK FAIL: $b has PT_INTERP, so it is dynamically linked" >&2; \
+            readelf -l "$b" 2>/dev/null | sed -n '1,12p' >&2; \
+            exit 1; \
         fi; \
+        echo "static: $b has no PT_INTERP"; \
     done; \
     echo "--- all five binaries are static ---"; \
     cat /pack/MANIFEST.txt
