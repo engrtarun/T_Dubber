@@ -3,6 +3,13 @@
 # script, so it must never enter git history (nor the Docker build context).
 pack/
 
+# Staging directory used by build-native.yml: `--output type=local` writes the
+# pack-exporter image's ROOT filesystem here, so the pack arrives nested as
+# pack-export/pack/... The workflow then normalises it to pack/. Kept separate
+# from `pack/` on purpose -- collapsing the export into ./pack instead would
+# produce pack/pack/bin/..., which is exactly the bug this name avoids.
+pack-export/
+
 __pycache__/
 *.pyc
 

@@ -455,12 +455,30 @@ jobs:
       - name: Build and export the pack (type=local)
         run: |
           set -uo pipefail
-          rm -rf pack
+          rm -rf pack pack-export
 
           args=(
             buildx build
             --target pack-exporter
-            --output type=local,dest=./pack
+            # NOTE the destination: `./pack-export`, NOT `./pack`.
+            #
+            # `--output type=local` writes the image's ROOT FILESYSTEM into dest,
+            # and pack-exporter is `FROM scratch` with
+            # `COPY --from=pack-manifest /pack /pack` -- so the image root holds a
+            # `/pack` directory. Exporting straight to ./pack therefore yields
+            # ./pack/pack/bin/... , and the verify step below then cannot find
+            # pack/MANIFEST.txt even though the build fully succeeded.
+            #
+            # build_kaggle_pack.ps1 is the reference contract and gets this right:
+            # it exports to a staging directory (line 112) and then reads
+            # `$Staging/pack` (line 115). Its `docker create` + `docker cp`
+            # fallback lands in the same place (line 128). This workflow was the
+            # only caller that named the pack folder directly, which is why it was
+            # the only one that broke.
+            #
+            # So: export somewhere neutral, then normalise, and every later step
+            # sees the documented `pack/` shape unchanged.
+            --output type=local,dest=./pack-export
             --progress=plain
             --metadata-file /tmp/buildmeta.json
           )
@@ -509,6 +527,35 @@ jobs:
             exit "$rc"
           fi
           echo "pack build succeeded"
+
+          # Normalise the export into the documented `pack/` shape.
+          #
+          # This accepts EITHER shape rather than assuming one. A plain `mv
+          # ./pack-export/pack ./pack` is correct today, but it fails confusingly
+          # if the image layout ever changes: if pack-exporter were altered to
+          # `COPY ... /pack /`, the export would arrive as
+          # ./pack-export/MANIFEST.txt and the blind mv would just report a
+          # missing source directory. Keying off the marker file means this step
+          # either produces the right layout or prints what it actually got.
+          #
+          # MANIFEST.txt is that marker because pack-manifest always writes it,
+          # and its absence from the expected place is the exact failure this
+          # normalisation exists to prevent.
+          rm -rf pack
+          if [ -f ./pack-export/pack/MANIFEST.txt ]; then
+            mv ./pack-export/pack ./pack
+            rm -rf ./pack-export
+          elif [ -f ./pack-export/MANIFEST.txt ]; then
+            # The image root already IS the pack; there is no nesting to undo.
+            mv ./pack-export ./pack
+          else
+            echo "::error::MANIFEST.txt not found in the export; refusing to normalise blindly"
+            echo "--- what was actually exported ---"
+            find ./pack-export -maxdepth 4 2>/dev/null | sort || true
+            exit 1
+          fi
+          echo "export normalised to:"
+          find pack -type f | sort
 
       # pack-manifest already runs each binary and asserts it is static via ldd.
       # This re-verifies the EXPORTED bytes, because `type=local` writes a plain
