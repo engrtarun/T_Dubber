@@ -512,6 +512,7 @@ def main():
         test_sweeper_log_sync,
         test_channel_load_balancer,
         test_channels_roster_shapes,
+        test_database_introspection,
     ]
 
     original_db = db.DB_PATH
