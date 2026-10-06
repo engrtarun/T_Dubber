@@ -206,16 +206,31 @@ def main():
     # that line "nothing was downloaded and it was still slow" is
     # indistinguishable from "the cache did not engage", which is how a
     # non-functional cache gets left in place for months.
+    # The interesting number is no longer what sits in edge_cache: archives are
+    # unpacked and then DELETED to stay under the 20 GB output quota, so an
+    # empty role directory there means success rather than a miss. What matters
+    # is the tree the next cell consumes, so that is what gets reported -- along
+    # with the ready marker, because find_pylibs() refuses a tree without it and
+    # a missing marker silently falls back to the 458 s pip install.
+    trees = {
+        "pylibs": (WORK / "pylibs", WORK / "pylibs" / ".tdubber_ready"),
+        "weights": (WORK / "hf_cache", None),
+    }
     for role in EDGE_ROLES:
-        role_dir = EDGE_DEST / role
-        if not role_dir.is_dir():
-            _edge_tick("role %s: nothing on disk (pip will install from origin)" % role)
+        tree, marker = trees.get(role, (None, None))
+        if tree is None:
             continue
-        files = [p for p in role_dir.rglob("*") if p.is_file()]
+        if not tree.is_dir():
+            _edge_tick("role %s: no tree at %s (origin path will be used)" % (role, tree))
+            continue
+        files = [p for p in tree.rglob("*") if p.is_file()]
         total = sum(p.stat().st_size for p in files)
+        state = ""
+        if marker is not None:
+            state = ", ready_marker=%s" % ("yes" if marker.is_file() else "MISSING")
         _edge_tick(
-            "role %s: %d file(s), %.1f MiB at %s"
-            % (role, len(files), total / (1 << 20), role_dir)
+            "role %s: tree at %s (%d file(s), %.1f MiB%s)"
+            % (role, tree, len(files), total / (1 << 20), state)
         )
     _edge_tick(
         "note: /kaggle/working is empty on every NEW session, so this is a "

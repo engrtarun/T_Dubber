@@ -152,37 +152,66 @@ def _mounted_snapshot(repo_id: str, roots) -> Path | None:
 
 
 def _edge_fetch(repo_id: str, dest: Path, edge_url: str) -> bool:
-    """Pull a snapshot tarball from the T_Dubber edge Space.
+    """Install the origin's weight artefacts by running ``edge-fetch``.
 
-    The Space publishes content-addressed artefacts under
-    ``/artefacts/<role>/`` (see edge/edge.go). A miss is a normal
-    404, not an error -- the caller falls through to the hub.
+    WHY THIS DELEGATES INSTEAD OF DOWNLOADING
+    ------------------------------------------
+    The origin speaks one protocol: ``manifest.json`` listing content digests,
+    then ``/artifact/<name>`` per entry, with every downloaded byte checked
+    against that digest before it is unpacked. ``edge/`` is the tested
+    implementation of exactly that contract (``edge/client_test.go`` and
+    ``edge/unpack_test.go``), and it is a static binary that the Kaggle pack
+    already delivers.
+
+    An earlier version of this function fetched
+    ``<url>/artefacts/<repo_id>.tar.gz`` itself. No origin has ever served that
+    path -- the Space serves ``/artifact/<name>`` and a Hugging Face repository
+    serves ``/resolve/main/artifact/<name>`` -- so the call returned False on
+    every run and the "fast path" silently degraded to the hub. Reimplementing a
+    second copy of a verified-fetch contract in Python is how that drift goes
+    unnoticed: there is no test that fails, only a cache that never engages.
+
+    ``repo_id`` is accepted for the caller's readability and logged; selection
+    is by ROLE, not by repository, because that is what the manifest indexes.
+    Returns True only when the fetch was verified end to end, so a cache miss
+    still falls through to the hub.
     """
-    import tarfile
-    import tempfile
+    import subprocess
 
-    endpoint = f"{edge_url.rstrip('/')}/artefacts/{repo_id.replace('/', '--')}.tar.gz"
+    binary = os.environ.get("EDGE_FETCH_BIN", "").strip() or shutil.which("edge-fetch")
+    if not binary:
+        return False
+    if not edge_url or not edge_url.startswith(("http://", "https://")):
+        return False
+
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    # The weights archive carries `hf_cache/` at its root, so it is extracted
+    # one level ABOVE dest: dest is the hf_cache directory itself, and a level
+    # of nesting error here shows up as a model that silently re-downloads.
+    unpack_dir = dest.parent
+
+    cmd = [
+        binary,
+        "-url", edge_url,
+        "-dest", str(dest),
+        "-unpack-dir", str(unpack_dir),
+        "-role", "weights",
+        # Without -must-fetch a miss exits 0 and looks like success, which is
+        # the right behaviour for the notebook cell and exactly wrong here:
+        # this function's whole job is to report whether it worked.
+        "-must-fetch",
+    ]
     try:
-        with urllib.request.urlopen(endpoint, timeout=30) as response:
-            if response.status != 200:
-                return False
-            with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
-                shutil.copyfileobj(response, tmp)
-                archive = tmp.name
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600,
+                                check=False)
     except Exception:
         return False
-    try:
-        dest.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(archive) as bundle:
-            bundle.extractall(dest, filter="data")
-        return True
-    except Exception:
+    if result.returncode != 0:
         return False
-    finally:
-        try:
-            os.unlink(archive)
-        except OSError:
-            pass
+    print("hf_store: installed %s from the edge origin (%s)"
+          % (repo_id, edge_url), flush=True)
+    return True
 
 
 def ensure_model(repo_id: str, revision: str = "",

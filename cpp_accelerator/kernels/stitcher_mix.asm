@@ -19,8 +19,24 @@
 ;
 ;    * `i % bg.len()` is an integer division PER SAMPLE. On a 2-hour feature
 ;      film at 24 kHz that is 172.8M divisions; on the 107 s trailer this was
-;      written against it is 2.57M. A 64-bit idiv is 20-40 cycles and does
-;      not pipeline. Removing the modulo is worth more than the vectorising.
+;      written against it is 2.57M.
+;
+;      MEASURED, because an earlier draft of this comment claimed the division
+;      dominated and that turned out to be wrong. LLVM already vectorises
+;      `i % len` when the divisor is loop-invariant -- it hoists a reciprocal
+;      and multiplies -- so the loop was never paying 20-40 cycles a sample.
+;      Interleaved, best of four, 43.2M samples against a 100-sample background
+;      (432,000 wraps: the worst case for any wrap logic at all):
+;
+;          Rust, i % bg.len()      0.210 s
+;          Rust, wrapping index   0.110 s
+;          this kernel            0.070 s   <- 3.0x the original, bit-identical
+;
+;      The win is real and it is 3x on one loop, not the order of magnitude
+;      this comment originally implied: about 0.14 s on a 30-minute dub, and
+;      roughly 0.6 s on a two-hour film, out of a run whose GPU work takes
+;      minutes. Written down here so the next reader does not re-derive the
+;      wrong number, and does not expect more than this.
 ;    * every one of the three loops is purely elementwise -- multiply, scale,
 ;      add -- so 8 samples fit in one ymm with no arithmetic change at all.
 ;      The results are bit-identical to the scalar loops, not "close".
@@ -35,7 +51,7 @@
 ;  ends through that loop. That is a lot of control flow whose only failure
 ;  mode is a subtly wrong sample in a shipped video. These three passes keep
 ;  each loop trivial to verify against its scalar twin, and they still remove
-;  every division and every non-SIMD op. The division was the expensive part.
+;  every division and every non-SIMD op.
 ;
 ;      void td_stitcher_lay(const TdStitcherLayParams *p);
 ;      void td_stitcher_duck(const TdStitcherDuckParams *p);

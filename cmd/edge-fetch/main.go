@@ -189,7 +189,8 @@ func run() error {
 		fmt.Fprintf(os.Stderr, "edge-fetch: some artefacts failed (%v), falling back for those\n", fetchErr)
 	}
 
-	unpacked, unpackFailed := unpackPlan(*dest, *unpackDir, plan, !*keepArchives, pf, lf)
+	unpacked, unpackFailed := unpackPlan(*dest, *unpackDir, plan,
+		fetchErr == nil, !*keepArchives, pf, lf)
 	if unpackFailed > 0 && *mustFetch {
 		return fmt.Errorf("edge-fetch: %d archive(s) could not be unpacked", unpackFailed)
 	}
@@ -201,18 +202,31 @@ func run() error {
 
 // unpackPlan extracts every archive in the plan into unpackDir.
 //
-// Already-current entries are considered alongside the freshly fetched ones: a
-// plan whose archive survived an earlier attempt but whose tree was removed
-// still needs extracting, and re-extracting an existing tree is idempotent.
+// trustFetched says Fetch completed without error, which means every entry in
+// plan.Missing was verified at the moment it was renamed into place. That is
+// the whole reason the second hash can be skipped: re-hashing 7 GB of freshly
+// downloaded archives to learn what the download already proved costs about
+// two seconds of CPU and a pass of disk reads on a cold Kaggle run.
 //
-// An entry whose bytes on disk no longer match the manifest is refused rather
-// than trusted even if Fetch just wrote it. That is what content addressing
-// buys, and it costs one hash of a local file.
-func unpackPlan(dest, unpackDir string, plan *edge.Plan, dropAfter bool,
+// When Fetch reported a failure the flag is false and every archive is
+// re-verified from disk, because a failed fetch can leave the PREVIOUS
+// run's mismatched file sitting at the target path. Trusting a name rather
+// than a digest would be exactly the bug the manifest exists to prevent.
+//
+// Already-current entries are always re-verified: they were verified by a
+// different process, minutes or days ago.
+func unpackPlan(dest, unpackDir string, plan *edge.Plan, trustFetched, dropAfter bool,
 	pf, lf func(format string, args ...any)) (unpacked, failed int) {
 
 	if unpackDir == "" {
 		return 0, 0
+	}
+
+	freshlyFetched := make(map[string]bool, len(plan.Missing))
+	if trustFetched {
+		for _, e := range plan.Missing {
+			freshlyFetched[e.Name] = true
+		}
 	}
 
 	seen := make(map[string]bool, len(plan.Entries))
@@ -234,18 +248,22 @@ func unpackPlan(dest, unpackDir string, plan *edge.Plan, dropAfter bool,
 			// already named it. Nothing to unpack.
 			continue
 		}
+		// Size is checked in every case: it is free, and it catches a truncated
+		// or partial file before anything reads it.
 		if info.Size() != e.SizeBytes {
 			lf("edge: not unpacking %s: %d bytes on disk, manifest says %d",
 				e.Name, info.Size(), e.SizeBytes)
 			failed++
 			continue
 		}
-		sum, err := edge.FileSHA256(full)
-		if err != nil || !strings.EqualFold(sum, e.SHA256) {
-			lf("edge: not unpacking %s: digest mismatch (on disk %s, manifest %s)",
-				e.Name, sum, e.SHA256)
-			failed++
-			continue
+		if !freshlyFetched[e.Name] {
+			sum, err := edge.FileSHA256(full)
+			if err != nil || !strings.EqualFold(sum, e.SHA256) {
+				lf("edge: not unpacking %s: digest mismatch (on disk %s, manifest %s)",
+					e.Name, sum, e.SHA256)
+				failed++
+				continue
+			}
 		}
 
 		res, err := edge.Unpack(full, unpackDir)

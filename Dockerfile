@@ -188,9 +188,15 @@ FROM ${RUST_PACK_IMAGE} AS rust-arsenal
 # assertion instead of erroring here.
 ARG MUSL_TARGET
 
+# nasm assembles cpp_accelerator/kernels/stitcher_mix.asm for this crate's
+# build.rs. The kernels export C symbols directly and the first argument register
+# is RCX in both ABIs, so nothing else is needed -- no C shim, no cross
+# compiler -- but nasm itself is not optional: without it the stitcher compiles
+# the scalar path and the assembly in the pack would be dead code.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         musl-tools \
         binutils \
+        nasm \
     && rm -rf /var/lib/apt/lists/* \
     && rustup target add "${MUSL_TARGET}"
 
@@ -239,8 +245,18 @@ WORKDIR /arsenal
 # contain the word all looked identical from the outside. Each step below
 # therefore (a) checks the binary exists and says so, (b) prints what the binary
 # actually printed, and (c) tests for staticness from the ELF program headers.
+# stitcher/build.rs reaches UP one directory for the kernel, so the .asm has to
+# sit where it expects: /arsenal/cpp_accelerator/kernels/. Only that one file is
+# copied, because copying the whole cpp_accelerator tree would invalidate this
+# layer whenever an unrelated C++ file changes.
+COPY cpp_accelerator/kernels/stitcher_mix.asm ./cpp_accelerator/kernels/
 COPY stitcher/ ./stitcher/
+# TD_STITCHER_REQUIRE_ASM=1: in the pack the stitcher IS the product, so a
+# missing assembler must fail the build here rather than ship the scalar mixer
+# with the assembly silently absent. The setting is off everywhere else, where
+# the scalar fallback is a correct and merely slower answer.
 RUN cd stitcher && \
+    TD_STITCHER_REQUIRE_ASM=1 \
     cargo build --release --target "${MUSL_TARGET}" && \
     B="./target/${MUSL_TARGET}/release/stitcher" && \
     { \

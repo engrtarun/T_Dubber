@@ -69,6 +69,176 @@ struct Timeline {
     output: String,
 }
 
+// ---------------------------------------------------------------------------
+// Timeline mixing: three loops, three kernels
+// ---------------------------------------------------------------------------
+//
+// These are the only CPU-bound loops in the stitcher, and every one of them
+// runs over the WHOLE timeline, once per dub. The AVX2 versions live in
+// cpp_accelerator/kernels/stitcher_mix.asm, are assembled by build.rs, and are
+// bit-identical to the scalar code here -- cpp_accelerator's
+// mix_equivalence_test compares them sample for sample -- so the only decision
+// here is speed, never accuracy.
+//
+// The scalar fallback is deliberately NOT the code this replaced. The original
+// background loop was:
+//
+//     for (i, sample) in mix.iter_mut().enumerate() {
+//         *sample = bg[i % bg.len()] * bg_vol;
+//     }
+//
+// `i % bg.len()` is one 64-bit integer division per sample: 2.57M of them for
+// the 107 s trailer this was written against, 172.8M for a two-hour feature
+// film, each blocking a divider that neither pipelines nor overlaps the
+// multiply beside it. The fallback below carries the read index and wraps it --
+// the same wrap the kernel performs -- so a build without nasm is slower but no
+// less correct, and does not pay for a division either.
+
+#[cfg(td_stitcher_asm)]
+mod mix_asm {
+    /// Mirror of `TdMixSpan`: two u64s, 16 bytes.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct MixSpan {
+        pub start: u64,
+        pub end: u64,
+    }
+
+    /// Mirror of `TdStitcherLayParams`: out@0, bg@8, bg_len@16, total@24,
+    /// bg_vol@32, 40 bytes total. The header's static_asserts pin those offsets;
+    /// if a field is reordered here the kernel reads the wrong number silently.
+    #[repr(C)]
+    pub struct LayParams {
+        pub out: *mut f32,
+        pub bg: *const f32,
+        pub bg_len: u64,
+        pub total: u64,
+        pub bg_vol: f32,
+    }
+
+    /// Mirror of `TdStitcherDuckParams`: out@0, duck_gain@8, spans@16,
+    /// span_count@24, 32 bytes total.
+    #[repr(C)]
+    pub struct DuckParams {
+        pub out: *mut f32,
+        pub duck_gain: f32,
+        pub spans: *const MixSpan,
+        pub span_count: u64,
+    }
+
+    /// Mirror of `TdStitcherAddVoiceParams`: out@0, voice@8, count@16,
+    /// dest@24, 32 bytes total.
+    #[repr(C)]
+    pub struct AddVoiceParams {
+        pub out: *mut f32,
+        pub voice: *const f32,
+        pub count: u64,
+        pub dest: u64,
+    }
+
+    extern "C" {
+        pub fn td_stitcher_lay(p: *const LayParams);
+        pub fn td_stitcher_duck(p: *const DuckParams);
+        pub fn td_stitcher_add_voice(p: *const AddVoiceParams);
+    }
+}
+
+/// Fill `mix` with the background, looped and scaled by `bg_vol`.
+///
+/// An empty background means silence, and the caller hands in a zeroed buffer,
+/// so there is nothing to write.
+fn lay_background(mix: &mut [f32], bg: &[f32], bg_vol: f32) {
+    if bg.is_empty() {
+        return;
+    }
+    #[cfg(td_stitcher_asm)]
+    unsafe {
+        mix_asm::td_stitcher_lay(&mix_asm::LayParams {
+            out: mix.as_mut_ptr(),
+            bg: bg.as_ptr(),
+            bg_len: bg.len() as u64,
+            total: mix.len() as u64,
+            bg_vol,
+        });
+        return;
+    }
+    #[cfg(not(td_stitcher_asm))]
+    {
+        let mut j = 0usize;
+        for sample in mix.iter_mut() {
+            *sample = bg[j] * bg_vol;
+            j += 1;
+            if j == bg.len() {
+                j = 0;
+            }
+        }
+    }
+}
+
+/// Scale every span of `mix` in place by `gain`.
+///
+/// Spans are clamped to the timeline even though the caller already clamped
+/// them: the kernel carries no timeline length, so a span reaching past the end
+/// would write past the buffer. The slice range this replaced would have
+/// panicked in that case, which is louder but only on the way down.
+fn duck_spans(mix: &mut [f32], spans: &[(usize, usize)], gain: f32) {
+    #[cfg(td_stitcher_asm)]
+    unsafe {
+        let total = mix.len() as u64;
+        let raw: Vec<mix_asm::MixSpan> = spans
+            .iter()
+            .map(|&(start, end)| mix_asm::MixSpan {
+                start: (start as u64).min(total),
+                end: (end as u64).min(total),
+            })
+            .collect();
+        if raw.is_empty() {
+            return;
+        }
+        mix_asm::td_stitcher_duck(&mix_asm::DuckParams {
+            out: mix.as_mut_ptr(),
+            duck_gain: gain,
+            spans: raw.as_ptr(),
+            span_count: raw.len() as u64,
+        });
+    }
+    #[cfg(not(td_stitcher_asm))]
+    for &(start, end) in spans {
+        let end = end.min(mix.len());
+        if start < end {
+            for sample in &mut mix[start..end] {
+                *sample *= gain;
+            }
+        }
+    }
+}
+
+/// `mix[dest..dest + count] += voice[..count]`, in place.
+///
+/// `count` must already be clamped by the caller: the kernel writes exactly the
+/// count it is given rather than shortening an overlay silently, because a
+/// truncated overlay drops the end of a spoken line.
+fn overlay_voice(mix: &mut [f32], voice: &[f32], dest: usize, count: usize) {
+    #[cfg(td_stitcher_asm)]
+    unsafe {
+        if count == 0 {
+            return;
+        }
+        mix_asm::td_stitcher_add_voice(&mix_asm::AddVoiceParams {
+            out: mix.as_mut_ptr(),
+            voice: voice.as_ptr(),
+            count: count as u64,
+            dest: dest as u64,
+        });
+    }
+    #[cfg(not(td_stitcher_asm))]
+    {
+        for (dst, &v) in mix[dest..dest + count].iter_mut().zip(voice.iter().take(count)) {
+            *dst += v;
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
@@ -148,10 +318,8 @@ fn run(timeline_path: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Pre-sized mix buffer (~960 KB per minute @ 24 kHz f32 mono).
     let mut mix = vec![0f32; total_samples];
+    lay_background(&mut mix, &bg, bg_vol);
     if !bg.is_empty() {
-        for (i, sample) in mix.iter_mut().enumerate() {
-            *sample = bg[i % bg.len()] * bg_vol;
-        }
         slog!(t0, "background laid (looped to {:.2}s)", tl.duration);
     }
 
@@ -184,11 +352,7 @@ fn run(timeline_path: &str) -> Result<(), Box<dyn std::error::Error>> {
             _ => ducked.push((start, end)),
         }
     }
-    for (start, end) in &ducked {
-        for sample in &mut mix[*start..*end] {
-            *sample *= DUCK_FACTOR;
-        }
-    }
+    duck_spans(&mut mix, &ducked, DUCK_FACTOR);
     slog!(
         t0,
         "ducking applied over {} span(s) x {:.2}",
@@ -204,9 +368,7 @@ fn run(timeline_path: &str) -> Result<(), Box<dyn std::error::Error>> {
             ((seg.start * f64::from(TARGET_SAMPLE_RATE)).round() as usize).min(total_samples);
         let window = ((seg.end - seg.start) * f64::from(TARGET_SAMPLE_RATE)).round() as usize;
         let take = voice.len().min(window).min(total_samples - start_idx);
-        for (i, &v) in voice.iter().take(take).enumerate() {
-            mix[start_idx + i] += v;
-        }
+        overlay_voice(&mut mix, &voice, start_idx, take);
         slog!(
             t0,
             "segment {}/{}: {} samples @ {:.2}s ({} Hz src)",
