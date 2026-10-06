@@ -126,6 +126,13 @@ RUN go mod download && \
 # Now the source. Real code, tiny layer.
 COPY ./*.go ./
 
+# `COPY ./*.go` only ever covered the ROOT package. edge-fetch is its own
+# package (cmd/edge-fetch) and imports ./edge, so both directories have to
+# reach the build context or `go build ./cmd/edge-fetch` dies with "no Go
+# files in ./cmd/edge-fetch" -- and the pack would ship without the fetcher.
+COPY ./edge/          ./edge/
+COPY ./cmd/edge-fetch/ ./cmd/edge-fetch/
+
 # CGO_ENABLED=0 -> pure static binary. That is what lets us copy it out of this
 # Debian-bookworm stage into a CUDA/Ubuntu runtime stage: no glibc version
 # negotiation, no runtime linker, no libgcc/libstdc++ to ship alongside.
@@ -137,10 +144,22 @@ COPY ./*.go ./
 # and `tgup help` re-proving the binary starts is the same assertion
 # build.ps1 makes locally — if the binary needs a login code to do real work,
 # `help` still has to work.
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -ldflags="-s -w" -o /out/tgup . && \
-    strip /out/tgup 2>/dev/null || true; \
-    /out/tgup help > /dev/null
+# edge-fetch is the second output of this stage: the Kaggle-side cache client
+# that replaces the 458 s cold pip install with one tar extract. It is built
+# here, in the same throwaway compiler stage, because the pack is the only
+# thing that reliably reaches a Kaggle session -- a binary that has to be
+# fetched separately is a binary that will not be there.
+RUN set -e; \
+    export CGO_ENABLED=0 GOOS=linux GOARCH=amd64; \
+    go build -trimpath -ldflags="-s -w" -o /out/tgup .; \
+    go build -trimpath -ldflags="-s -w" -o /out/edge-fetch ./cmd/edge-fetch; \
+    strip /out/tgup /out/edge-fetch 2>/dev/null || true
+
+# Both binaries must START before they are copied out. edge-fetch invoked with
+# no flags has to print its skip line and exit 0: that is precisely the path
+# the notebook takes when EDGE_URL is unset, so a build that cannot reproduce
+# it is not shippable. tgup needs no login code for `help`.
+RUN /out/tgup help > /dev/null && /out/edge-fetch > /dev/null
 
 
 # =============================================================================
@@ -629,23 +648,27 @@ RUN groupadd -g ${APP_UID} ${APP_USER} 2>/dev/null || true && \
     chown -R ${APP_USER}:${APP_USER} /app /kaggle /var/log/tdubber 2>/dev/null || true
 
 # -----------------------------------------------------------------------------
-# STAGE 3f — THE ARMORY (four more static binaries, zero toolchains)
+# STAGE 3f — THE ARMORY (five more static binaries, zero toolchains)
 # -----------------------------------------------------------------------------
-# The pack's five, minus tgup (already in 3c): all baked so local/CI parity
+# The pack's six, minus tgup (already in 3c): all baked so local/CI parity
 # matches what build_kaggle_pack.ps1 ships to Kaggle. Discovery is PATH-based
 # in mazinger.assemble; STITCHER_BIN / NORMALIZER_BIN (ENV above) pin the two
 # that have Python bridges, shutil.which() finds subtitle_forge and
-# havaldar_core when anything asks for them by name.
+# havaldar_core when anything asks for them by name. edge-fetch is pinned by
+# the notebook cell through EDGE_FETCH_BIN for the same reason the normalizer
+# is: a PATH-only lookup would run whatever the image happens to call that.
 #
 # Nothing here -- and nothing in the HEALTHCHECK below -- ever EXECUTES
 # havaldar_core: starting it would boot the telemetry HTTP daemon. Presence
 # checks only.
+COPY --from=go-transporter  /out/edge-fetch                                   /usr/local/bin/edge-fetch
 COPY --from=rust-arsenal /arsenal/stitcher/target/${MUSL_TARGET}/release/stitcher            /usr/local/bin/stitcher
 COPY --from=rust-arsenal /arsenal/subtitle_forge/target/${MUSL_TARGET}/release/subtitle_forge /usr/local/bin/subtitle_forge
 COPY --from=rust-arsenal /arsenal/havaldar_core/target/${MUSL_TARGET}/release/havaldar_core   /usr/local/bin/havaldar_core
 COPY --from=cpp-forge    /src/build/normalizer                            /usr/local/bin/normalizer
 RUN chmod 755 /usr/local/bin/stitcher /usr/local/bin/normalizer \
-              /usr/local/bin/subtitle_forge /usr/local/bin/havaldar_core
+              /usr/local/bin/subtitle_forge /usr/local/bin/havaldar_core \
+              /usr/local/bin/edge-fetch
 
 # -----------------------------------------------------------------------------
 # STAGE 3g — CONTRACTS
@@ -676,6 +699,7 @@ HEALTHCHECK --interval=30s --timeout=8s --start-period=90s --retries=3 \
     CMD ffmpeg -version > /dev/null 2>&1 || exit 1; \
         python -c "import torch, vllm, faster_whisper" > /dev/null 2>&1 || exit 1; \
         command -v tgup > /dev/null 2>&1 || exit 1; \
+        command -v edge-fetch > /dev/null 2>&1 || exit 1; \
         command -v stitcher > /dev/null 2>&1 || exit 1; \
         command -v normalizer > /dev/null 2>&1 || exit 1; \
         command -v subtitle_forge > /dev/null 2>&1 || exit 1; \
@@ -692,14 +716,14 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["bash"]
 
 # =============================================================================
-# STAGE 4 — "THE MANIFEST"  ·  gather the five, prove each one runs
+# STAGE 4 — "THE MANIFEST"  ·  gather the six, prove each one runs
 # =============================================================================
 # debian:bookworm-slim only for its shell, coreutils and ldd -- the binaries
 # are already static, so nothing here links against the base. This stage
 # produces the exact byte set the Kaggle dataset ships, plus two documents:
 #   MANIFEST.txt  -- what each tool says about itself (help/version line)
 #                    and how big it is, human-readable at a glance;
-#   SHA256SUMS    -- the same five, hashed, for the exporter script (and
+#   SHA256SUMS    -- the same six, hashed, for the exporter script (and
 #                    anyone downstream) to verify the bytes it received.
 #
 # Help commands are per-tool on purpose: stitcher has no --help flag (its
@@ -738,6 +762,7 @@ RUN apt-get update && \
 WORKDIR /pack/bin
 
 COPY --from=go-transporter /out/tgup                                         ./tgup
+COPY --from=go-transporter /out/edge-fetch                                   ./edge-fetch
 COPY --from=rust-arsenal   /arsenal/stitcher/target/${MUSL_TARGET}/release/stitcher            ./stitcher
 COPY --from=rust-arsenal   /arsenal/subtitle_forge/target/${MUSL_TARGET}/release/subtitle_forge ./subtitle_forge
 COPY --from=rust-arsenal   /arsenal/havaldar_core/target/${MUSL_TARGET}/release/havaldar_core   ./havaldar_core
@@ -745,8 +770,8 @@ COPY --from=cpp-forge      /src/build/normalizer                             ./n
 
 # NO `set -e` here, and that is the whole point of this rewrite.
 #
-# This one RUN used to do a dozen unrelated jobs in a single shell: chmod, five
-# binary probes, manifest generation, checksums, and five static-link checks.
+# This one RUN used to do a dozen unrelated jobs in a single shell: chmod, six
+# binary probes, manifest generation, checksums, and six static-link checks.
 # Under `set -e`, ANY non-zero anywhere aborted the build with a bare
 # "exit code: 1" that named none of the dozen steps -- including non-zero exits
 # that are entirely benign, like a probe command legitimately exiting 1, or
@@ -760,7 +785,7 @@ COPY --from=cpp-forge      /src/build/normalizer                             ./n
 # that actually determine shippability -- every binary present, every binary
 # static -- still fail hard, loudly and by name.
 RUN set -u; \
-    for b in tgup stitcher normalizer subtitle_forge havaldar_core; do \
+    for b in tgup edge-fetch stitcher normalizer subtitle_forge havaldar_core; do \
         if [ ! -f "$b" ]; then \
             echo "PACK FAIL: '$b' is not in $(pwd)" >&2; \
             echo "--- directory contents ---" >&2; ls -la >&2; \
@@ -768,7 +793,7 @@ RUN set -u; \
         fi; \
         chmod 755 "$b" || { echo "PACK FAIL: chmod $b" >&2; exit 1; }; \
     done; \
-    echo "--- all five binaries present ---"; \
+    echo "--- all six binaries present ---"; \
     probe() { \
         _n="$1"; shift; \
         _o="$("$@" 2>&1 | head -n 1 || true)"; \
@@ -776,26 +801,28 @@ RUN set -u; \
         printf '%s' "$_o" > "/tmp/probe_$_n"; \
     }; \
     probe tgup ./tgup help; \
+    probe edge-fetch ./edge-fetch; \
     probe stitcher ./stitcher; \
     probe normalizer ./normalizer --help; \
     probe subtitle_forge ./subtitle_forge --version; \
     probe havaldar_core ./havaldar_core --help; \
     { \
-        echo "T_Dubber native arsenal - five static linux/amd64 binaries"; \
+        echo "T_Dubber native arsenal - six static linux/amd64 binaries"; \
         echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
         echo ""; \
         printf '%-16s %12s  %s\n' "tool" "bytes" "identifies as"; \
         printf '%-16s %12s  %s\n' "tgup"           "$(wc -c < tgup)"           "$(cat /tmp/probe_tgup)"; \
+        printf '%-16s %12s  %s\n' "edge-fetch"     "$(wc -c < edge-fetch)"     "$(cat /tmp/probe_edge-fetch)"; \
         printf '%-16s %12s  %s\n' "stitcher"       "$(wc -c < stitcher)"       "$(cat /tmp/probe_stitcher)"; \
         printf '%-16s %12s  %s\n' "normalizer"     "$(wc -c < normalizer)"     "$(cat /tmp/probe_normalizer)"; \
         printf '%-16s %12s  %s\n' "subtitle_forge" "$(wc -c < subtitle_forge)" "$(cat /tmp/probe_subtitle_forge)"; \
         printf '%-16s %12s  %s\n' "havaldar_core"  "$(wc -c < havaldar_core)"  "$(cat /tmp/probe_havaldar_core)"; \
     } > /pack/MANIFEST.txt || { echo "PACK FAIL: writing MANIFEST.txt" >&2; exit 1; }; \
-    sha256sum tgup stitcher normalizer subtitle_forge havaldar_core > /pack/SHA256SUMS \
+    sha256sum tgup edge-fetch stitcher normalizer subtitle_forge havaldar_core > /pack/SHA256SUMS \
         || { echo "PACK FAIL: sha256sum" >&2; exit 1; }; \
     command -v readelf > /dev/null 2>&1 \
         || { echo "PACK FAIL: readelf is missing, so staticness cannot be verified" >&2; exit 1; }; \
-    for b in tgup stitcher normalizer subtitle_forge havaldar_core; do \
+    for b in tgup edge-fetch stitcher normalizer subtitle_forge havaldar_core; do \
         if readelf -l "$b" 2>/dev/null | grep -q INTERP; then \
             echo "PACK FAIL: $b has PT_INTERP, so it is dynamically linked" >&2; \
             readelf -l "$b" 2>/dev/null | sed -n '1,12p' >&2; \
@@ -803,7 +830,7 @@ RUN set -u; \
         fi; \
         echo "static: $b has no PT_INTERP"; \
     done; \
-    echo "--- all five binaries are static ---"; \
+    echo "--- all six binaries are static ---"; \
     cat /pack/MANIFEST.txt
 
 
@@ -811,7 +838,7 @@ RUN set -u; \
 # STAGE 5 — "PACK-EXPORTER"  ·  scratch-clean: the image IS the /pack folder
 # =============================================================================
 # FROM scratch on purpose: the exported filesystem contains exactly
-#   /pack/bin/{tgup,stitcher,normalizer,subtitle_forge,havaldar_core}
+#   /pack/bin/{tgup,edge-fetch,stitcher,normalizer,subtitle_forge,havaldar_core}
 #   /pack/MANIFEST.txt
 #   /pack/SHA256SUMS
 # and nothing else -- no shell, no libc, no layers to strip afterwards.
@@ -826,7 +853,7 @@ RUN set -u; \
 FROM scratch AS pack-exporter
 
 LABEL org.opencontainers.image.title="T_Dubber Kaggle Pack" \
-      org.opencontainers.image.description="Five static linux/amd64 binaries: tgup (Go), stitcher + subtitle_forge + havaldar_core (Rust/musl), normalizer (C++)" \
+      org.opencontainers.image.description="Six static linux/amd64 binaries: tgup + edge-fetch (Go), stitcher + subtitle_forge + havaldar_core (Rust/musl), normalizer (C++)" \
       org.opencontainers.image.version="1.0.0" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.source="https://github.com/engrtarun/T_Dubber"

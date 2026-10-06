@@ -8,7 +8,7 @@
   2. Unpacks that tar.gz into a scratch tree and PROVES it is a real pack
      before anything touches Kaggle:
         * MANIFEST.txt + SHA256SUMS present
-        * exactly the five tools, each an ELF64 executable
+        * exactly the six tools, each an ELF64 executable
         * every binary matches its sha256 in SHA256SUMS
         * prints the "built:" line so you can see how fresh it is
   3. Stages a single-file upload (kaggle-tdubber-pack.tar.gz at the dataset
@@ -90,7 +90,7 @@ Write-Host "      $Built" -ForegroundColor DarkGray
 $Manifest | Where-Object { $_ -match '^\s*\w+\s+\d+\s' } |
     ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }
 
-$Expected = @('tgup', 'stitcher', 'subtitle_forge', 'havaldar_core', 'normalizer')
+$Expected = @('tgup', 'edge-fetch', 'stitcher', 'subtitle_forge', 'havaldar_core', 'normalizer')
 $BinDir   = Join-Path $Root 'bin'
 if (-not (Test-Path $BinDir)) { Fail "no bin/ directory in the pack" }
 

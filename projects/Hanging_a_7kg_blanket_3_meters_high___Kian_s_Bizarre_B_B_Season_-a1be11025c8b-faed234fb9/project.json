@@ -1,0 +1,17 @@
+{
+  "project_id": "Hanging_a_7kg_blanket_3_meters_high___Kian_s_Bizarre_B_B_Season_-a1be11025c8b-faed234fb9",
+  "title": "Hanging_a_7kg_blanket_3_meters_high___Kian_s_Bizarre_B_B_Season_",
+  "run_id": "faed234fb9",
+  "state": "processing",
+  "source_video": "Hanging_a_7kg_blanket_3_meters_high_Kian_s_Bizarre_B_B_Sea.mp4",
+  "source_url": "https://youtu.be/gqyYQ5F2i6E?si=oUOYkQP5gdUEi0yl",
+  "source_kind": "web",
+  "source_size": 18475993,
+  "target_language": "Hindi",
+  "speaker_detection": true,
+  "created_at": "2026-10-05T17:38:15+05:30",
+  "telegram_backup": "https://t.me/tgwebcloud1/18",
+  "kernel_id": "engrtarun/dubber-worker-homura",
+  "output_video": null,
+  "report_file": null
+}

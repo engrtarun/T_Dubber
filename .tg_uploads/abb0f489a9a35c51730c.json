@@ -1,0 +1,48 @@
+{
+  "file_path": "C:\\Users\\pocot\\Music\\T_Dubber\\projects\\Hanging_a_7kg_blanket_3_meters_high___Kian_s_Bizarre_B_B_Season_-a1be11025c8b-faed234fb9\\Hanging_a_7kg_blanket_3_meters_high_Kian_s_Bizarre_B_B_Sea.mp4",
+  "filename": "Hanging_a_7kg_blanket_3_meters_high_Kian_s_Bizarre_B_B_Sea.mp4",
+  "size": 18475993,
+  "state": "complete",
+  "parts": [
+    {
+      "part": 1,
+      "name": "Hanging_a_7kg_blanket_3_meters_high_Kian_s_Bizarre_B_B_Sea.mp4",
+      "offset": 0,
+      "size": 18475993,
+      "sha256": "a1be11025c8b04e7ed3e1fccdf4b863628644ae11c982a549278c38557ff7d87",
+      "message_id": 18,
+      "link": "https://t.me/tgwebcloud1/18"
+    }
+  ],
+  "updated_at": 1791202121.0100393,
+  "message_id": 18,
+  "message_link": "https://t.me/tgwebcloud1/18",
+  "channel": "@tgwebcloud1",
+  "manifest": {
+    "tg_dubber_manifest": 2,
+    "filename": "Hanging_a_7kg_blanket_3_meters_high_Kian_s_Bizarre_B_B_Sea.mp4",
+    "size": 18475993,
+    "chunk_size": 1992294400,
+    "chunked": false,
+    "chunk_count": 1,
+    "channel": "@tgwebcloud1",
+    "source_path": "C:\\Users\\pocot\\Music\\T_Dubber\\projects\\Hanging_a_7kg_blanket_3_meters_high___Kian_s_Bizarre_B_B_Season_-a1be11025c8b-faed234fb9\\Hanging_a_7kg_blanket_3_meters_high_Kian_s_Bizarre_B_B_Sea.mp4",
+    "thumbnail_path": null,
+    "caption": "🎬 Hanging a 7kg blanket 3 meters high | Kian's Bizarre B&B Season 2 | Netflix [ENG SUB]\n👤 Netflix K-Content · ⏱ 3m 47s · 🎥 720p · 💾 17.62 MB\n🔗 https://www.youtube.com/watch?v=gqyYQ5F2i6E\n#T_Dubber #youtube #netflix_k_content #3min #720p",
+    "created_at": "2026-10-05T17:38:41+0530",
+    "app": "T_Dubber",
+    "parts": [
+      {
+        "part": 1,
+        "name": "Hanging_a_7kg_blanket_3_meters_high_Kian_s_Bizarre_B_B_Sea.mp4",
+        "offset": 0,
+        "size": 18475993,
+        "sha256": "a1be11025c8b04e7ed3e1fccdf4b863628644ae11c982a549278c38557ff7d87",
+        "message_id": 18,
+        "link": "https://t.me/tgwebcloud1/18"
+      }
+    ]
+  },
+  "chunked": false,
+  "chunk_count": 1
+}

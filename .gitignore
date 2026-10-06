@@ -54,6 +54,15 @@ compile_commands.json
 # Security: ignore Kaggle credentials
 kaggle.json
 
+# Security: ignore Hugging Face credentials.
+# HuggingFace_PaperWork/ holds screenshots (fine to commit)
+# but never a live token: hf_store.resolve_token() reads
+# these names, so they must never reach git.
+HuggingFace_PaperWork/hf.env
+HuggingFace_PaperWork/.env
+HuggingFace_PaperWork/token.txt
+HuggingFace_PaperWork/tokens.txt
+
 # Vendored NASM (tools/nasm/) -- downloaded by hand, ~1.5 MB of binaries that
 # cpp_accelerator/CMakeLists.txt finds through its HINTS. Assembler, not
 # source: regenerable from https://www.nasm.us/pub/nasm/releasebuilds/, so it

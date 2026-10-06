@@ -1,0 +1,267 @@
+"""Extract key-frame thumbnails from a video using LLM-selected timestamps."""
+
+from __future__ import annotations
+
+import logging
+import os
+import subprocess
+from typing import TYPE_CHECKING
+
+import json_repair
+from PIL import Image
+
+from mazinger.llm import llm_max_output_tokens
+from mazinger.srt import parse_blocks
+from mazinger.utils import estimate_tokens, LLMUsageTracker
+
+if TYPE_CHECKING:
+    from openai import OpenAI
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+#  Timestamp selection via LLM
+# ---------------------------------------------------------------------------
+
+_TIMESTAMP_SYSTEM = """\
+You are a video analyst selecting screenshot timestamps from subtitle text.
+
+You will receive timestamped subtitles ([MM:SS] text). Pick timestamps where \
+a screenshot would add meaningful visual context.
+
+GOOD reasons to pick a timestamp:
+- Code editor, terminal, browser, or UI is shown
+- Diagram, architecture drawing, or slide is presented
+- Live demo result (server running, URL opened)
+- New topic/section begins (screen likely changed)
+- Speaker references something visual ("as you can see")
+
+RULES:
+- Pick 5-15 timestamps total. Spread them across the video.
+- Prefer moments a few seconds AFTER a topic is mentioned.
+- ONLY use timestamps that exist in the subtitle list. Do NOT invent times.
+- Each timestamp must be UNIQUE — no duplicates.
+- Return ONLY a valid JSON array. No markdown fences, no commentary.
+
+Each element must have exactly these keys:
+  {"timestamp": "HH:MM:SS" or "MM:SS", "seconds": <float>, "reason": "<one line>"}"""
+
+_TOKEN_THRESHOLD = 12_000
+_BATCH_MINUTES = 5
+_OVERLAP_SECONDS = 30
+
+
+def _blocks_to_simple_timed_text(
+    blocks: list[tuple[str, float, float, str]],
+) -> str:
+    """Convert blocks to ``[MM:SS] text`` format for LLM input (no SRT formatting)."""
+    lines = []
+    for _idx, start, _end, text in blocks:
+        m, s = divmod(int(start), 60)
+        h, m = divmod(m, 60)
+        if h:
+            ts = f"{h:d}:{m:02d}:{s:02d}"
+        else:
+            ts = f"{m:d}:{s:02d}"
+        lines.append(f"[{ts}] {text.strip()}")
+    return "\n".join(lines)
+
+
+def _request_timestamps(
+    client: OpenAI,
+    timed_text: str,
+    segment_label: str = "",
+    llm_model: str = "gpt-4.1",
+    usage_tracker: LLMUsageTracker | None = None,
+) -> list[dict]:
+    label = f" (segment: {segment_label})" if segment_label else ""
+    user_msg = (
+        f"Here are the timestamped subtitles{label}:\n\n{timed_text}\n\n"
+        "Return the JSON array of timestamps."
+    )
+    resp = client.chat.completions.create(
+        model=llm_model,
+        temperature=0.2,
+        messages=[
+            {"role": "system", "content": _TIMESTAMP_SYSTEM},
+            {"role": "user", "content": user_msg},
+        ],
+        repeat_penalty=1.3,
+        top_p=0.9,
+        num_predict=llm_max_output_tokens(),
+        frequency_penalty=0.4,
+    )
+    if usage_tracker is not None:
+        usage_tracker.record("thumbnails", llm_model, resp)
+    return json_repair.loads(resp.choices[0].message.content)
+
+
+def _deduplicate(ts_list: list[dict], min_gap: float = 5.0) -> list[dict]:
+    if not ts_list:
+        return ts_list
+    ordered = sorted(ts_list, key=lambda t: float(t["seconds"]))
+    result = [ordered[0]]
+    for t in ordered[1:]:
+        if float(t["seconds"]) - float(result[-1]["seconds"]) >= min_gap:
+            result.append(t)
+    return result
+
+
+def _validate_timestamps(ts_list: list, total_end: float) -> list[dict]:
+    """Keep only entries with a valid 'seconds' field within the video duration."""
+    valid = []
+    for t in ts_list:
+        if not isinstance(t, dict):
+            continue
+        sec = t.get("seconds")
+        if sec is None:
+            continue
+        try:
+            sec = float(sec)
+        except (ValueError, TypeError):
+            continue
+        if 0 <= sec <= total_end:
+            t["seconds"] = sec
+            valid.append(t)
+    return valid
+
+
+def _uniform_timestamps(
+    blocks: list[tuple[str, float, float, str]],
+    total_end: float,
+    min_gap: float,
+) -> list[dict]:
+    """Generate evenly-spaced timestamps as a fallback when the LLM fails."""
+    count = max(1, min(8, int(total_end // max(min_gap, 10))))
+    step = total_end / (count + 1)
+    results = []
+    for i in range(1, count + 1):
+        sec = round(step * i, 1)
+        m, s = divmod(int(sec), 60)
+        h, m = divmod(m, 60)
+        results.append({
+            "timestamp": f"{h:02d}:{m:02d}:{s:02d}",
+            "seconds": sec,
+            "reason": "uniform sample",
+        })
+    return results
+
+
+def select_timestamps(
+    srt_text: str,
+    client: OpenAI,
+    *,
+    llm_model: str = "gpt-4.1",
+    min_gap: float = 5.0,
+    usage_tracker: LLMUsageTracker | None = None,
+) -> list[dict]:
+    """Analyse an SRT and return a list of timestamps worth capturing.
+
+    For short SRTs the entire text is sent in a single request.  Longer
+    transcripts are split into overlapping time-based windows.
+
+    Returns:
+        A de-duplicated list of ``{"timestamp", "seconds", "reason"}`` dicts.
+    """
+    blocks = parse_blocks(srt_text)
+    if not blocks:
+        log.warning("Empty SRT — cannot select timestamps")
+        return []
+
+    total_end = max(b[2] for b in blocks)
+    timed_text = _blocks_to_simple_timed_text(blocks)
+    est = estimate_tokens(timed_text)
+    log.info("Estimated timed-text tokens: ~%d", est)
+
+    if est <= _TOKEN_THRESHOLD:
+        timestamps = _request_timestamps(client, timed_text, llm_model=llm_model,
+                                         usage_tracker=usage_tracker)
+        timestamps = _validate_timestamps(timestamps, total_end)
+        if timestamps:
+            return _deduplicate(timestamps, min_gap)
+        log.warning("LLM returned no valid timestamps — falling back to uniform sampling")
+        return _uniform_timestamps(blocks, total_end, min_gap)
+
+    batch_sec = _BATCH_MINUTES * 60
+
+    all_timestamps: list[dict] = []
+    window_start = 0.0
+    batch_num = 0
+
+    while window_start < total_end:
+        window_end = window_start + batch_sec + _OVERLAP_SECONDS
+        batch_blocks = [b for b in blocks if b[2] > window_start and b[1] < window_end]
+        if not batch_blocks:
+            window_start += batch_sec
+            continue
+
+        batch_num += 1
+        segment_text = _blocks_to_simple_timed_text(batch_blocks)
+        label = f"{batch_blocks[0][1] / 60:.0f}min-{batch_blocks[-1][2] / 60:.0f}min"
+        log.info("Batch %d: %s (%d subtitles)", batch_num, label, len(batch_blocks))
+
+        batch_ts = _request_timestamps(client, segment_text, segment_label=label,
+                                         llm_model=llm_model, usage_tracker=usage_tracker)
+        all_timestamps.extend(batch_ts)
+        window_start += batch_sec
+
+    all_timestamps = _validate_timestamps(all_timestamps, total_end)
+    if all_timestamps:
+        return _deduplicate(all_timestamps, min_gap)
+    log.warning("LLM returned no valid timestamps — falling back to uniform sampling")
+    return _uniform_timestamps(blocks, total_end, min_gap)
+
+
+# ---------------------------------------------------------------------------
+#  Frame extraction
+# ---------------------------------------------------------------------------
+
+def extract_frames(
+    video_path: str,
+    timestamps: list[dict],
+    output_dir: str,
+    *,
+    max_size: int = 512,
+    jpeg_quality: int = 72,
+) -> list[dict]:
+    """Extract and resize video frames for each timestamp entry.
+
+    Returns:
+        A list of dicts, each containing the original timestamp fields plus
+        a ``path`` key pointing to the saved JPEG.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    results: list[dict] = []
+
+    for i, ts in enumerate(timestamps):
+        sec = float(ts["seconds"])
+        fname = f"thumb_{i:03d}_{sec:.1f}s.jpg"
+        out_path = os.path.join(output_dir, fname)
+        raw_path = out_path.replace(".jpg", "_raw.png")
+
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-ss", str(sec), "-i", video_path,
+                    "-frames:v", "1", "-q:v", "2", raw_path,
+                ],
+                check=True,
+                capture_output=True,
+            )
+            if not os.path.exists(raw_path):
+                log.warning("ffmpeg produced no frame for %s (timestamp may exceed video length)", fname)
+                continue
+            img = Image.open(raw_path).convert("RGB")
+            img.thumbnail((max_size, max_size), Image.LANCZOS)
+            img.save(out_path, "JPEG", quality=jpeg_quality, optimize=True, exif=b"")
+            results.append({"path": out_path, **ts})
+            log.debug("Extracted %s (%dx%d)", fname, img.size[0], img.size[1])
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or b"")[:200]
+            log.warning("Failed to extract %s: %s", fname, stderr)
+        finally:
+            if os.path.exists(raw_path):
+                os.remove(raw_path)
+
+    log.info("Extracted %d/%d thumbnails -> %s", len(results), len(timestamps), output_dir)
+    return results

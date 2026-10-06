@@ -8,7 +8,7 @@
 #
 #  Two independent jobs, deliberately not a matrix:
 #    windows-native-tools  -> the four .exe files used locally
-#    kaggle-tdubber-pack   -> the five static linux/amd64 binaries for Kaggle
+#    kaggle-tdubber-pack   -> the six static linux/amd64 binaries for Kaggle
 #  They share no cache and do not gate each other: a C++ failure must not stop
 #  you getting the Windows binaries, and vice versa. Hence `needs: []`.
 #
@@ -22,7 +22,7 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      # Rebuilding five binaries because a README changed wastes runner minutes.
+      # Rebuilding six binaries because a README changed wastes runner minutes.
       # Remove this filter if you would rather always rebuild.
       #
       # NOTE: this workflow file must NOT be listed here. Listing it means a
@@ -400,14 +400,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # The pack builds all five binaries from source inside Docker, so every
+      # The pack builds all six binaries from source inside Docker, so every
       # source tree must reach the build context. Matched exactly (`-x`) so a
       # narrower rule such as `cpp_accelerator/build/`, which excludes output
       # rather than sources, does not false-positive here.
       - name: Verify sources are in the build context
         run: |
           set -euo pipefail
-          for d in stitcher subtitle_forge havaldar_core cpp_accelerator; do
+          for d in stitcher subtitle_forge havaldar_core cpp_accelerator edge cmd; do
             if grep -qxE "${d}/" .dockerignore; then
               echo "::error file=.dockerignore::${d}/ excludes sources the pack stage needs"
               exit 1
@@ -431,7 +431,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-kaggle-pack-${{ hashFiles('Dockerfile', '.dockerignore', 'stitcher/**', 'subtitle_forge/**', 'havaldar_core/**', 'cpp_accelerator/**', 'main.go', 'upload.go', 'fetch.go', 'commands.go', 'main_entry.go', 'go.mod', 'go.sum') }}
+          key: ${{ runner.os }}-kaggle-pack-${{ hashFiles('Dockerfile', '.dockerignore', 'stitcher/**', 'subtitle_forge/**', 'havaldar_core/**', 'cpp_accelerator/**', 'main.go', 'upload.go', 'fetch.go', 'commands.go', 'main_entry.go', 'go.mod', 'go.sum', 'edge/**', 'cmd/edge-fetch/**') }}
           restore-keys: |
             ${{ runner.os }}-kaggle-pack-
 
@@ -580,7 +580,7 @@ jobs:
           ( cd pack/bin && sha256sum -c ../SHA256SUMS )
 
           fail=0
-          for b in tgup stitcher subtitle_forge havaldar_core normalizer; do
+          for b in tgup edge-fetch stitcher subtitle_forge havaldar_core normalizer; do
             p="pack/bin/${b}"
             if [ ! -f "$p" ]; then echo "::error::missing ${p}"; fail=1; continue; fi
             chmod +x "$p"
@@ -633,7 +633,7 @@ jobs:
             echo "archive: \`kaggle-tdubber-pack.tar.gz\` ($(du -h kaggle-tdubber-pack.tar.gz | cut -f1))"
             echo ""
             echo "Download the artifact, publish it as a Kaggle Dataset, and mount it"
-            echo "in the kernel. The pack is five static linux/amd64 binaries only --"
+            echo "in the kernel. The pack is six static linux/amd64 binaries only --"
             echo "it does **not** contain the Python venv, so the notebook still"
             echo "installs torch/vLLM unless you mount that as a second Dataset."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-    Build the Kaggle pack (five static Linux binaries) and export /pack to disk.
+    Build the Kaggle pack (six static Linux binaries) and export /pack to disk.
 
 .DESCRIPTION
     Runs the Dockerfile's `pack-exporter` target and lands its /pack folder
     on this machine:
 
-        pack\bin\{tgup, stitcher, normalizer, subtitle_forge, havaldar_core}
+        pack\bin\{tgup, edge-fetch, stitcher, normalizer, subtitle_forge, havaldar_core}
         pack\MANIFEST.txt
         pack\SHA256SUMS
 
@@ -87,7 +87,7 @@ if (-not $Dest) {
 # The exact set the Dockerfile promises. A missing one is a hard failure --
 # a "successful" export with four binaries is worse than a red build, because
 # it is discovered on Kaggle, not here.
-$Expected = @("tgup", "stitcher", "normalizer", "subtitle_forge", "havaldar_core")
+$Expected = @("tgup", "edge-fetch", "stitcher", "normalizer", "subtitle_forge", "havaldar_core")
 
 function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
 function Write-Ok([string]$Message)   { Write-Host "    $Message" -ForegroundColor Green }

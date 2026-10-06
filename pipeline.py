@@ -715,6 +715,31 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         f"[STAGE:2] ✅ Bundled Mazinger source as root-level archive "
         f"({os.path.getsize(mazinger_archive):,} bytes).\n"
     )
+
+    # The multitasker and the HF connector ride the input dataset too,
+    # so the worker imports them straight from /kaggle/input (the
+    # notebook's multitasker cell does a file-location import). No
+    # pip install and no extra dataset on the Kaggle side.
+    multitasker_src = os.path.join(APP_DIR, "multitasker.py")
+    if os.path.isfile(multitasker_src):
+        shutil.copy(multitasker_src, os.path.join(dataset_dir, "multitasker.py"))
+        yield "[STAGE:2] 📎 multitasker.py attached to the input dataset.\n"
+    hf_src = os.path.join(APP_DIR, "huggingface")
+    if os.path.isdir(hf_src):
+        shutil.copytree(
+            hf_src, os.path.join(dataset_dir, "huggingface"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"),
+            dirs_exist_ok=True,
+        )
+        yield "[STAGE:2] 📎 huggingface/ connector attached to the input dataset.\n"
+    lip_sync_src = os.path.join(APP_DIR, "lip_sync")
+    if os.path.isdir(lip_sync_src):
+        shutil.copytree(
+            lip_sync_src, os.path.join(dataset_dir, "lip_sync"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"),
+            dirs_exist_ok=True,
+        )
+        yield "[STAGE:2] 📎 lip_sync/ provider attached to the input dataset.\n"
         
     meta_path = os.path.join(dataset_dir, "dataset-metadata.json")
     if not os.path.isfile(meta_path):

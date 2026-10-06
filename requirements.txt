@@ -6,6 +6,10 @@ telethon>=1.34
 yt-dlp>=2026.3.17
 kaggle>=1.5
 
+# Hugging Face connector (huggingface/hf_store.py): model roster
+# resolution, snapshot download for the Kaggle cache-dataset flow.
+huggingface-hub>=0.30
+
 # Local dubbing / upload helpers (telegram_backup.py still imports requests).
 requests>=2.31
 
