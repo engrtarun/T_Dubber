@@ -26,6 +26,17 @@
 // __cpuidex and _xgetbv are intrinsics rather than library functions, and their
 // declarations are not in any header this file includes.
 #include <intrin.h>
+#else
+// The other half of the same declaration problem. On GCC and Clang
+// __get_cpuid_count and __cpuid_count live in <cpuid.h>, which nothing else
+// here pulls in, so without this the Linux pack build stops at:
+//
+//     stitcher_mix.cpp:54:9: error: '__get_cpuid_count' was not declared
+//
+// while the MSVC build stays green -- the local Windows test cannot see it,
+// because MSVC's intrinsics are available without a header. Same trap, same
+// shape as the <cpuid.h> fix in normalizer_kernel.cpp.
+#include <cpuid.h>
 #endif
 
 namespace {
