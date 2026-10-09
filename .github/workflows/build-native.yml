@@ -6,7 +6,8 @@
 #  `normalizer.exe` and the Kaggle Linux pack were unbuildable locally. GitHub's
 #  runners carry all of them, so compilation moves here.
 #
-#  Two independent jobs, deliberately not a matrix:
+#  Three independent jobs, deliberately not a matrix:
+#    python-tests          -> the stdlib-only test suite (fastest, no toolchain)
 #    windows-native-tools  -> the four .exe files used locally
 #    kaggle-tdubber-pack   -> the six static linux/amd64 binaries for Kaggle
 #  They share no cache and do not gate each other: a C++ failure must not stop
@@ -44,6 +45,15 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - '.github/workflows/build-native.yml'
+      # The stdlib-only suite. These four tests import nothing but the standard
+      # library and repo-local modules, so they need no runner toolchain and
+      # cost a few seconds -- worth running whenever the code they cover moves.
+      - 'test_ui_static.py'
+      - 'tests/test_subtitle_forge_*.py'
+      - 'tests/lint_subtitle_forge_source.py'
+      - 'ui_static.py'
+      - 'ui_static/**'
+      - 'subtitle_forge/src/**'
   workflow_dispatch:
     inputs:
       cmake_build_type:
@@ -637,3 +647,64 @@ jobs:
             echo "it does **not** contain the Python venv, so the notebook still"
             echo "installs torch/vLLM unless you mount that as a second Dataset."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # JOB 3 -- stdlib-only Python tests
+  # ===========================================================================
+  #  The repo has ~22 test scripts and CI ran NONE of them. Most cannot run
+  #  here: they need telethon, gradio, a running dashboard, a Telegram account
+  #  or a Kaggle credential. Five can, and they are the whole point of this
+  #  job:
+  #
+  #    test_ui_static.py                       browser-asset contract
+  #    tests/test_subtitle_forge_timecode.py    SRT/ASS timestamp math
+  #    tests/test_subtitle_forge_wrapping.py    greedy wrap vs optimal lines
+  #    tests/test_subtitle_forge_render.py      the render contract itself
+  #    tests/lint_subtitle_forge_source.py      structural lint of main.rs
+  #
+  #  All five import only the standard library plus repo-local modules -- no
+  #  pip install step exists here on purpose. If a future edit makes one of
+  #  them need a third-party package, this job fails at import and that is the
+  #  correct signal: the test stopped being a free gate.
+  #
+  #  Deliberately `needs: []` like the other two, and deliberately the cheapest
+  #  runner: this is the one job worth blocking a merge on.
+  python-tests:
+    name: Python tests (stdlib only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # ubuntu-latest ships several Pythons; pick one explicitly so a runner
+      # image bump cannot silently change which interpreter runs the suite.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Run from the repo root: test_ui_static.py imports ui_static from here.
+      # `-B` keeps __pycache__ from being written into the checkout.
+      - name: Run stdlib-only tests
+        run: |
+          set -euo pipefail
+          status=0
+          for t in \
+              test_ui_static.py \
+              tests/test_subtitle_forge_timecode.py \
+              tests/test_subtitle_forge_wrapping.py \
+              tests/test_subtitle_forge_render.py \
+              tests/lint_subtitle_forge_source.py
+          do
+            echo "::group::${t}"
+            if python -B "${t}"; then
+              echo "PASS ${t}"
+            else
+              echo "::error::FAIL ${t}"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "${status}"

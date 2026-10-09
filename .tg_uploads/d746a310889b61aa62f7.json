@@ -1,0 +1,48 @@
+{
+  "file_path": "C:\\Users\\pocot\\Music\\T_Dubber\\projects\\Take_Charge_of_My_Heart___Now_Playing___Netflix__ENG_SUB-fb66ce2bcfff-b566095fae\\Take_Charge_of_My_Heart_Now_Playing_Netflix_ENG_SUB.mp4",
+  "filename": "Take_Charge_of_My_Heart_Now_Playing_Netflix_ENG_SUB.mp4",
+  "size": 13179429,
+  "state": "complete",
+  "channel": "@tgwebcloud1",
+  "parts": [
+    {
+      "part": 1,
+      "name": "Take_Charge_of_My_Heart_Now_Playing_Netflix_ENG_SUB.mp4",
+      "offset": 0,
+      "size": 13179429,
+      "sha256": "fb66ce2bcfffbffd1c0c5c6cc8aab6a498ce0f42c0e324663e7854b3325fee39",
+      "message_id": 31,
+      "link": "https://t.me/tgwebcloud1/31"
+    }
+  ],
+  "updated_at": 1791552211.479933,
+  "message_id": 31,
+  "message_link": "https://t.me/tgwebcloud1/31",
+  "manifest": {
+    "tg_dubber_manifest": 2,
+    "filename": "Take_Charge_of_My_Heart_Now_Playing_Netflix_ENG_SUB.mp4",
+    "size": 13179429,
+    "chunk_size": 1992294400,
+    "chunked": false,
+    "chunk_count": 1,
+    "channel": "@tgwebcloud1",
+    "source_path": "C:\\Users\\pocot\\Music\\T_Dubber\\projects\\Take_Charge_of_My_Heart___Now_Playing___Netflix__ENG_SUB-fb66ce2bcfff-b566095fae\\Take_Charge_of_My_Heart_Now_Playing_Netflix_ENG_SUB.mp4",
+    "thumbnail_path": null,
+    "caption": "🎬 Take Charge of My Heart | Now Playing | Netflix [ENG SUB]\n👤 Netflix K-Content · ⏱ 4m 2s · 🎥 720p · 💾 12.57 MB\n🔗 https://www.youtube.com/watch?v=yvGb92S0hsA\n#T_Dubber #youtube #netflix_k_content #4min #720p",
+    "created_at": "2026-10-09T18:53:31+0530",
+    "app": "T_Dubber",
+    "parts": [
+      {
+        "part": 1,
+        "name": "Take_Charge_of_My_Heart_Now_Playing_Netflix_ENG_SUB.mp4",
+        "offset": 0,
+        "size": 13179429,
+        "sha256": "fb66ce2bcfffbffd1c0c5c6cc8aab6a498ce0f42c0e324663e7854b3325fee39",
+        "message_id": 31,
+        "link": "https://t.me/tgwebcloud1/31"
+      }
+    ]
+  },
+  "chunked": false,
+  "chunk_count": 1
+}

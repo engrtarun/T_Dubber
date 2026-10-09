@@ -115,6 +115,19 @@ def _havaldar_enabled() -> bool:
     return os.environ.get("HAVALDAR_DISABLE", "").lower() not in ("1", "true", "yes")
 
 
+def _env_flag(name: str, default: bool = True) -> bool:
+    """Read a boolean kill-switch from the environment.
+
+    Same contract as the other switches in this repo (``MAZINGER_STITCHER``,
+    ``HAVALDAR_DISABLE``): anything other than an explicit falsey value leaves
+    the feature on, so a typo can never silently disable a feature.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() not in ("0", "off", "false", "no")
+
+
 # ---------------------------------------------------------------------------
 # subtitle_forge integration
 # ---------------------------------------------------------------------------
@@ -519,8 +532,53 @@ def reattach_to_kernel(project_dir, kernel_id, timeout=10 * 60 * 60, poll_second
     return outcome
 
 
+def _channel_archive_link(link):
+    """Return ``link`` if it is a Telegram message we can restore from, else None."""
+    raw = (link or "").strip()
+    if not (raw.startswith("http") or raw.startswith("tg://")):
+        return None
+    lowered = raw.lower()
+    if "t.me/" not in lowered and "telegram.me/" not in lowered and not raw.startswith("tg://"):
+        return None
+    return raw
+
+
+def _worker_fetches(backup_link):
+    """P0-3 wiring: a restorable channel link AND the kill-switch (default on).
+
+    Extracted so the host<->worker contract is testable without running
+    the whole pipeline. A plain non-channel link or
+    ``TDUBBER_WORKER_FETCH=off`` keeps the media in the dataset, exactly
+    as it was before P0-3.
+    """
+    return bool(_channel_archive_link(backup_link)) and _env_flag(
+        "TDUBBER_WORKER_FETCH", True)
+
+
+def _resolve_source_sha256(video_path, source_sha256, worker_fetches):
+    """The digest the worker needs to verify its restored source.
+
+    The host already paid for one whole-file read (project id, Tier 0
+    lookup), so a digest the caller brings is reused as-is; the file is
+    read again only when nobody brought one. Hashing a multi-gigabyte
+    source twice is not a rounding error -- it is 2x the reads.
+    """
+    if worker_fetches and not source_sha256:
+        return _sha256_file(video_path)
+    return source_sha256
+
+
+def _sha256_file(path, block=4 * 1024 * 1024):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(block), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
-                 backup_link=None, source_url=None, source_title=None, source_size=None):
+                 backup_link=None, source_url=None, source_title=None, source_size=None,
+                 source_sha256=None):
     """
     Orchestrator function (Generator) using Kaggle API to push the job to a cloud GPU.
     Yields status logs incrementally with [STAGE:X] markers for the UI stepper.
@@ -606,11 +664,44 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     # A stable filename lets dataset versions replace the previous input cleanly.
     for old_video in Path(dataset_dir).glob("source_video.*"):
         old_video.unlink()
-    
+
+    # ------------------------------------------------------------------
+    # P0-3: the media does not travel through the Kaggle dataset.
+    #
+    # The source is already on Telegram before this function is called, so a
+    # dataset copy is the same bytes crossing this machine's uplink a second
+    # time. The worker restores them with `tgup fetch`, which verifies every
+    # part digest before joining, and then runs the same 480p encode this
+    # machine used to run. Same worker input, less work here.
+    #
+    # Anything that is not a restorable channel link falls back to shipping the
+    # file, because a worker that cannot reach the channel still has to start.
+    # ------------------------------------------------------------------
+    archive_link = _channel_archive_link(backup_link)
+    worker_fetches = _worker_fetches(backup_link)
+    if video_path is None and (not worker_fetches or not source_sha256):
+        # Zero-disk run: there is no local file, so the ONLY way this job can
+        # proceed is the worker restoring it from the channel link with the
+        # digest to verify against. Refuse here, in one place, rather than
+        # crash three stages later on os.path.getsize(None).
+        yield (
+            "[STAGE:1] ❌ No local video, and the worker cannot restore the "
+            "source (no channel link, or TDUBBER_WORKER_FETCH=off, or the "
+            "source digest is missing). Refusing to start.\n"
+        )
+        return
+    source_sha256 = _resolve_source_sha256(video_path, source_sha256, worker_fetches)
+
     # Task 3: Auto-Compression
-    file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
-    needs_compression = file_size_mb > 30
-    if not needs_compression:
+    if video_path:
+        file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
+    else:
+        # Zero-disk: nothing here to stat. The size arrived with the job (tgup
+        # measured it while streaming), and the worker repeats this decision
+        # after it restores the source anyway.
+        file_size_mb = (source_size or 0) / (1024 * 1024)
+    needs_compression = bool(video_path) and file_size_mb > 30
+    if not needs_compression and video_path:
         probe_cmd = [
             "ffprobe", "-v", "error",
             "-select_streams", "v:0",
@@ -628,7 +719,16 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
             print(f"[pipeline] ffprobe probe failed ({exc}); assuming no compression needed", file=sys.stderr)
 
     compressed_video_path = None
-    if needs_compression:
+    if worker_fetches:
+        # Encoding here would be throwaway work: the encoded file is never
+        # uploaded anywhere. The worker performs the identical encode after it
+        # restores the original, so this machine stops spending CPU on it too.
+        target_upload_path = video_path
+        yield (
+            f"[STAGE:1] ☁️ Source stays off the dataset: the worker restores it "
+            f"from {archive_link} (sha256 {source_sha256[:12]}).\n"
+        )
+    elif needs_compression:
         yield f"[STAGE:1] 🛠️ Video is large or >1080p ({file_size_mb:.1f}MB). Compressing to 480p...\n"
         track_stage(project_id, 1, "running",
                     message=f"Compressing {file_size_mb:.1f}MB source to 480p", manifest=manifest)
@@ -652,13 +752,25 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         target_upload_path = video_path
         
     # Stage 1 spans everything from "start" through "input staged for upload".
-    track_stage(project_id, 1, "success",
-                message=("Compressed to 480p and staged for upload"
-                         if needs_compression and compressed_video_path
-                         else "Source staged for upload without compression"),
-                manifest=manifest)
+    if worker_fetches:
+        stage_message = ("Source left on Telegram; the worker restores it from "
+                         "the channel archive")
+    elif needs_compression and compressed_video_path:
+        stage_message = "Compressed to 480p and staged for upload"
+    else:
+        stage_message = "Source staged for upload without compression"
+    track_stage(project_id, 1, "success", message=stage_message, manifest=manifest)
 
-    shutil.copy(target_upload_path, os.path.join(dataset_dir, video_filename))
+    # ------------------------------------------------------------------
+    # P0-3: no media copy when the worker can restore from the channel.
+    # ------------------------------------------------------------------
+    if not worker_fetches:
+        shutil.copy(target_upload_path, os.path.join(dataset_dir, video_filename))
+    else:
+        yield (
+            "[STAGE:1] 📤 Dataset will carry code + job config only — "
+            f"{file_size_mb:.1f}MB of video no longer crosses this uplink twice.\n"
+        )
 
     # Pass the UI's selected target through the versioned input dataset. The
     # worker must not silently dub every project into a hard-coded language.
@@ -669,6 +781,15 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         "source_url": source_url,
         "source_title": source_title,
         "source_size_bytes": source_size,
+        # P0-3 contract with the worker. When fetch_from_telegram is true the
+        # dataset carries no video: the worker restores the original from
+        # telegram_backup, checks it against source_sha256, and then runs the
+        # same 480p encode this machine used to run. A missing key, an
+        # unparsable link or a digest mismatch makes the worker fall back to
+        # the mounted dataset video, so the job still starts.
+        "fetch_from_telegram": worker_fetches,
+        "source_sha256": source_sha256,
+        "compress_480p_on_worker": worker_fetches,
         "requested_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     with open(job_config_path, "w", encoding="utf-8") as config_file:
@@ -921,8 +1042,9 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     yield f"[STAGE:6] Executing: {' '.join(output_cmd)}\n"
     run_cmd(output_cmd)
     
-    # Verify downloaded output video
-    original_video_basename = os.path.basename(video_path)
+    # Verify downloaded output video. Zero-disk runs have no local source file,
+    # so there is simply nothing to exclude from the outputs by name.
+    original_video_basename = os.path.basename(video_path) if video_path else ""
     mp4_files = [
         f for f in glob.glob(os.path.join(project_dir, "*.mp4"))
         if os.path.basename(f) != original_video_basename and os.path.getsize(f) > 0

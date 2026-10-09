@@ -1,0 +1,11 @@
+{
+  "target_language": "Hindi",
+  "telegram_backup": "https://t.me/tgwebcloud1/31",
+  "source_url": "https://youtu.be/yvGb92S0hsA?si=CKRtASfSeAA_MgPU",
+  "source_title": "Take Charge of My Heart | Now Playing | Netflix [ENG SUB]",
+  "source_size_bytes": 13179429,
+  "fetch_from_telegram": true,
+  "source_sha256": "fb66ce2bcfffbffd1c0c5c6cc8aab6a498ce0f42c0e324663e7854b3325fee39",
+  "compress_480p_on_worker": true,
+  "requested_at": "2026-10-09T18:53:37+05:30"
+}

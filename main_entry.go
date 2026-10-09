@@ -40,13 +40,30 @@ instead of spending an OTP to get there.
 
 Examples
   tgup plan   --file big.mkv --plan-out plan.json
+  tgup plan   --url https://host/big.mkv --plan-out plan.json
   tgup upload --file big.mkv --channel @name --api-id N --api-hash H \
               --concurrency 3 --plan-out plan.json --result-out result.json
+  tgup upload --url https://host/big.mkv --channel @name --api-id N --api-hash H
+              --dry-run                # plan + digests only, no session needed
   tgup upload --file big.mkv --channel @name --api-id N --api-hash H \
               --plan-in plan.json            # resume, resends only what is missing
   tgup fetch  --link https://t.me/name/123 --dest .\out \
               --api-id N --api-hash H --concurrency 4
   tgup bench  --channel @name --api-id N --api-hash H --concurrency 1,2,3,4
+
+Straight from a link
+  --url streams the payload into the upload part by part; nothing is written to
+  disk, so a 9 GB video does not first become 9 GB on the disk. Exactly one of
+  --file or --url is required. The origin must serve HTTP byte ranges (it has to
+  answer a request with 206); --dry-run proves that, and computes every part's
+  digest, without a session, a login or a single byte sent to Telegram.
+
+  A range is refused rather than worked around: quietly downloading the whole
+  body to a temp file would turn "zero disk" into a promise the caller never
+  agreed to.
+
+  For trying this by hand, tools/tiny_range_server.py serves a directory with
+  real Range support (Python's own http.server does not).
 
 Exit codes
   0  success

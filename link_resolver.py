@@ -31,6 +31,8 @@ import re
 import shutil
 import socket
 import subprocess
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -772,12 +774,6 @@ def probe(url: str, telegram_credentials: dict = None) -> dict:
     }
 
 
-def _human(count: int) -> str:
-    from telegram_uploader import human_bytes
-
-    return human_bytes(count)
-
-
 def resolve_to_local_file(
     url: str,
     workdir: str,
@@ -938,6 +934,315 @@ def resolve_to_local_file(
         height=height,
         warnings=verdict.warnings,
     )
+
+
+# ---------------------------------------------------------------------------
+# Zero-disk resolution
+# ---------------------------------------------------------------------------
+#
+# ``resolve_to_local_file`` above ends with a file on this machine. That is the
+# right answer when the next step is dubbing, because the pipeline needs a real
+# path to work on. It is the wrong answer when the only thing wanted is the
+# video sitting safe in a Telegram channel: 9 GB of source then means 9 GB of
+# disk on a laptop that has to be free at that exact moment.
+#
+# ``resolve_to_stream`` is the other half. It answers "give me a URL tgup can
+# range-stream" without ever opening a file for writing, so the archive happens
+# with 0 bytes on this PC. Everything it does is a HEAD, a one-byte GET, or a
+# yt-dlp *simulate* -- metadata in, no payload out.
+
+
+class StreamNotStreamable(LinkNotSupported):
+    """The link cannot be turned into a range-streamable media URL."""
+
+
+@dataclass(frozen=True)
+class StreamTarget:
+    """A media URL tgup can stream part by part, or the reason it cannot.
+
+    ``direct=False`` is a normal answer, not an error: a page URL with no
+    extractable media URL, or an origin that will not serve byte ranges, both
+    come back this way with ``reason`` filled in. The caller is expected to fall
+    back to :func:`resolve_to_local_file` -- loudly, never silently.
+    """
+
+    kind: str
+    url: str
+    size: int
+    filename: str
+    page_url: str = ""
+    direct: bool = False
+    reason: str = ""
+    title: str = ""
+    extractor: str = ""
+
+
+def _env_flag(name: str, default: bool = True) -> bool:
+    """Read a boolean kill-switch from the environment.
+
+    Same contract as ``pipeline._env_flag``: only an explicit falsey value turns
+    a feature off, so a typo in the environment can never silently disable it.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() not in ("0", "off", "false", "no")
+
+
+def _content_range_total(value: str) -> int:
+    """Read the total size out of a ``Content-Range: bytes 0-0/12345`` header.
+
+    Returns 0 when the header is absent or the ``/size`` part is ``*``, which is
+    how an origin says "I know how much I have, actually no I do not".
+    """
+    match = re.search(r"/\s*(\d+)\s*$", (value or "").strip())
+    return int(match.group(1)) if match else 0
+
+
+def probe_remote_size(url: str, timeout: float = 15.0) -> dict:
+    """Ask the origin how big it is, without downloading it.
+
+    HEAD first because it costs nothing, then a single-byte range GET for the
+    servers that answer HEAD with a 405 or an empty ``Content-Length`` (common
+    on CDN-backed signed URLs). The GET is deliberately one byte: proving the
+    origin serves ranges is worth exactly one byte.
+
+    Returns ``{"size": int, "ranges": bool, "method": str, "reason": str}``.
+    ``ranges`` False means tgup will refuse this URL, and the caller should say
+    so rather than attempt an upload that is guaranteed to fail.
+    """
+    headers = {"User-Agent": DEFAULT_USER_AGENT, "Accept": "*/*"}
+    size = 0
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(url, method="HEAD", headers=headers),
+            timeout=timeout,
+        ) as response:
+            length = response.headers.get("Content-Length")
+            if length and str(length).strip().isdigit():
+                size = int(length.strip())
+            if size == 0:
+                return {
+                    "size": 0, "ranges": False, "method": "HEAD",
+                    "reason": "the origin's HEAD reply carried no usable Content-Length",
+                }
+    except urllib.error.HTTPError as exc:
+        if exc.code not in (403, 405, 501):
+            return {
+                "size": 0, "ranges": False, "method": "HEAD",
+                "reason": f"the origin refused HEAD with HTTP {exc.code}",
+            }
+        # 403/405/501 on HEAD is common on signed CDN URLs. It says nothing
+        # about range support, so fall through to the byte probe.
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return {"size": 0, "ranges": False, "method": "HEAD",
+                "reason": f"HEAD failed: {exc}"}
+
+    # A Content-Length is a size, not a promise. Only ``Accept-Ranges: bytes``
+    # plus an actual 206 says the origin will stream, and plenty of origins
+    # advertise one while ignoring the other -- so range support is confirmed by
+    # asking for one byte. Trusting the header instead would hand tgup a URL it
+    # is guaranteed to fail on, and the failure looks like a network blip.
+    ranged_headers = dict(headers)
+    ranged_headers["Range"] = "bytes=0-0"
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(url, headers=ranged_headers), timeout=timeout
+        ) as response:
+            total = _content_range_total(response.headers.get("Content-Range", ""))
+            return {
+                "size": total or size,
+                "ranges": total > 0,
+                "method": "range-GET",
+                "reason": "" if total > 0 else (
+                    "the origin ignored the Range header, so tgup cannot "
+                    "stream it and would have to download the whole file"
+                ),
+            }
+    except urllib.error.HTTPError as exc:
+        return {
+            "size": 0, "ranges": False, "method": "range-GET",
+            "reason": (
+                f"the origin answered a range request with HTTP {exc.code}, so "
+                "it cannot serve byte ranges"
+            ),
+        }
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return {"size": 0, "ranges": False, "method": "range-GET",
+                "reason": f"the range probe failed: {exc}"}
+
+
+def _stream_from_ytdlp(url: str, verdict: LinkVerdict, timeout: float) -> StreamTarget:
+    """Ask yt-dlp for the direct media URL, in simulate-only mode.
+
+    ``download=False`` is the whole point: yt-dlp negotiates the player, gets the
+    signed media URL and reports its size and title, and then stops. Nothing is
+    written to disk because nothing is ever opened for writing.
+
+    The format selection mirrors ``_build_ytdlp_opts`` so this picks the same
+    rendition the download path would have -- otherwise the archived copy would
+    silently be a different quality from the dubbed one.
+    """
+    try:
+        yt_dlp = _require_yt_dlp()
+    except LinkNotSupported as exc:
+        return StreamTarget(
+            kind=verdict.kind, url="", size=0, filename="",
+            page_url=url, direct=False,
+            reason=(
+                f"{exc} Zero-disk streaming needs it because a page URL has no "
+                "media URL to stream until an extractor finds one."
+            ),
+        )
+
+    opts = {
+        "format": "bestvideo*+bestaudio/best",
+        "format_sort": ["res:720"],
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+        "playlist_items": "1",
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "simulate": True,
+        "socket_timeout": max(1.0, float(timeout)),
+        "http_headers": {"User-Agent": DEFAULT_USER_AGENT},
+        "js_runtimes": dict(JS_RUNTIMES) if JS_RUNTIMES else None,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False) or {}
+    except Exception as exc:  # noqa: BLE001
+        return StreamTarget(
+            kind=verdict.kind, url="", size=0, filename="",
+            page_url=url, direct=False,
+            reason=_translate_download_error(exc, url, verdict),
+        )
+
+    if info.get("_type") == "playlist":
+        entries = [e for e in (info.get("entries") or []) if e]
+        if not entries:
+            return StreamTarget(
+                kind=verdict.kind, url="", size=0, filename="", page_url=url,
+                direct=False, reason="That playlist had no downloadable items.",
+            )
+        info = entries[0]
+
+    fmt = info.get("requested_formats") or [info]
+    if len(fmt) > 1:
+        # A video+audio pair has to be merged to become one file. Merging is
+        # ffmpeg work on a local file, i.e. exactly the disk use this path
+        # exists to avoid, so the caller is told rather than handed a URL tgup
+        # would fail on.
+        return StreamTarget(
+            kind=verdict.kind, url="", size=0, filename="", page_url=url,
+            direct=False,
+            reason=(
+                "that link's best rendition is separate video and audio "
+                "streams, which have to be merged into one file first. That is "
+                "a disk operation -- use the normal download path for it."
+            ),
+        )
+
+    chosen = fmt[0] if fmt else {}
+    media_url = chosen.get("url") or ""
+    if not media_url:
+        return StreamTarget(
+            kind=verdict.kind, url="", size=0, filename="", page_url=url,
+            direct=False,
+            reason="yt-dlp found no media URL for that link.",
+        )
+
+    title = info.get("title") or "source"
+    filename = chosen.get("filename") or f"{_safe_stem(title, 'source')}.mp4"
+    size = int(
+        chosen.get("filesize")
+        or chosen.get("filesize_approx")
+        or info.get("filesize")
+        or info.get("filesize_approx")
+        or 0
+    )
+    return StreamTarget(
+        kind=verdict.kind,
+        url=media_url,
+        size=size,
+        filename=os.path.basename(filename),
+        page_url=info.get("webpage_url") or url,
+        direct=True,
+        reason="",
+        title=title,
+        extractor=info.get("extractor_key") or verdict.label,
+    )
+
+
+def resolve_to_stream(url: str, timeout: float = 15.0) -> StreamTarget:
+    """Resolve a link to something tgup can stream straight into Telegram.
+
+    This is the zero-disk front half of ``tgup --url``: it never writes a byte
+    to this machine, so a 9 GB video can be archived without 9 GB of free disk.
+
+    Direct media URLs are size-probed and range-checked (one HEAD, or one
+    single-byte GET, never the body). Page URLs go through yt-dlp in
+    simulate-only mode to find the media URL. Either way the SSRF guard runs
+    first -- the media URL that comes back from a third party is untrusted until
+    ``assert_fetchable_url`` has cleared it, exactly like a pasted link.
+
+    Returns a :class:`StreamTarget`. ``direct=False`` means "cannot stream this",
+    with the reason filled in; it never means "downloaded it instead".
+    """
+    if not _env_flag("TDUBBER_DIRECT_STREAM", True):
+        raise StreamNotStreamable(
+            "Zero-disk streaming is switched off (TDUBBER_DIRECT_STREAM). Use "
+            "the normal download path instead."
+        )
+
+    raw = (url or "").strip()
+    if not raw:
+        raise StreamNotStreamable("Paste a link first.")
+
+    verdict = classify(raw)
+    if not verdict.ok:
+        raise StreamNotStreamable(verdict.reason)
+
+    if verdict.kind == "telegram":
+        raise StreamNotStreamable(
+            "That is a link to our own Telegram archive. It has no media URL "
+            "to stream from -- open the archive itself, or download the file."
+        )
+
+    safe_url = assert_fetchable_url(raw)
+
+    if verdict.kind == "direct":
+        if not _looks_like_direct_media(safe_url):
+            raise StreamNotStreamable(
+                f"'{safe_url}' does not end in a media extension "
+                f"({', '.join(DIRECT_EXTENSIONS)}), so it cannot be recognised "
+                "as a direct file."
+            )
+        probe = probe_remote_size(safe_url, timeout=timeout)
+        if not probe["ranges"]:
+            return StreamTarget(
+                kind="direct", url=safe_url, size=0, filename="",
+                page_url=safe_url, direct=False,
+                reason=(
+                    f"{probe['reason']}. Streaming it would mean downloading it, "
+                    "which is exactly what this path refuses to do -- use the "
+                    "normal download path instead."
+                ),
+            )
+        return StreamTarget(
+            kind="direct",
+            url=safe_url,
+            size=int(probe["size"]),
+            filename=os.path.basename(urlparse(safe_url).path) or "source.mp4",
+            page_url=safe_url,
+            direct=True,
+            reason="",
+            extractor="direct",
+        )
+
+    return _stream_from_ytdlp(safe_url, verdict, timeout)
 
 
 def _human(count: int) -> str:

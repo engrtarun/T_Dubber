@@ -1,0 +1,17 @@
+{
+  "project_id": "Take_Charge_of_My_Heart___Now_Playing___Netflix__ENG_SUB-fb66ce2bcfff-b566095fae",
+  "title": "Take_Charge_of_My_Heart___Now_Playing___Netflix__ENG_SUB",
+  "run_id": "b566095fae",
+  "state": "processing",
+  "source_video": "Take_Charge_of_My_Heart_Now_Playing_Netflix_ENG_SUB.mp4",
+  "source_url": "https://youtu.be/yvGb92S0hsA?si=CKRtASfSeAA_MgPU",
+  "source_kind": "web",
+  "source_size": 13179429,
+  "target_language": "Hindi",
+  "speaker_detection": true,
+  "created_at": "2026-10-09T18:53:09+05:30",
+  "telegram_backup": "https://t.me/tgwebcloud1/31",
+  "kernel_id": "engrtarun/dubber-worker-homura",
+  "output_video": null,
+  "report_file": null
+}

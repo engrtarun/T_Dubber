@@ -385,6 +385,40 @@ func pushTree(stage, repo, token, message string) error {
 			return fmt.Errorf("git init: %w: %s", err, out)
 		}
 	}
+
+	// The Hub's default branch is "main"; a fresh `git init` would put HEAD on
+	// an unborn "master" and the push would land a branch /resolve/main never
+	// reads. An already-existing local "main" (re-publish) makes this fail,
+	// which is exactly the case to keep.
+	git(stage, token, "checkout", "-q", "-b", "main")
+
+	// Remove any previous remote first: git errors on re-adding an existing
+	// name, and a stale one would still carry an old token.
+	git(stage, token, "remote", "remove", "origin")
+	if _, err := git(stage, token, "remote", "add", "origin", secret); err != nil {
+		return fmt.Errorf("git remote add: %w", err)
+	}
+	defer git(stage, token, "remote", "set-url", "origin", public)
+
+	// Base the commit on whatever the remote already holds.
+	//
+	// A Hugging Face repository is never truly empty: the Hub seeds every new
+	// repo with a .gitattributes commit. A first push from a freshly init-ed
+	// staging directory shares no history with it and is rejected as
+	// non-fast-forward ("fetch first"), which is exactly how the first real
+	// publish to pocotarun/tdubber-edge failed. A soft reset onto the remote
+	// tip makes the staged tree a child of the remote's history, so the push
+	// becomes a fast-forward. A fetch failure means the remote is empty (or
+	// unreachable, in which case the push below reports it with a better
+	// message), and the fresh commit stands on its own. The reset is soft:
+	// the working tree and index keep exactly the staged files that are
+	// already on disk, including the lfs-tracked .gitattributes written next.
+	if _, err := git(stage, token, "fetch", "origin", "main"); err == nil {
+		if out, err := git(stage, token, "reset", "-q", "--soft", "origin/main"); err != nil {
+			return fmt.Errorf("git reset onto origin/main: %w: %s", err, out)
+		}
+	}
+
 	if _, err := git(stage, token, "lfs", "track", "*.tar"); err != nil {
 		return fmt.Errorf("git lfs track: %w", err)
 	}
@@ -402,14 +436,6 @@ func pushTree(stage, repo, token, message string) error {
 		fmt.Println("  nothing changed; the repository already matches this staging tree")
 		return nil
 	}
-
-	// Remove any previous remote first: git errors on re-adding an existing
-	// name, and a stale one would still carry an old token.
-	git(stage, token, "remote", "remove", "origin")
-	if _, err := git(stage, token, "remote", "add", "origin", secret); err != nil {
-		return fmt.Errorf("git remote add: %w", err)
-	}
-	defer git(stage, token, "remote", "set-url", "origin", public)
 
 	if _, err := git(stage, token, "push", "-u", "origin", "HEAD"); err != nil {
 		return fmt.Errorf("git push: %w", err)

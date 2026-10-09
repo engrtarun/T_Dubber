@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import queue
 import shutil
@@ -41,6 +41,7 @@ from telegram_uploader import (
     CHUNK_SIZE,
     SESSION_PATH,
     TelegramCloudError,
+    build_message_link,
     download_or_restore,
     human_bytes,
     list_uploads,
@@ -593,19 +594,27 @@ def _resolve_link_step(source_url, workdir):
     return job.check()
 
 
-def _archive_to_db(journal: dict, project_id: str = None):
+def _archive_to_db(journal: dict, project_id: str = None, content_sha256: str = None):
     """Mirror a completed or in-flight Telegram upload into the database.
 
     The archive id is returned so the run can be linked to it, which is what
     makes "which movies are protected on Telegram?" a query rather than a folder
     listing. Failures are logged, never raised: losing the index is recoverable,
     losing the upload is not.
+
+    ``content_sha256`` is the digest the caller already paid for. Passing it
+    removes a second full read of the file, which on a multi-gigabyte source is
+    not a rounding error.
     """
     try:
         if not journal.get("fingerprint"):
             file_path = journal.get("file_path")
-            if file_path and os.path.isfile(file_path):
-                journal["fingerprint"] = _fingerprint_file(file_path)[:32]
+            if content_sha256:
+                journal["fingerprint"] = _archive_fingerprint(content_sha256)
+            elif file_path and os.path.isfile(file_path):
+                journal["fingerprint"] = _archive_fingerprint(
+                    _fingerprint_file(file_path)
+                )
             else:
                 channel = journal.get("channel") or db.UNKNOWN_CHANNEL
                 journal["fingerprint"] = (
@@ -621,8 +630,86 @@ def _archive_to_db(journal: dict, project_id: str = None):
         return None
 
 
+def _archive_fingerprint(sha256: str) -> str:
+    """The canonical archive key: the whole-file digest, truncated.
+
+    Both the writer (``_archive_to_db``) and the reader (Tier 0) go through
+    this, so the two can never drift into disagreeing about what identifies a
+    file. 32 hex characters is what ``db.upsert_archive`` has always stored.
+    """
+    return sha256[:32]
+
+
+def _find_archived_copy(content_sha256: str, channel: str):
+    """Tier 0: has these exact bytes already been archived on this channel?
+
+    Returns a reusable message link or ``None``. Only a row that reached
+    ``complete`` with a message id counts -- an in-flight archive is not a copy
+    anybody can rely on yet.
+    """
+    if not content_sha256 or not channel:
+        return None
+    try:
+        row = db.find_archive(_archive_fingerprint(content_sha256), channel)
+    except Exception:  # noqa: BLE001 - a lookup miss must never fail a run
+        logger.exception("Could not query the archive index for a cache hit")
+        return None
+    if not row:
+        return None
+    if (row.get("state") or "").strip() != "complete":
+        return None
+    link = (row.get("manifest_link") or "").strip()
+    if link:
+        return link
+    message_id = row.get("manifest_msg_id")
+    if not message_id:
+        return None
+    return build_message_link(channel, int(message_id))
+
+
+def _direct_archive_step(source_url, creds, channel, caption=""):
+    """Archive a pasted link into Telegram with zero bytes on local disk.
+
+    Zero-disk twin of :func:`_telegram_backup_step`, and it runs BEFORE the
+    download on purpose -- once a local copy exists the promise (0 bytes on
+    this PC) is already broken.
+
+    ``direct_archive.archive_link`` resolves the link to something tgup can
+    range-stream and sends it part by part straight from the origin. The
+    result dict is the generator's return value; a falsey ``ok`` (or a raised
+    error) means "not streamable / not sent" and the caller falls back to the
+    download path. This step never downloads anything itself: a silent
+    fallback would turn a 9 GB stream into a 9 GB disk write behind the
+    caller's back, which is the exact failure the zero-disk path exists to
+    prevent.
+    """
+    import direct_archive
+
+    def work(report):
+        def as_dict(**payload):
+            report(payload)
+
+        return direct_archive.archive_link(
+            source_url,
+            channel=(channel or "").strip(),
+            api_id=(creds or {}).get("api_id"),
+            api_hash=(creds or {}).get("api_hash") or "",
+            phone=(creds or {}).get("phone") or "",
+            caption=caption or "",
+            progress_callback=as_dict,
+        )
+
+    job = _BackgroundJob(work)
+    for payload in job.events():
+        line = _transfer_log_line(payload)
+        if line:
+            yield line
+    return job.check()
+
+
 def _telegram_backup_step(
-    source_path, creds, source_url, project_id=None, media=None, channel=None
+    source_path, creds, source_url, project_id=None, media=None, channel=None,
+    content_sha256=None,
 ):
     """Archive the source on Telegram and return the manifest link.
 
@@ -631,10 +718,27 @@ def _telegram_backup_step(
     Putting the archive first means there is always a durable, checksummed copy
     with a link the user can hand to anyone, and the pipeline can be restarted
     from it later without the original file.
+
+    Three ways out, in order of cost:
+
+    1. the source is already a Telegram link -- reuse it verbatim;
+    2. ``content_sha256`` matches an archive this machine already completed on
+       this channel -- reuse that link and send zero bytes (Tier 0);
+    3. otherwise upload it.
     """
     if source_url and link_resolver.classify(source_url).kind == "telegram":
         yield "[STAGE:0] ☁️ Source already lives in Telegram; using that archive as the backup instead of uploading it twice.\n"
         return source_url
+
+    target_channel = (channel or (creds or {}).get("channel") or "").strip()
+    if content_sha256 and target_channel:
+        cached = _find_archived_copy(content_sha256, target_channel)
+        if cached:
+            yield (
+                "[STAGE:0] ♻️ Tier 0: yehi bytes pehle se is channel par archive hain. "
+                "Dobara upload nahi kiya — 0 bytes bheje.\n"
+            )
+            return cached
 
     caption = None
     thumbnail = None
@@ -665,9 +769,12 @@ def _telegram_backup_step(
             reuse_completed=True,
             use_go=True,
             go_concurrency=4,
+            content_sha256=content_sha256,
             # Mirror progress into the database as parts land, so a crash still
             # leaves a queryable record of what exists on Telegram.
-            on_journal=lambda snapshot: _archive_to_db(snapshot, project_id),
+            on_journal=lambda snapshot: _archive_to_db(
+                snapshot, project_id, content_sha256
+            ),
         )
 
     job = _BackgroundJob(work)
@@ -680,10 +787,10 @@ def _telegram_backup_step(
             # leaves a queryable record of which parts exist.
             snapshot = dict(payload.get("journal") or {})
             if snapshot:
-                _archive_to_db(snapshot)
+                _archive_to_db(snapshot, None, content_sha256)
 
     result = job.check()
-    _archive_to_db(result)
+    _archive_to_db(result, None, content_sha256)
     if result.get("reused"):
         yield "[STAGE:0] ♻️ This exact file was archived before; reusing that archive.\n"
     return result.get("message_link") or result.get("link")
@@ -1061,6 +1168,44 @@ def do_telegram_upload_from_link(source_url):
         )
         return
 
+    # Zero-disk first: stream the link straight into Telegram with nothing on
+    # local disk. This tab is backup-only, so there is never a reason to
+    # download at all. A refusal (an origin without Range support, an
+    # unauthorized session, the kill switch) falls through to the fetch-and-
+    # upload path below with its reason in the log -- never silently.
+    channel = pick_channel() or creds["channel"]
+    direct_log = ""
+    direct = None
+    try:
+        attempt = _direct_archive_step(link, creds, channel)
+        while True:
+            try:
+                line = next(attempt)
+            except StopIteration as stop:
+                direct = stop.value
+                break
+            direct_log += line
+            yield _drive_log_panel(direct_log)
+    except Exception as exc:  # noqa: BLE001 - any miss falls back
+        direct = None
+        direct_log += f"⚠️ Zero-disk archive unavailable ({exc}).\n"
+        yield _drive_log_panel(direct_log)
+
+    if direct and direct.get("ok") and direct.get("message_link"):
+        yield _link_card(
+            direct["message_link"],
+            "☁️ Archived on Telegram (zero-disk)",
+            f"{human_bytes(int(direct.get('size') or 0))} streamed straight from "
+            "the origin; 0 bytes written to this PC.",
+        )
+        return
+    if direct:
+        reason = direct.get("reason") or "no message link returned"
+        yield _drive_log_panel(
+            direct_log + f"⚠️ Zero-disk refused: {reason}\n"
+            "Falling back to fetch, then upload…\n"
+        )
+
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     inbox_dir = os.path.join(PROJECTS_DIR, "_inbox", stamp)
     os.makedirs(inbox_dir, exist_ok=True)
@@ -1218,7 +1363,7 @@ def _project_report_path(project_dir):
     manifest = _read_project_manifest(project_dir)
     return _manifest_file(project_dir, manifest.get("report_file")) or os.path.join(project_dir, "report.json")
 
-def start_dubbing(video_file, target_lang, speaker_detection, source_url="", backup_to_telegram=True):
+def start_dubbing(video_file, target_lang, speaker_detection, source_url="", backup_to_telegram=True, archive_only=False):
     """Run one dubbing job: Telegram archive first, then the Kaggle GPU handoff.
 
     Order matters. The Kaggle worker keeps running no matter what happens to
@@ -1250,15 +1395,19 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
     # ------------------------------------------------------------------
     inbox_dir = None
     media = None
+    direct = None
+    backup_link = None
+    resolved_path = None
+    source_title = None
+    source_kind = None
+    source_size = None
+    source_sha256 = None
     if source_url:
         verdict = link_resolver.classify(source_url)
         if not verdict.ok:
             yield fail(f"That link cannot be used.\n{verdict.reason}")
             return
 
-        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        inbox_dir = os.path.join(PROJECTS_DIR, "_inbox", stamp)
-        os.makedirs(inbox_dir, exist_ok=True)
         logs += f"[STAGE:0] 🔗 Reading {verdict.label} link...\n"
         yield (
             gr.update(value=logs),
@@ -1268,16 +1417,47 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
             gr.update(value=""),
         )
 
-        try:
-            resolver = _resolve_link_step(source_url, inbox_dir)
-            media = None
-            while True:
-                try:
-                    line = next(resolver)
-                except StopIteration as stop:
-                    media = stop.value
-                    break
-                logs += line
+        # --------------------------------------------------------------
+        # Stage 0, zero-disk attempt: stream the link straight into
+        # Telegram BEFORE anything is downloaded. Order is the whole point
+        # -- once a local copy exists the "0 bytes on this PC" promise is
+        # already broken. It runs only when there is a backup to fill (no
+        # destination, no stream) and never for links that already ARE a
+        # Telegram archive (nothing to stream from).
+        #
+        # Any miss -- a page URL tgup cannot range, an origin without Range
+        # support, an unauthorized session, the kill switch -- falls back to
+        # the download path below, loudly. A silent fallback would turn a
+        # zero-disk claim into a 9 GB write with nothing in the log to say
+        # why, so every refusal reason is printed.
+        # --------------------------------------------------------------
+        if backup_to_telegram and creds and verdict.kind != "telegram":
+            attempt = _direct_archive_step(
+                source_url,
+                creds,
+                pick_channel() or creds.get("channel") or "",
+            )
+            try:
+                while True:
+                    try:
+                        line = next(attempt)
+                    except StopIteration as stop:
+                        direct = stop.value
+                        break
+                    logs += line
+                    yield (
+                        gr.update(value=logs),
+                        gr.update(value=None),
+                        gr.update(value=parse_report_metrics(None)),
+                        gr.update(value=""),
+                        gr.update(value=""),
+                    )
+            except Exception as exc:  # noqa: BLE001 - any miss falls back
+                direct = None
+                logs += (
+                    f"[STAGE:0] ⚠️ Zero-disk archive unavailable ({exc}).\n"
+                    "[STAGE:0]    Falling back to the download path.\n"
+                )
                 yield (
                     gr.update(value=logs),
                     gr.update(value=None),
@@ -1285,18 +1465,121 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
                     gr.update(value=""),
                     gr.update(value=""),
                 )
-        except (link_resolver.LinkNotSupported, TelegramCloudError) as exc:
-            yield fail(f"Could not fetch that link.\n{exc}")
-            return
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Link resolution failed for %s", source_url)
-            yield fail(f"Could not fetch that link.\n{exc}")
-            return
+            if direct and direct.get("ok") and direct.get("message_link"):
+                # The bytes are on Telegram and nothing was written here. The
+                # digest tgup computed while streaming replaces the local
+                # fingerprint, so every consumer downstream (project id,
+                # worker verification, Tier 0 dedup) works without opening a
+                # file. direct_archive already mirrored the archive row itself.
+                backup_link = direct.get("message_link")
+                source_sha256 = direct.get("source_sha256") or None
+                source_size = int(direct.get("size") or 0)
+                source_title = os.path.splitext(
+                    os.path.basename(direct.get("filename") or "source")
+                )[0]
+                source_kind = "direct"
+                logs += (
+                    "[STAGE:0] ⚡ Zero-disk: archived straight from the origin "
+                    f"({human_bytes(source_size)}, 0 bytes written to this PC)\n"
+                )
+                if archive_only:
+                    logs += "[STAGE:0] 📁 Archive-Only mode active. Stopping before dubbing.\n"
+                    backup_html = _link_card(
+                        backup_link,
+                        "☁️ Archived on Telegram (zero-disk)",
+                        "Streamed straight from the origin; nothing was written to this PC.",
+                    )
+                    yield (
+                        gr.update(value=logs), gr.update(value=None),
+                        gr.update(value=parse_report_metrics(None)),
+                        gr.update(value=""), gr.update(value=backup_html),
+                    )
+                    return
+                yield (
+                    gr.update(value=logs),
+                    gr.update(value=None),
+                    gr.update(value=parse_report_metrics(None)),
+                    gr.update(value=""),
+                    gr.update(value=""),
+                )
+            elif direct and direct.get("ok"):
+                # Sent, but with no link the worker could restore from -- a
+                # backup without a link is not a backup. Fall back: the upload
+                # itself already landed and the Tier 0 dedup will recognise the
+                # digest on the next attempt.
+                logs += (
+                    "[STAGE:0] ⚠️ Zero-disk archive returned no message link.\n"
+                    "[STAGE:0]    Falling back to the download path.\n"
+                )
+                yield (
+                    gr.update(value=logs),
+                    gr.update(value=None),
+                    gr.update(value=parse_report_metrics(None)),
+                    gr.update(value=""),
+                    gr.update(value=""),
+                )
+            elif direct:
+                logs += (
+                    "[STAGE:0] ⚠️ Zero-disk archive refused: "
+                    f"{direct.get('reason') or 'unknown reason'}\n"
+                    "[STAGE:0]    Falling back to the download path.\n"
+                )
+                yield (
+                    gr.update(value=logs),
+                    gr.update(value=None),
+                    gr.update(value=parse_report_metrics(None)),
+                    gr.update(value=""),
+                    gr.update(value=""),
+                )
 
-        resolved_path = media.path
-        source_title = media.title
-        source_kind = media.kind
-        logs += f"[STAGE:0] ✅ Got it: {os.path.basename(resolved_path)} ({human_bytes(media.size_bytes)})\n"
+        if backup_link:
+            # Download skipped on purpose: the worker restores the source
+            # from the archive link this run just created.
+            logs += (
+                "[STAGE:0] 📦 Source kept off disk; the worker restores it "
+                "from the archive link.\n"
+            )
+            yield (
+                gr.update(value=logs),
+                gr.update(value=None),
+                gr.update(value=parse_report_metrics(None)),
+                gr.update(value=""),
+                gr.update(value=""),
+            )
+        else:
+            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            inbox_dir = os.path.join(PROJECTS_DIR, "_inbox", stamp)
+            os.makedirs(inbox_dir, exist_ok=True)
+
+            try:
+                resolver = _resolve_link_step(source_url, inbox_dir)
+                media = None
+                while True:
+                    try:
+                        line = next(resolver)
+                    except StopIteration as stop:
+                        media = stop.value
+                        break
+                    logs += line
+                    yield (
+                        gr.update(value=logs),
+                        gr.update(value=None),
+                        gr.update(value=parse_report_metrics(None)),
+                        gr.update(value=""),
+                        gr.update(value=""),
+                    )
+            except (link_resolver.LinkNotSupported, TelegramCloudError) as exc:
+                yield fail(f"Could not fetch that link.\n{exc}")
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Link resolution failed for %s", source_url)
+                yield fail(f"Could not fetch that link.\n{exc}")
+                return
+
+            resolved_path = media.path
+            source_title = media.title
+            source_kind = media.kind
+            logs += f"[STAGE:0] ✅ Got it: {os.path.basename(resolved_path)} ({human_bytes(media.size_bytes)})\n"
     else:
         path = _coerce_video_path(video_file)
         if not path or not os.path.isfile(path):
@@ -1311,28 +1594,38 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
     # ------------------------------------------------------------------
     movie_name = re.sub(r'[^A-Za-z0-9_-]', '_', source_title.replace(' ', '_')).strip('_') or "movie"
     movie_name = movie_name[:64]
-    source_fingerprint = _fingerprint_file(resolved_path)[:12]
+    if source_sha256 is None:
+        # One whole-file read serves three consumers: the project id, the Tier 0
+        # cache lookup and the archive index. Hashing twice is what this used to do.
+        # Zero-disk runs skip this entirely -- tgup handed over the digest while
+        # streaming, and there is no file here to read anyway.
+        source_sha256 = _fingerprint_file(resolved_path)
+    source_fingerprint = source_sha256[:12]
     run_id = uuid.uuid4().hex[:10]
     project_id = f"{movie_name}-{source_fingerprint}-{run_id}"
     project_dir = os.path.join(PROJECTS_DIR, project_id)
     os.makedirs(project_dir, exist_ok=True)
 
-    persisted_video = os.path.join(project_dir, os.path.basename(resolved_path))
-    if os.path.abspath(resolved_path) != os.path.abspath(persisted_video):
-        if inbox_dir:
-            shutil.move(resolved_path, persisted_video)
-        else:
-            shutil.copy(resolved_path, persisted_video)
+    persisted_video = None
+    if resolved_path:
+        persisted_video = os.path.join(project_dir, os.path.basename(resolved_path))
+        if os.path.abspath(resolved_path) != os.path.abspath(persisted_video):
+            if inbox_dir:
+                shutil.move(resolved_path, persisted_video)
+            else:
+                shutil.copy(resolved_path, persisted_video)
+        if source_size is None:
+            source_size = os.path.getsize(persisted_video)
 
     manifest = {
         "project_id": project_id,
         "title": movie_name,
         "run_id": run_id,
         "state": "processing",
-        "source_video": os.path.basename(persisted_video),
+        "source_video": os.path.basename(persisted_video) if persisted_video else None,
         "source_url": source_url or None,
         "source_kind": source_kind,
-        "source_size": os.path.getsize(persisted_video),
+        "source_size": source_size,
         "target_language": target_lang,
         "speaker_detection": bool(speaker_detection),
         "created_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -1354,7 +1647,6 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
     # ------------------------------------------------------------------
     # Stage 0b: Telegram archive BEFORE the Kaggle handoff
     # ------------------------------------------------------------------
-    backup_link = None
     if backup_to_telegram and creds is None:
         logs += (
             "[STAGE:0] ⚠️ Telegram is not configured, so no cloud backup will be made.\n"
@@ -1365,6 +1657,22 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
             gr.update(value=parse_report_metrics(None)),
             gr.update(value=""), gr.update(value=""),
         )
+    elif backup_to_telegram and backup_link:
+        # Stage 0's zero-disk attempt already put the source on Telegram and
+        # mirrored the archive row itself. Running _telegram_backup_step as
+        # well would upload a second copy -- from a file that does not exist.
+        manifest["telegram_backup"] = backup_link
+        _write_project_manifest(project_dir, manifest)
+        backup_html = _link_card(
+            backup_link,
+            "☁️ Archived on Telegram (zero-disk)",
+            "Streamed straight from the origin; nothing was written to this PC.",
+        )
+        yield (
+            gr.update(value=logs), gr.update(value=None),
+            gr.update(value=parse_report_metrics(None)),
+            gr.update(value=""), gr.update(value=backup_html),
+        )
     elif backup_to_telegram:
         channel = pick_channel() or creds["channel"]
         if channel != creds["channel"]:
@@ -1373,7 +1681,7 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
         # (not just the post-processing) has to sit inside the try.
         backup_resolver = _telegram_backup_step(
             persisted_video, creds, source_url, project_id,
-            media=media, channel=channel,
+            media=media, channel=channel, content_sha256=source_sha256,
         )
         try:
             while True:
@@ -1412,6 +1720,15 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
             gr.update(value=""), gr.update(value=backup_html),
         )
 
+    if archive_only:
+        logs += "[STAGE:0] 📁 Archive-Only mode active. Stopping before dubbing.\n"
+        yield (
+            gr.update(value=logs), gr.update(value=None),
+            gr.update(value=parse_report_metrics(None)),
+            gr.update(value=""), gr.update(value=backup_html),
+        )
+        return
+
     # ------------------------------------------------------------------
     # Stages 1-7: Kaggle
     # ------------------------------------------------------------------
@@ -1420,7 +1737,8 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
         backup_link=backup_link,
         source_url=source_url or None,
         source_title=source_title,
-        source_size=os.path.getsize(persisted_video),
+        source_size=source_size,
+        source_sha256=source_sha256,
     ):
         stage_match = re.search(r"\[STAGE:(\d)\]", status_update)
         if stage_match:
@@ -2124,6 +2442,10 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
                         speaker_toggle = gr.Checkbox(
                             label="Enable Multi-Speaker Detection", value=True
                         )
+                        archive_only_toggle = gr.Checkbox(
+                            label="📁 Archive Only (0% Disk Use, Skip Dubbing)",
+                            value=False,
+                        )
                         backup_toggle = gr.Checkbox(
                             label="☁️ Archive on Telegram before starting (recommended)",
                             value=True,
@@ -2205,7 +2527,7 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
 
             start_button.click(
                 fn=start_dubbing,
-                inputs=[video_input, target_language, speaker_toggle, source_url, backup_toggle],
+                inputs=[video_input, target_language, speaker_toggle, source_url, backup_toggle, archive_only_toggle],
                 outputs=[status_output, output_video, metrics_ui, action_links_output, backup_output],
             )
 

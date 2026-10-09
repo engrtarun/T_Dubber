@@ -292,14 +292,77 @@ def state_path_for(key: str) -> str:
     return os.path.join(STATE_DIR, f"{key}.json")
 
 
-def _fingerprint(path: str, size: int) -> str:
-    """Identify a file by path, size and mtime.
+# How many bytes from each end of the file a sampled content key digests.
+# 16 MB of reads per call instead of the whole file: a 3 GB source costs a
+# fraction of a second, while a replacement of the same size still lands on a
+# different key.
+CONTENT_SAMPLE_BYTES = 8 * 1024 * 1024
 
-    Editing or replacing the file changes the key, which correctly invalidates
-    a resume journal instead of stitching new bytes onto old parts.
+
+def _fingerprint(path: str, size: int, digest: str = None) -> str:
+    """Identify a file by what it contains, not by where it sits on disk.
+
+    A caller that already paid for a whole-file digest passes it in and this
+    becomes free. Otherwise the identity is a digest of the size plus the first
+    and last ``CONTENT_SAMPLE_BYTES``.
+
+    The mtime is mixed in as well, and it is there for a specific reason. A
+    rename or a move preserves mtime (same volume it is the same inode; across
+    volumes ``shutil.move`` copies timestamps), so stability under the move that
+    every resolved link goes through is kept. An in-place edit does not preserve
+    it, so a resume journal is correctly invalidated -- which the sampled bytes
+    alone would miss for an edit confined to the unsampled middle.
+
+    Known limit of the sampled form: an edit confined to the middle of a large
+    file, inside the filesystem's mtime granularity, would reuse a journal. It
+    would not corrupt anything -- the per-part SHA-256 cross-check between the
+    pre-hashed plan and the streamed bytes catches it, and the manifest digests
+    are what a restore trusts. Pass ``digest`` when one is available and the key
+    is fully content-addressed.
+
+    Renaming stability is the whole reason this changed. The previous key mixed
+    in the absolute path, so the single ``shutil.move`` between
+    ``projects/_inbox/`` and the project directory silently changed the key and
+    threw away the parts an interrupted upload had already stored.
     """
-    stat = os.stat(path)
-    seed = f"{os.path.abspath(path)}|{size}|{stat.st_mtime_ns}"
+    try:
+        mtime_ns = os.stat(path).st_mtime_ns
+    except OSError:
+        mtime_ns = 0
+
+    if digest:
+        identity = f"sha256:{digest}"
+    else:
+        hasher = hashlib.sha256()
+        hasher.update(str(size).encode("utf-8"))
+        span = min(CONTENT_SAMPLE_BYTES, size)
+        try:
+            with open(path, "rb") as handle:
+                hasher.update(handle.read(span))
+                if size > span * 2:
+                    handle.seek(-span, os.SEEK_END)
+                    hasher.update(handle.read(span))
+        except OSError:
+            # An unreadable file still needs a stable key so the caller can
+            # raise a proper error rather than crash inside the fingerprint.
+            return _legacy_fingerprint(path, size)
+        identity = "sample:" + hasher.hexdigest()
+
+    seed = f"{identity}|{size}|{mtime_ns}"
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:20]
+
+
+def _legacy_fingerprint(path: str, size: int) -> str:
+    """The pre-content key: path + size + mtime.
+
+    Kept only so a journal written by an older build can still be found and
+    migrated. Nothing writes it any more.
+    """
+    try:
+        mtime_ns = os.stat(path).st_mtime_ns
+    except OSError:
+        mtime_ns = 0
+    seed = f"{os.path.abspath(path)}|{size}|{mtime_ns}"
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:20]
 
 
@@ -688,6 +751,7 @@ def _try_go_upload(
     progress_callback,
     on_journal,
     go_concurrency: int = 3,
+    journal_key: str = None,
 ) -> dict | None:
     """SPEED PATH: try the tgup multi-connection uploader. Journal or None.
 
@@ -759,8 +823,13 @@ def _try_go_upload(
     journal["file_path"] = os.path.abspath(file_path)
     journal["reused"] = False
     # Persist exactly like the Telethon path so resume/reuse/db see one shape.
+    # The key must be the caller's: recomputing it here would derive a different
+    # key whenever the caller supplied a whole-file digest, and the journal this
+    # writes would then be invisible to the next run's resume lookup.
     try:
-        _atomic_write_json(state_path_for(_fingerprint(file_path, size)), journal)
+        _atomic_write_json(
+            state_path_for(journal_key or _fingerprint(file_path, size)), journal
+        )
     except OSError:
         pass
     if on_journal:
@@ -803,6 +872,7 @@ def upload_file_detailed(
     # For machine-level speed see boost.ps1 / start-boosted.ps1 (Windows).
     use_go: bool = True,
     go_concurrency: int = 0, # 0 means auto-tune
+    content_sha256: str = None, # whole-file digest the caller already computed
 ) -> dict:
     """Upload any file to Telegram and return a full archival description.
 
@@ -840,11 +910,22 @@ def upload_file_detailed(
         raise TelegramCloudError("Refusing to upload a 0-byte file.")
     base_name = os.path.basename(file_path)
 
-    key = _fingerprint(file_path, size)
+    key = _fingerprint(file_path, size, content_sha256)
     journal_path = state_path_for(key)
     # Keep the previously persisted record separate: the reuse check below has
     # to inspect the state as it was *before* this run marks it as uploading.
     stored = _read_json(journal_path, {}) or {}
+    if not stored:
+        # A journal written before keys were content-based is still resumable --
+        # it describes the same bytes. Adopt it under the new key so an upgrade
+        # mid-upload does not throw the stored parts away.
+        legacy = _read_json(state_path_for(_legacy_fingerprint(file_path, size)), {}) or {}
+        if legacy:
+            stored = legacy
+            try:
+                _atomic_write_json(journal_path, legacy)
+            except OSError:
+                pass
     journal = dict(stored)
     journal.update({"file_path": file_path, "filename": base_name, "size": size})
 
@@ -874,6 +955,15 @@ def upload_file_detailed(
         return journal
 
     journal["state"] = "uploading"
+    # The channel must be recorded HERE, not at the end. `_archive_to_db` mirrors
+    # every in-flight snapshot into `telegram_archives`, and its uniqueness is
+    # (fingerprint, channel). While `channel` was still absent the mirror wrote
+    # the placeholder channel, so the in-flight row and the final row could never
+    # collide -- every archive ended up as two rows: one `uploading (unknown)`
+    # that nothing ever updates, and one `complete @channel`. Setting it before
+    # the first part lands makes the conflict fire and collapses them into the
+    # one row that is actually true.
+    journal["channel"] = channel
 
     plan = plan_chunks(size, chunk_size)
     chunked = len(plan) > 1
@@ -886,7 +976,7 @@ def upload_file_detailed(
         go_journal = _try_go_upload(
             file_path, api_id, api_hash, phone, channel, size, plan,
             chunk_size, caption, thumbnail_path, progress_callback, on_journal,
-            go_concurrency=go_concurrency,
+            go_concurrency=go_concurrency, journal_key=key,
         )
         if go_journal is not None:
             return go_journal

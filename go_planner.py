@@ -46,7 +46,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -133,6 +135,22 @@ def status() -> dict:
         "session_path": report.get("session_path", ""),
         "needs_login": bool(report.get("needs_login")),
         "login_allowed": bool(report.get("login_allowed")),
+        # "session" above only means the session *file* exists. A file can
+        # exist and still be unauthorized, in which case every tgup upload
+        # fails with "not authorized yet" and the caller falls back to Telethon
+        # -- silently, on every single run. That happened here, so the state is
+        # spelled out rather than left to be inferred from a green check.
+        "session_authorized": tgup_bridge.session_state()["state"],
+        "session_state_note": (
+            "tri-state: no_file / present_unverified / verified_ok / "
+            "verified_rejected. 'verified_*' is cached from the last real "
+            "bench, fetch or upload round trip (tgup_bridge.record_session_state) "
+            "and expires after 24h -- a session can be revoked at any time, so "
+            "a day-old yes is not a yes. Every poll stays free; only real "
+            "attempts pay for a verdict. If uploads are slower than expected, "
+            "run `tgup bench --channel @name --api-id N --api-hash H "
+            "--concurrency 1,2,3,4` once to refresh it."
+        ),
         "used_by": (
             "plan+hash always; multi-part public-channel upload via "
             "upload_via_go() when a tgup session exists; Telethon fallback "
@@ -308,6 +326,10 @@ def should_use_go_upload(
         return False, "caller did not opt into the Go path (use_go=False)"
     if not binary_runnable():
         return False, "tgup is not runnable here; Telethon fallback"
+    # The Python login may still be the only authorized one, and tgup cannot
+    # read Telethon's file -- adopt it here, so the check below sees the session
+    # that will actually exist by the time upload runs.
+    tgup_bridge.ensure_session()
     if not tgup_bridge.session_ready() and not tgup_bridge.login_allowed():
         return False, (
             f"no tgup session at {tgup_bridge.session_path()} yet; a fresh login "
@@ -397,6 +419,147 @@ def upload_via_go(
         "elapsed_sec": result.elapsed_sec,
         "source_sha256": result.source_sha256,
     }
+
+
+def _go_progress_shim(progress_callback):
+    """Map tgup's progress events onto the caller's display callback."""
+
+    def on_progress(event) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(
+                phase="go_upload",
+                current=event.bytes_done,
+                total=event.bytes_total,
+                chunk_index=event.part,
+                chunk_count=event.part_count,
+                message=event.message or f"tgup part {event.part}/{event.part_count}",
+            )
+        except Exception as exc:  # noqa: BLE001 - a broken display must not abort a transfer
+            print(f"[go_planner] progress callback error: {exc}", file=sys.stderr)
+
+    return on_progress
+
+
+def _result_to_dict(result) -> dict:
+    return {
+        "ok": True,
+        "message_id": result.message_id,
+        "message_link": result.message_link,
+        "total_size": result.total_size,
+        "chunk_count": result.chunk_count,
+        "chunked": result.chunk_count > 1,
+        "parts": result.parts,
+        "concurrency": result.concurrency,
+        "bytes_per_sec": result.bytes_per_sec,
+        "elapsed_sec": result.elapsed_sec,
+        "source_sha256": result.source_sha256,
+    }
+
+
+def _scratch_result_path(tag: str = "tgup") -> str:
+    """A private path for tgup's machine-readable result file.
+
+    tgup only writes its result JSON when asked with ``--result-out``; without
+    that flag the Python side gets nothing back and every run reads as "tgup
+    exited 0 without a result file" even when the upload fully succeeded.
+    MEASURED against the real binary on a range-serving origin: exit 0,
+    ``dry run: 1 parts planned, 195.31 KB hashed``, and no Python-visible
+    result until ``--result-out`` was added.
+
+    It lives in the process temp directory and is deleted immediately after it
+    is read, so this does not reintroduce the disk usage the URL path exists to
+    avoid -- a few hundred bytes of metadata, never the payload.
+    """
+    directory = tempfile.mkdtemp(prefix=f"{tag}_result_")
+    return os.path.join(directory, "result.json")
+
+
+def upload_url_via_go(
+    url: str,
+    api_id,
+    api_hash: str = "",
+    channel: str = "",
+    phone: str = "",
+    concurrency: int = GO_UPLOAD_DEFAULT_CONCURRENCY,
+    caption: str = "",
+    url_timeout: float = 0.0,
+    dry_run: bool = False,
+    timeout=None,
+    progress_callback=None,
+    result_out: str = "",
+) -> dict:
+    """Stream a direct media URL into Telegram with tgup. Raises on failure.
+
+    Zero disk: tgup ranges the origin part by part, so nothing is written
+    locally first. The price is that the origin must serve HTTP byte ranges --
+    tgup says so plainly and refuses, rather than quietly spooling the whole
+    body to a temp file behind the caller's back.
+
+    ``dry_run=True`` needs no credentials and no session: it resolves the
+    origin, plans every part and hashes it, then returns. Use it to find out
+    whether a link is uploadable before committing to a real transfer -- and
+    unlike a throughput benchmark, it needs nobody to type an OTP.
+    """
+    target = str(url or "").strip()
+    if not target.lower().startswith(("http://", "https://")):
+        raise RuntimeError(f"not an http(s) URL: {url!r}")
+    try:
+        numeric_id = int(api_id)
+    except (TypeError, ValueError):
+        raise RuntimeError("Telegram API ID must be numeric.")
+    if dry_run:
+        # Nothing is sent, so nothing needs authorising: no api_hash, no channel.
+        channel = ""
+    elif not api_hash or not (channel or "").strip():
+        raise RuntimeError("api_hash and channel are required for the Go upload.")
+    concurrency = max(
+        1,
+        min(
+            int(concurrency or GO_UPLOAD_DEFAULT_CONCURRENCY),
+            GO_UPLOAD_MAX_CONCURRENCY,
+        ),
+    )
+
+    owned_result = not result_out
+    result_out = result_out or _scratch_result_path()
+    try:
+        result = tgup_bridge.upload(
+            url=target,
+            channel=(channel or "").strip(),
+            api_id=numeric_id,
+            api_hash=str(api_hash or ""),
+            phone=str(phone or ""),
+            concurrency=concurrency,
+            caption=caption,
+            dry_run=bool(dry_run),
+            url_timeout=float(url_timeout or 0.0),
+            result_out=result_out,
+            on_progress=_go_progress_shim(progress_callback),
+        )
+    finally:
+        if owned_result:
+            # Read before delete: _result_from() already has it by now.
+            _discard_scratch_result(result_out)
+    if not result.ok:
+        raise RuntimeError(
+            f"tgup upload from URL failed: {result.error or 'unknown error'}"
+        )
+    return _result_to_dict(result)
+
+
+def _discard_scratch_result(path: str) -> None:
+    """Delete the scratch result file and its private directory.
+
+    A failed cleanup is deliberately silent: leaving a JSON file behind is a
+    nuisance, not a reason to fail an upload that already succeeded.
+    """
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    shutil.rmtree(os.path.dirname(path), ignore_errors=True)
 
 
 def convert_go_result_to_journal(

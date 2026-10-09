@@ -7,8 +7,10 @@ dashboard_server.py — Mission Control backend for T_Dubber
 Serves the local dashboard (``dashboard/index.html``) and exposes the live
 snapshot that the page's ``render()`` function consumes.
 
-    python dashboard_server.py            # http://127.0.0.1:8080
+    python dashboard_server.py            # http://127.0.0.1:8081 (default)
     python dashboard_server.py --port 9000
+
+Note: 8081, not 8080 -- ``havaldar_core`` already binds 8080.
     python dashboard_server.py --no-open  # don't launch a browser
 
 Endpoints

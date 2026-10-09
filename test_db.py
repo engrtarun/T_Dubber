@@ -15,20 +15,37 @@ import sqlite3
 import sys
 import tempfile
 import threading
+from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import db
+# These tests write projects, archives and parts. Without a redirect they land
+# in the production t_dubber.db -- which is where 27 rows named p1/p2/p3,
+# seed, w0-0..w3-4, lucifer-abc123-def456 and demo-0..2 came from.
+import test_isolation
+
+test_isolation.use_scratch_db(prefix="tdub_db_")
+
+import db  # noqa: E402
 
 
 def _use_temp_db(path):
     """Point db at a scratch file so the real database is never touched."""
     original = db.DB_PATH
     db.DB_PATH = path
-    for thread_attr in (db._local,):
-        if hasattr(thread_attr, "conn"):
-            thread_attr.conn.close()
-            del thread_attr.conn
+    # `hasattr(_local, "conn")` is True even when the attribute was explicitly
+    # set to None, which is what every other test module here does on teardown
+    # (`db._local.conn = None`). Asking hasattr then calling .close() on None is
+    # why the whole suite passed but `pytest test_db.py` ERRORED with 12 errors
+    # once it ran after test_p0_direct.py / test_archive_roundtrip.py.
+    # MEASURED 2026-10-09: `pytest test_db.py` alone = 12 passed; the same file
+    # after a module that nulls the thread-local = 12 errors, 53 passed.
+    conn = getattr(db._local, "conn", None)
+    if conn is not None:
+        conn.close()
+        db._local.conn = None
     return original
 
 
@@ -38,6 +55,21 @@ def _restore_db(original):
         conn.close()
         del db._local.conn
     db.DB_PATH = original
+
+
+@pytest.fixture(autouse=True)
+def _scratch_db(scratch):
+    """Give every test its own scratch database.
+
+    The script runner (``main``) redirects the database once for
+    the whole run; under pytest there is no runner, so each test
+    would otherwise read and write the real t_dubber.db -- the
+    stats assertions (``projects == 0``) prove the tests expect
+    a fresh file. Same redirect, per test, so both runners agree.
+    """
+    original = _use_temp_db(str(Path(scratch) / "t_dubber.db"))
+    yield
+    _restore_db(original)
 
 
 def test_schema_and_stats(scratch):

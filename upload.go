@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -23,7 +21,7 @@ import (
 // uploader is the shared state every worker touches.
 type uploader struct {
 	pool     *pool
-	path     string
+	src      source
 	filename string
 	channel  string
 	caption  string
@@ -43,9 +41,14 @@ type uploader struct {
 	limit     int
 }
 
+// newUploader takes a source rather than a path. That is the whole point: with
+// a local file behind the same interface, --file and --url run identical code
+// from here on, so a fix to chunking, captions, the plan rewrite or the manifest
+// cannot land on one route and miss the other.
 func newUploader(
 	p *pool,
-	path, filename, channel, caption, planOut string,
+	src source,
+	filename, channel, caption, planOut string,
 	plan Plan,
 	started time.Time,
 	limit int,
@@ -57,7 +60,7 @@ func newUploader(
 		limit = maxConcurrency
 	}
 	return &uploader{
-		pool: p, path: path, filename: filename, channel: channel,
+		pool: p, src: src, filename: filename, channel: channel,
 		caption: caption, planOut: planOut,
 		stored:   make(map[int]StoredPart, len(plan.Parts)),
 		failures: make(map[int]error),
@@ -121,14 +124,14 @@ func (u *uploader) sendPart(ctx context.Context, c *conn, p Part) (StoredPart, e
 		Name:   partName(u.filename, p.Number, u.count),
 	}
 
-	file, err := os.Open(u.path)
+	// One stream per part, held open for the whole send. Nothing is buffered
+	// beyond the connection's part buffers, so a 1.9 GB part costs the same
+	// memory as a 512 KB one -- whether the bytes come off disk or off a socket.
+	stream, err := u.src.OpenRange(p.Offset, p.Size)
 	if err != nil {
 		return entry, err
 	}
-	defer file.Close()
-	if _, err := file.Seek(p.Offset, io.SeekStart); err != nil {
-		return entry, err
-	}
+	defer stream.Close()
 
 	caption := u.caption
 	if caption == "" {
@@ -143,18 +146,15 @@ func (u *uploader) sendPart(ctx context.Context, c *conn, p Part) (StoredPart, e
 
 	promise := message.Upload(
 		func(ctx context.Context, up message.Uploader) (tg.InputFileClass, error) {
-			// LimitReader keeps the stream inside this part's byte range, so
-			// memory stays flat no matter how large the part is. The
-			// chunking itself is the connection's configured uploader
-			// (newTunedUploader): 512 KB parts, three in flight, instead of
-			// gotd's 128 KB/one-at-a-time defaults.
+			// The stream is already clipped to this part's byte range (see
+			// source.OpenRange), so nothing further is needed here.
 			//
 			// FromPath is deliberately NOT used: this part is a byte range
 			// of a split file, and FromPath would re-send the entire source
 			// file for every part -- N times the bytes and the wrong
 			// content per message. It would only be correct for a file with
 			// exactly one part.
-			return up.FromReader(ctx, entry.Name, io.LimitReader(file, p.Size))
+			return up.FromReader(ctx, entry.Name, stream)
 		})
 
 	updates, err := c.peer.Upload(promise).File(ctx, styling.Plain(caption))

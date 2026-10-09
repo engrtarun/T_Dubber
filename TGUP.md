@@ -147,6 +147,41 @@ tgup upload --file clip.mp4 --channel @name --api-id N --api-hash H --phone +91.
 `python go_planner.py check` reports `needs_login`, `session_path` and
 `login_allowed` so you know in advance which way this machine will go.
 
+## Carrying the Python login over — the end of the second OTP
+
+`tgup` cannot read Telethon's session file, so logging in with Python and
+logging in with Go used to be two separate OTPs on the same number. They are
+not any more: an auth key is 256 bytes plus the DC it belongs to, and gotd's
+storage is one small JSON document, so the key is *copied* instead of
+requested.
+
+```
+python telethon_session.py           # python login -> tgup.session, no code
+python telethon_session.py --status  # what would happen, writes nothing
+python login_once.py                 # the one login, carry-over included
+```
+
+`tgup_bridge.ensure_session()` performs the copy before `upload`, `fetch` and
+`bench` — and before `should_use_go_upload()` answers — so an authorized Python
+session is enough on its own. The rules:
+
+* the copy happens for this repo's own `tgup.session`, or wherever
+  `$TGUP_TELETHON_SESSION` names a source; `$TGUP_SESSION` pointing elsewhere
+  is a deliberate choice of session and is left untouched;
+* `$TGUP_TELETHON_SESSION=off` switches the whole carry-over off (the case
+  where `tgup` is deliberately logged into a different account);
+* the destination's DC config is kept, and the cached verdict beside a replaced
+  session is dropped rather than left vouching for the old key.
+
+Two cautions:
+
+* Do not run a Telethon upload and a `tgup` upload at the same instant — two
+  processes sharing one auth key fight over its salt.
+* A revoked key cannot be copied back to life. If Telegram reports
+  `AuthKeyUnregisteredError`, one real login is still required, and
+  `python login_once.py` does exactly that and carries the new key over in the
+  same command.
+
 ## Commands
 
 ```

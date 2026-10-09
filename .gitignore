@@ -69,3 +69,43 @@ HuggingFace_PaperWork/tokens.txt
 # source: regenerable from https://www.nasm.us/pub/nasm/releasebuilds/, so it
 # has no business in git. The .asm files it assembles DO live in git.
 tools/nasm/
+
+# tgup session verdict cache, written by real bench/upload/fetch round
+# trips (tgup_bridge.record_session_state). Runtime state, not source.
+tgup.session.state.json
+
+# Telegram session files -- THESE ARE LOGIN CREDENTIALS, not data.
+#
+# A Telethon/gotd .session file holds the account's auth key. Anyone who clones
+# the repo can connect as that account: read the file, open a client, done. No
+# OTP, no password. That is the same class of secret as api_hash, and it is
+# worse, because api_hash alone cannot log in and an auth key can.
+#
+# MEASURED 2026-10-09: three of these were TRACKED and their commits were
+# already PUSHED to origin (github.com/engrtarun/T_Dubber):
+#   tgup.session, x.session, telegram_uploader_session.session
+# in commits dee747b, bfa63a9, 31ece3f, f117a5d, 198962f, 4efa7b4.
+# Untracked with `git rm --cached` (files stay on disk -- the uploader needs
+# them). That stops the next commit from carrying a key; it does NOT un-publish
+# the old ones. See WE_ARE_TEAM.MD 2026-10-09 21:52 for the rotation step that
+# actually invalidates them.
+*.session
+*.session-journal
+*.session.bak
+
+# One-time login codes, passed to a script on stdin by whoever is logging in.
+# These are single-use, but a committed one is a committed login attempt, and
+# the habit that produces them is the habit that eventually commits the session.
+otp*.txt
+code*.txt
+
+# The SQLite database is runtime state, not source: db.connect()
+# creates and migrates it on first run (CREATE TABLE IF NOT EXISTS +
+# user_version pragma), so a fresh clone needs no committed DB -- and
+# a binary blob that changes on every run only pollutes history.
+# Removed from the index with `git rm --cached`; the file stays on
+# disk, and every tool that reads it (app, dashboard_server, doctor,
+# havaldar) goes through db.connect(), which recreates it.
+t_dubber.db
+t_dubber.db-shm
+t_dubber.db-wal

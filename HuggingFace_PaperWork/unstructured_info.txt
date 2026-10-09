@@ -1,0 +1,13 @@
+pocotarun/tdubber-edge
+https://huggingface.co/datasets/pocotarun/tdubber-edge
+
+
+from huggingface_hub import login, upload_folder
+
+
+login()
+
+
+upload_folder(folder_path=".", repo_id="pocotarun/tdubber-edge", repo_type="dataset")
+
+

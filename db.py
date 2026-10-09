@@ -504,8 +504,16 @@ def upsert_archive(journal: dict) -> int:
                 1 if journal.get("chunked") else 0,
                 int(journal.get("chunk_count") or 0),
                 int(journal.get("manifest", {}).get("chunk_size") or 0),
-                journal.get("message_id"),
-                journal.get("message_link"),
+                # The uploader journal calls these message_id/message_link;
+                # the database column they land in is called manifest_*.
+                # Accepting both names costs nothing -- what it buys is that a
+                # caller who used the column names (easy to do: they are what
+                # the reader returns) gets stored instead of a silent NULL,
+                # which is exactly how a Tier 0 hit quietly never happens.
+                journal.get("message_id")
+                if journal.get("message_id") is not None
+                else journal.get("manifest_msg_id"),
+                journal.get("message_link") or journal.get("manifest_link"),
                 journal.get("state"),
                 journal.get("error"),
                 journal.get("project_id"),

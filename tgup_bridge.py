@@ -43,6 +43,7 @@ call is refused up front with a reason, and the caller uses Telethon.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -54,6 +55,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+import telethon_session
 
 ROOT = Path(__file__).resolve().parent
 TGUP_DIR = ROOT
@@ -222,6 +225,34 @@ class GoUploadResult:
 # ---------------------------------------------------------------------------
 
 
+def _credentials_json(api_id, api_hash: str) -> str:
+    """Serialise the credentials the way the Go binary's struct expects them.
+
+    ``api_id`` arrives from ``config.json`` as a *string* ("35578684"), because
+    that is how it is stored. Go's credential struct declares the field as
+    ``int``, so passing the string through made the binary answer::
+
+        failed to parse JSON credentials: json: cannot unmarshal string into
+        Go struct field .api_id of type int
+
+    which is not a credential problem at all -- it is a type mismatch, and the
+    resulting failure looks like a network or login error to anyone reading the
+    log. ``auto_tuner`` therefore never once got a real benchmark and silently
+    fell back to the default concurrency, every single run.
+
+    Coercing here rather than at each call site means upload, bench and fetch
+    cannot drift apart.
+    """
+    if isinstance(api_id, bool):
+        # bool is an int subclass; "True" as an api_id is never intended.
+        api_id = 0
+    try:
+        api_id = int(str(api_id).strip())
+    except (TypeError, ValueError):
+        api_id = 0
+    return json.dumps({"api_id": api_id, "api_hash": api_hash}) + "\n"
+
+
 def session_path() -> Path:
     """Where tgup keeps its gotd session for this run.
 
@@ -257,6 +288,92 @@ def needs_login() -> bool:
     return not session_ready()
 
 
+# ---------------------------------------------------------------------------
+# Session verdict cache
+# ---------------------------------------------------------------------------
+
+# How long a cached verdict stays trusted. A session can be revoked at
+# any time, so a day-old yes is not a yes.
+SESSION_STATE_TTL_SECONDS = 24 * 60 * 60
+
+
+def session_state_path() -> Path:
+    """Where the last known session verdict is cached.
+
+    Beside the session itself, so a second session (``TGUP_SESSION``)
+    gets its own verdict instead of inheriting the first one's.
+    """
+    return session_path().with_name(session_path().name + ".state.json")
+
+
+def record_session_state(authorized: bool, detail: str = "") -> None:
+    """Cache what a real, authenticated tgup round trip proved.
+
+    Only an actual bench, fetch or upload can show whether Telegram
+    still accepts the session; this caches that verdict so ``check()``
+    and the UI can answer "is the session good?" without paying for
+    another process launch and network call on every status poll.
+    """
+    try:
+        session_state_path().write_text(
+            json.dumps({
+                "checked_at": datetime.datetime.now(
+                    datetime.timezone.utc).isoformat(timespec="seconds"),
+                "authorized": bool(authorized),
+                "detail": detail or "",
+            }),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass  # a missing cache must never break a run
+
+
+def session_state() -> dict:
+    """The tri-state answer for the Go session.
+
+    ``no_file`` -- there is no session to talk about.
+    ``present_unverified`` -- a file exists, but nothing has proved
+    Telegram still accepts it (the honest default).
+    ``verified_ok`` / ``verified_rejected`` -- a real round trip said
+    so, recently enough to still be trusted.
+    """
+    if not session_ready():
+        return {"state": "no_file"}
+    try:
+        data = json.loads(session_state_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"state": "present_unverified"}
+    checked_at = data.get("checked_at", "")
+    try:
+        stamp = datetime.datetime.fromisoformat(checked_at)
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+        age = (datetime.datetime.now(datetime.timezone.utc)
+               - stamp).total_seconds()
+    except ValueError:
+        age = None
+    if age is None or age > SESSION_STATE_TTL_SECONDS:
+        return {"state": "present_unverified"}
+    return {
+        "state": "verified_ok" if data.get("authorized") else "verified_rejected",
+        "checked_at": checked_at,
+        "detail": data.get("detail", ""),
+    }
+
+
+def _record_auth_verdict(returncode: int, human: str) -> None:
+    """Remember what a real tgup attempt proved about the session.
+
+    A clean exit proves the session is alive; tgup's own
+    "not authorized yet" proves it is not. Both are cached, so the
+    next status poll answers for free.
+    """
+    if "not authorized" in (human or "").lower():
+        record_session_state(False, _last_error(human))
+    elif returncode == 0:
+        record_session_state(True)
+
+
 def session_refusal(command: str) -> str:
     """Why ``command`` must not start, or "" when it may.
 
@@ -284,6 +401,64 @@ def _refuse(command: str, on_human: Callable[[str], None] | None) -> str:
         except Exception:  # noqa: BLE001 - a broken display never changes the answer
             pass
     return reason
+
+
+# ---------------------------------------------------------------------------
+# Adopting the Python login
+# ---------------------------------------------------------------------------
+
+
+def _adopt_allowed() -> bool:
+    """Whether this run may carry the Telethon login into the go session.
+
+    Two cases say yes, and they are deliberately different:
+
+    * ``$TGUP_TELETHON_SESSION`` names a source, so someone wants this to
+      happen wherever the session lives (a worker, a scratch dir in a test).
+    * No override: the destination is *this repo's own* ``tgup.session``, which
+      is the login everyone actually uses.
+
+    ``$TGUP_SESSION`` pointing somewhere else is a deliberate choice of session,
+    and quietly rewriting it from another file would be exactly the surprise
+    this codebase keeps refusing to spring on its operator.
+    """
+    if os.environ.get("TGUP_TELETHON_SESSION", "").strip():
+        return True
+    return session_path() == TGUP_DIR / DEFAULT_SESSION_NAME
+
+
+def ensure_session(on_human: Callable[[str], None] | None = None) -> str:
+    """Give tgup the session Python already logged into, so no OTP is needed.
+
+    ``tgup.session`` is gotd's format and starts unauthorized; Telegram's only
+    answer to that is a login code, which is the OTP this whole module exists
+    to stop wasting. The permanent auth key in ``telegram_uploader_session.session``
+    is already proof of the same login — 256 bytes, copied across — so before
+    refusing anything, upload/fetch/bench call this and adopt it.
+
+    Returns a one-line note when a session was actually written (``""``
+    otherwise), because "where did this session come from" is precisely the
+    question every previous run left unanswered.
+    """
+    if not _adopt_allowed():
+        return ""
+    try:
+        info = telethon_session.import_into(session_path())
+    except (telethon_session.TelethonSessionError, OSError):
+        return ""  # no Python login to carry over: the refusal still stands
+    if not info.get("imported"):
+        return ""
+    note = (
+        "session: adopted the Python login "
+        f"({info['source']} -> {info['dest']}, "
+        f"dc{info['dc']} {info['addr']}); no OTP needed"
+    )
+    if on_human is not None:
+        try:
+            on_human(note)
+        except Exception:  # noqa: BLE001 - a broken display never changes the answer
+            pass
+    return note
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +550,7 @@ def run_command(
 
 def upload(
     *,
-    file: str | os.PathLike,
+    file: str | os.PathLike = "",
     channel: str,
     api_id: int,
     api_hash: str,
@@ -386,23 +561,66 @@ def upload(
     result_out: str = "",
     caption: str = "",
     thumbnail: str = "",
+    url: str = "",
+    dry_run: bool = False,
+    url_timeout: float = 0.0,
     on_progress: Callable[[TransferProgress], None] | None = None,
     on_human: Callable[[str], None] | None = None,
 ) -> GoUploadResult:
-    """Upload a file with tgup, returning a result shaped like Python's own."""
-    reason = _refuse("upload", on_human)
+    """Upload a file with tgup, returning a result shaped like Python's own.
+
+    ``file`` and ``url`` are mutually exclusive and exactly one is required.
+    With ``url`` the payload is streamed straight into the upload, part by part:
+    a 9 GB video never first becomes 9 GB on this disk. tgup refuses a URL whose
+    origin cannot serve byte ranges rather than quietly downloading it, so a
+    failure here means "try the next tier", not "try harder".
+
+    ``dry_run`` needs no credentials and no session at all -- it plans, hashes
+    and writes the result file without sending a byte. That is what makes a link
+    checkable on a machine that has never been authorised.
+
+    The ``--file`` argument list is unchanged byte for byte, so every existing
+    caller (and every journal it wrote) keeps working unchanged.
+    """
+    # A dry run sends nothing, so it needs no session and must not be gated on
+    # one. The refusal exists to stop a headless worker from *spending a real
+    # OTP*; a dry run cannot spend anything, and blocking it meant the zero-disk
+    # path's "explain the failure without a session" step was unreachable on a
+    # machine that has never been authorised -- which is most of them.
+    if not dry_run:
+        ensure_session(on_human)
+    reason = "" if dry_run else _refuse("upload", on_human)
     if reason:
         return GoUploadResult(
             used_go=True, ok=False, fallback_reason=reason, error=reason
         )
-    args = [
-        "upload",
-        "--file", str(file),
+    if bool(str(file).strip()) == bool(str(url).strip()):
+        # Both or neither. Guessing here would pick one source and silently
+        # upload the wrong bytes, which is the worst available failure.
+        detail = (
+            "give either file= or url=, not both"
+            if str(file).strip()
+            else "give either file= or url="
+        )
+        if on_human:
+            on_human(f"tgup upload: {detail}")
+        return GoUploadResult(used_go=True, ok=False, error=detail,
+                              fallback_reason=detail)
+    args = ["upload"]
+    if str(url).strip():
+        args += ["--url", str(url).strip()]
+    else:
+        args += ["--file", str(file)]
+    args += [
         "--channel", channel,
         "--credentials-stdin",
         "--session", str(session_path()),
         "--concurrency", str(max(1, int(concurrency))),
     ]
+    if dry_run:
+        args += ["--dry-run"]
+    if url_timeout and float(url_timeout) > 0:
+        args += ["--url-timeout", f"{float(url_timeout):g}s"]
     if phone:
         args += ["--phone", phone]
     if plan_in:
@@ -416,10 +634,15 @@ def upload(
     if thumbnail:
         args += ["--thumbnail", str(thumbnail)]
 
-    creds_json = json.dumps({"api_id": api_id, "api_hash": api_hash}) + "\n"
+    creds_json = _credentials_json(api_id, api_hash)
     returncode, _stdout, human = run_command(
         args, on_progress=on_progress, stdin_text=creds_json, on_human=on_human
     )
+    if not dry_run:
+        # A dry run proves nothing about the session: it never contacts
+        # Telegram, so recording "authorized" from one is how a dead session
+        # ended up cached as verified_ok and trusted for a day.
+        _record_auth_verdict(returncode, human)
     return _result_from(result_out, returncode, human, on_human)
 
 
@@ -435,6 +658,7 @@ def fetch(
     on_progress: Callable[[TransferProgress], None] | None = None,
 ) -> GoUploadResult:
     """Restore an archive with tgup."""
+    ensure_session()
     reason = session_refusal("fetch")
     if reason:
         return GoUploadResult(
@@ -453,8 +677,9 @@ def fetch(
     if result_out:
         args += ["--result-out", str(result_out)]
 
-    creds_json = json.dumps({"api_id": api_id, "api_hash": api_hash}) + "\n"
+    creds_json = _credentials_json(api_id, api_hash)
     returncode, _stdout, human = run_command(args, on_progress=on_progress, stdin_text=creds_json)
+    _record_auth_verdict(returncode, human)
     return _result_from(result_out, returncode, human, None)
 
 
@@ -470,6 +695,7 @@ def bench(
     on_human: Callable[[str], None] | None = None,
 ) -> dict:
     """Measure single-stream vs concurrent throughput against Telegram."""
+    ensure_session(on_human)
     reason = session_refusal("bench")
     if reason:
         return {"ok": False, "returncode": 2, "log": reason, "rows": {},
@@ -487,8 +713,9 @@ def bench(
     if result_out:
         args += ["--result-out", str(result_out)]
 
-    creds_json = json.dumps({"api_id": api_id, "api_hash": api_hash}) + "\n"
+    creds_json = _credentials_json(api_id, api_hash)
     returncode, _stdout, human = run_command(args, on_human=on_human, stdin_text=creds_json)
+    _record_auth_verdict(returncode, human)
     return {
         "ok": returncode == 0,
         "returncode": returncode,

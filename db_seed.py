@@ -9,7 +9,10 @@ import json
 import os
 import sys
 
-ROOT = r"C:\Users\pocot\Music\T_Dubber"
+# Resolve from this file's location, never a baked-in absolute path: the
+# hardcoded C:\Users\... original made the repair step in doctor.ps1 fail on
+# any other checkout.
+ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
 import db  # noqa: E402

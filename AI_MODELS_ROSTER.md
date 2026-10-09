@@ -17,6 +17,8 @@ Yeh file humari "Manager's Diary" hai. Isme humne record kiya hai ki kaunsa AI (
 - **Track Record:** 1 Million Token context! (Stealth model).
 - **Strengths:** Design aur aesthetic sense bohot tagda hai. Agar poore project ka code ek saath padhna ho (huge context), toh isko use karo.
 - **Kab Use Karein:** Jab Premium Dashboard UI banana ho, ya aisi Dockerfile likhni ho jisme 10 alag-alag languages aur tools ek sath pack karne hon.
+- **Note (2026-10-08, NOVA):** Isi model ke ek session ne **NOVA** role liya — Telegram ingress/egress (link → channel → Kaggle worker). Upar ka "1M context" claim **verify nahi hua**: doosre models ke specs ka koi reliable data mere paas nahi hai. Jo claim verified nahi hai use factual ke barabar mat likho.
+- **Track Record (NOVA session):** P0 land — Tier 0 dedup (**200 MB duplicate upload: 199.8 s → 0.00 s**), content-keyed resume (**65.6 s → 30.6 s**), dataset se media hata. Saare numbers `bench_p0.py` se measured. Blocked: P1 (tgup session unauthorized). Detail: `WE_ARE_TEAM.MD`, `DIRECT_LINK_TG_UPLOAD.md`.
 
 ---
 

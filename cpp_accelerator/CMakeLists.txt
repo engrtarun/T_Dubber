@@ -113,12 +113,14 @@ if(NORMALIZER_ASM AND NASM_EXECUTABLE)
             "NASM assembler" FORCE)
         enable_language(ASM_NASM)
 
-        # Two kernels, one NASM invocation each. normalizer_gate_gain.asm is
+        # Three kernels, one NASM invocation each. normalizer_gate_gain.asm is
         # the gate/gain inner loop; stitcher_mix.asm is the timeline mixer that
         # replaces three scalar loops (and a per-sample modulo) in the
-        # stitcher. Both are optional and both degrade to their scalar paths.
+        # stitcher; stitcher_io.asm folds the WAV channel mix and the int16
+        # quantise. All are optional and all degrade to their scalar paths.
         set(NORMALIZER_ASM_SOURCES kernels/normalizer_gate_gain.asm)
-        set(STITCHER_ASM_SOURCES kernels/stitcher_mix.asm)
+        set(STITCHER_ASM_SOURCES kernels/stitcher_mix.asm
+                                 kernels/stitcher_io.asm)
         set(NORMALIZER_HAVE_ASM ON)
         set(STITCHER_HAVE_ASM ON)
         message(STATUS "normalizer: AVX2 kernels ON  (${NASM_EXECUTABLE}, ${_nasm_format})")
@@ -131,12 +133,21 @@ if(NOT NORMALIZER_HAVE_ASM)
 endif()
 
 # ---------------------------------------------------------------------------
-# Optional AVX2 timeline mixer: kernels/stitcher_mix.asm + stitcher_mix.cpp.
+# Optional AVX2 stitcher kernels: kernels/stitcher_mix.asm + kernels/stitcher_io.asm
+# + stitcher_mix.cpp.
 #
 # Separate target from `normalizer`, because the stitcher is the consumer: the
-# Rust binary is what calls these three entry points, and it links them as a
-# static library. Building it into the normalizer CLI would give the wrong
-# binary the symbol and leave the Rust side still on its scalar loops.
+# Rust binary is what calls these entry points, and it links them as a static
+# library. Building it into the normalizer CLI would give the wrong binary the
+# symbol and leave the Rust side still on its scalar loops.
+#
+# stitcher_io.asm goes in HERE rather than in a library of its own, and that is
+# a decision rather than a convenience: it adds two entry points and no second
+# CPUID probe. td_stitcher_mix_ready() already answers "can this CPU run the
+# AVX2 path", and one answer for both files is the only way the two files can
+# be guaranteed to agree about it. A td_stitcher_io_ready() that could disagree
+# with it would make the failure mode a fault on a farm node instead of a clean
+# scalar fallback.
 # ---------------------------------------------------------------------------
 if(STITCHER_HAVE_ASM)
     add_library(td_stitcher_mix STATIC
@@ -182,6 +193,16 @@ if(STITCHER_HAVE_ASM AND NORMALIZER_BUILD_TESTS)
     target_compile_definitions(mix_equivalence_test PRIVATE TD_STITCHER_HAVE_ASM=1)
     foreach(_warn IN LISTS NORMALIZER_WARNINGS)
         target_compile_options(mix_equivalence_test PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${_warn}>")
+    endforeach()
+
+    add_executable(io_equivalence_test
+                   tests/io_equivalence_test.cpp
+                   stitcher_mix.cpp
+                   ${STITCHER_ASM_SOURCES})
+    target_include_directories(io_equivalence_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_definitions(io_equivalence_test PRIVATE TD_STITCHER_HAVE_ASM=1)
+    foreach(_warn IN LISTS NORMALIZER_WARNINGS)
+        target_compile_options(io_equivalence_test PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${_warn}>")
     endforeach()
 endif()
 

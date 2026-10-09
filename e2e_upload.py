@@ -1,5 +1,5 @@
 """
-End-to-end proof: upload LuciferS01E13.mkv to Telegram, then verify the archive.
+End-to-end proof: upload a real file to Telegram, then verify the archive.
 
 Prints a live log, ends with the manifest link, and independently re-reads the
 manifest from Telegram to confirm every part really landed with the size we
@@ -7,8 +7,12 @@ sent. Optionally performs a full restore so the reassembled file is compared
 byte for byte against the source.
 
 Usage:
-  python e2e_upload.py            upload + verify manifest
-  python e2e_upload.py --restore  also download everything and compare SHA-256
+  python e2e_upload.py <file>            upload + verify manifest
+  python e2e_upload.py <file> --restore  also download everything and compare SHA-256
+
+The source used to be a hardcoded LuciferS01E13.mkv that is not in the repo,
+which made this script impossible to run. Passing the path makes it a real
+tool again.
 """
 
 import hashlib
@@ -17,14 +21,16 @@ import os
 import sys
 import time
 
-ROOT = r"C:\Users\pocot\Music\T_Dubber"
+# Resolve from this file's location, never a baked-in absolute path.
+ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
 import app  # noqa: E402
 import telegram_uploader as tg  # noqa: E402
 
-SOURCE = os.path.join(ROOT, "LuciferS01E13.mkv")
 DO_RESTORE = "--restore" in sys.argv
+_positional = [a for a in sys.argv[1:] if not a.startswith("--")]
+SOURCE = os.path.realpath(_positional[0]) if _positional else None
 
 
 def stamp():
@@ -36,6 +42,8 @@ def log(message):
 
 
 def main():
+    if not SOURCE:
+        raise SystemExit("usage: python e2e_upload.py <file> [--restore]")
     if not os.path.isfile(SOURCE):
         raise SystemExit(f"source missing: {SOURCE}")
 

@@ -114,7 +114,7 @@ $required = @{
     "telethon" = "Telegram uploads"
     "yt_dlp"   = "link resolution"
     "kaggle"   = "the Kaggle orchestrator"
-    "requests" = "telegram_backup.py"
+    "requests" = "archive/telegram_backup.py (dead - see archive/README.md)"
 }
 foreach ($pkg in $required.Keys | Sort-Object) {
     $found = & python -c "import $pkg" 2>&1

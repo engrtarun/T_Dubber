@@ -41,7 +41,7 @@
 // --------
 //
 //	plan    split a file and hash each part (offline)
-//	upload  send the parts over several connections
+//	upload  send the parts over several connections, from a file or a URL
 //	fetch   pull an archive back and verify every part
 //	bench   measure single-stream vs concurrent throughput
 package main
@@ -118,11 +118,17 @@ type Part struct {
 // Plan is the on-disk layout: how a file divides and what each part hashes to.
 // A part carrying a SHA256 in a saved plan has already been stored, which is
 // what makes resume work.
+//
+// Source records where the bytes came from (an absolute path, or a redacted
+// URL). It is not decoration: resume trusts the offsets in this file, so a plan
+// built from a different payload would stitch together bytes from two files
+// that have nothing in common. see sameSource in source.go.
 type Plan struct {
 	Version   int    `json:"version"`
 	ChunkSize int64  `json:"chunk_size"`
 	TotalSize int64  `json:"total_size"`
 	Filename  string `json:"filename"`
+	Source    string `json:"source,omitempty"`
 	CreatedAt string `json:"created_at"`
 	Parts     []Part `json:"parts"`
 }
@@ -317,7 +323,7 @@ func hashWhole(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func buildPlan(path string, size, chunkSize int64) Plan {
+func buildPlan(name, source string, size, chunkSize int64) Plan {
 	if chunkSize <= 0 {
 		chunkSize = DefaultChunkSize
 	}
@@ -325,7 +331,8 @@ func buildPlan(path string, size, chunkSize int64) Plan {
 		Version:   1,
 		ChunkSize: chunkSize,
 		TotalSize: size,
-		Filename:  filepath.Base(path),
+		Filename:  sanitise(filepath.Base(name)),
+		Source:    source,
 		CreatedAt: nowStamp(),
 	}
 	if size <= chunkSize {
