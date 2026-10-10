@@ -57,7 +57,7 @@ func run() error {
 	var (
 		baseURL = flag.String("url", os.Getenv("EDGE_URL"), "Space base URL, e.g. https://user-space.hf.space")
 		dest    = flag.String("dest", envOr("EDGE_DEST", "./artefacts"), "destination directory")
-		role    = flag.String("role", os.Getenv("EDGE_ROLE"), "restrict to a role: pylibs, weights, pack, or empty for all")
+		role    = flag.String("role", os.Getenv("EDGE_ROLE"), "restrict to a role: pylibs, weights, pack, gguf, or empty for all")
 		timeout = flag.Duration("timeout", 0, "overall deadline; 0 means none")
 		// retries is deliberately small. This runs inside a notebook cell whose
 		// own timeout is the real bound; spinning here delays the fallback.

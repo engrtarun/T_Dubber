@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "comment": "GGUF model roster. This is the Python-side mirror of edge/model_gguf.go; edge/model_gguf_test.go compares the two field-for-field and fails the build if they drift, so edit both or neither. Resolved in the same order as hf_store.py: mounted Kaggle input -> HF_HOME cache -> edge Space -> huggingface hub (see gguf_store.py).",
+  "digest_policy": "sha256_verified=false means NO digest is published and the fetch is size-checked only. A digest is never invented: a wrong digest fails verification forever and names a value nobody recognises, which is strictly worse than an absent one.",
+  "models": [
+    {
+      "id": "homura-2b-q4_k_m",
+      "repo": "IndexTeam/Index-Homura-2B-GGUF",
+      "file": "Index-Homura-2B.Q4_K_M.gguf",
+      "quant": "Q4_K_M",
+      "task": "llm",
+      "sha256": "3fc56945f1db4c2b91b18ac9f4061b354d51c226a6fdd9ea95e72a927f13a675",
+      "sha256_verified": true,
+      "sha256_source": "IndexTeam/Index-Homura-2B-GGUF:SHA256SUMS.txt + huggingface lfs oid",
+      "size_bytes": 1312164480,
+      "ctx_tokens": 262144,
+      "notes": "DEFAULT llm. Publisher calls Q4_K_M the recommended tier; 1.31 GB versus the vLLM+torch download it replaces."
+    },
+    {
+      "id": "homura-2b-q5_k_m",
+      "repo": "IndexTeam/Index-Homura-2B-GGUF",
+      "file": "Index-Homura-2B.Q5_K_M.gguf",
+      "quant": "Q5_K_M",
+      "task": "llm",
+      "sha256": "3f206ccb12c3d753ad132c22f6360a842de7a0849308a69c6f43355bee91fd20",
+      "sha256_verified": true,
+      "sha256_source": "IndexTeam/Index-Homura-2B-GGUF:SHA256SUMS.txt + huggingface lfs oid",
+      "size_bytes": 1454787200,
+      "ctx_tokens": 262144,
+      "notes": "Fallback when a translation quality regression shows up."
+    },
+    {
+      "id": "homura-2b-q8_0",
+      "repo": "IndexTeam/Index-Homura-2B-GGUF",
+      "file": "Index-Homura-2B.Q8_0.gguf",
+      "quant": "Q8_0",
+      "task": "llm",
+      "sha256": "e3aa4850c1f4779328af5d721383bb5785dfdd7836f5a82976336c21178c7754",
+      "sha256_verified": true,
+      "sha256_source": "IndexTeam/Index-Homura-2B-GGUF:SHA256SUMS.txt + huggingface lfs oid",
+      "size_bytes": 2076674688,
+      "ctx_tokens": 262144,
+      "notes": "Near-lossless; re-run for quality, not throughput."
+    },
+    {
+      "id": "homura-2b-f16",
+      "repo": "IndexTeam/Index-Homura-2B-GGUF",
+      "file": "Index-Homura-2B.f16.gguf",
+      "quant": "f16",
+      "task": "llm",
+      "sha256": "4d71154c3ac68699138822ef4373071b08ac615bbdcaaa758c45490488514bac",
+      "sha256_verified": true,
+      "sha256_source": "IndexTeam/Index-Homura-2B-GGUF:SHA256SUMS.txt + huggingface lfs oid",
+      "size_bytes": 3897387648,
+      "ctx_tokens": 262144,
+      "notes": "Lossless baseline; the quantised tiers were validated against it, so it has to stay fetchable for a regression check to mean anything."
+    },
+    {
+      "id": "homura-2b-mmproj-q8_0",
+      "repo": "IndexTeam/Index-Homura-2B-GGUF",
+      "file": "Index-Homura-2B.mmproj-Q8_0.gguf",
+      "quant": "Q8_0",
+      "task": "llm",
+      "sha256": "de0f4f784b4437d84baab7ed2e0ead657070eadf165da97cc0df63ad9fdb677d",
+      "sha256_verified": true,
+      "sha256_source": "IndexTeam/Index-Homura-2B-GGUF:SHA256SUMS.txt + huggingface lfs oid",
+      "size_bytes": 361518336,
+      "ctx_tokens": 0,
+      "notes": "Vision projector for llama-mtmd-cli. Text-only dubbing does not need it. ctx_tokens 0 because a projector has no context window."
+    },
+    {
+      "id": "whisper-large-v3-turbo",
+      "repo": "ggerganov/whisper.cpp",
+      "file": "ggml-large-v3-turbo.bin",
+      "quant": "fp16",
+      "task": "asr",
+      "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+      "sha256_verified": true,
+      "sha256_source": "huggingface lfs oid",
+      "size_bytes": 1624555275,
+      "ctx_tokens": 1500,
+      "notes": "DEFAULT asr. Replaces Systran/faster-whisper-large-v3. ctx_tokens 1500 is the whisper mel window: 30 s of audio, so the chunker cuts here."
+    },
+    {
+      "id": "whisper-base",
+      "repo": "ggerganov/whisper.cpp",
+      "file": "ggml-base.bin",
+      "quant": "fp16",
+      "task": "asr",
+      "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+      "sha256_verified": true,
+      "sha256_source": "huggingface lfs oid",
+      "size_bytes": 147951465,
+      "ctx_tokens": 1500,
+      "notes": "144 MB, for a tight-VRAM run or a smoke test."
+    },
+    {
+      "id": "whisper-small",
+      "repo": "ggerganov/whisper.cpp",
+      "file": "ggml-small.bin",
+      "quant": "fp16",
+      "task": "asr",
+      "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+      "sha256_verified": true,
+      "sha256_source": "huggingface lfs oid",
+      "size_bytes": 487601967,
+      "ctx_tokens": 1500,
+      "notes": "Middle tier."
+    }
+  ]
+}

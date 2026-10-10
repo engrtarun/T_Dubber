@@ -8,7 +8,7 @@ overlap na ho.
 | # | Agent / Area | Topic | Evidence (git status / folder) |
 |---|---|---|---|
 | 1 | **cpp_accelerator** | C++20 + **NASM assembly** kernels. Ab 3 files hain: `normalizer_gate_gain.asm` (AVX2 gate/gain), `stitcher_mix.asm` (AVX2 timeline mixer -- lay/duck/add_voice), aur **`stitcher_io.asm` (naya -- WAV int16 quantise)**. CMake wiring, per-kernel equivalence tests. | `kernels/stitcher_io.asm`, `stitcher_io.h`, `tests/io_equivalence_test.cpp`, `M CMakeLists.txt` |
-| 7 | **hf_store** (naya area) | Hugging Face resolver: mounted → HF_HOME → edge → hub. 4 bugs fix + 16 regression checks. | `huggingface/hf_store.py`, `huggingface/test_hf_store.py`, `huggingface/SETUP_HF.md` |
+| 7 | **hf_store / gguf_store** (naya area) | Hugging Face resolver: mounted → HF_HOME → edge → hub. 4 bugs fix + 16 regression checks. Ab **gguf_store.py**: torch-free `.gguf` path -- `models_gguf.json` roster + `/gguf/` route, Range resume, digest header. | `huggingface/hf_store.py`, `huggingface/test_hf_store.py`, `huggingface/gguf_store.py`, `huggingface/models_gguf.json`, `huggingface/test_gguf_store.py` |
 | 2 | **mazinger** (submodule) | Dubbing engine v2.3.2: 10 stages (Download→Transcribe→Thumbnails→Describe→Review→Translate→Re-segment→Speak→Assemble→Subtitle). TTS engines: Qwen3-TTS, OmniVoice, Chatterbox. ASR: faster-whisper, CohereX, Deepgram. | ` m mazinger` (submodule dirty) |
 | 3 | **edge/** (NEW) | Go HTTP service -- Hugging Face Space ka role. 24/7 pylibs + Homura weights server (sha256 content-addressed manifest). Kaggle ke 903s setup time (74% of run) ko kill karta hai. | `?? edge/` (`edge.go`, `server.go`) |
 | 4 | **telegram_uploader / tgup** | Telethon upload path + Go `tgup` uploader (multipart, resume journal, concurrency auto-tune). Session handling. | `M telegram_uploader_session.*`, `M tgup.exe`, `M tgup.session` |
@@ -21,7 +21,7 @@ overlap na ho.
 |---|---|
 | `multitasker.py` | 3-thread producer/consumer pipeline (downloader → GPU → uploader), bounded queues, JSONL ledger se resume, legacy-quality validation gate, **+ LipSyncWorker aur run_lip_sync_phase (post-dub mouth re-render)** |
 | `multitasker_test.py` | Local proof: overlap (9s wall vs 12s serial), resume, failure isolation, **lip-sync overlap (7s vs 9s), lip-sync flag**. **ALL PASS (5/5)** |
-| `huggingface/` | HF connector: `models.json` roster, `hf_store.py` (mounted→HF_HOME→edge→hub resolution), `seed_cache.py` (Kaggle cache dataset pre-pull), `.env.example` |
+| `huggingface/` | HF connector: `models.json` roster, `hf_store.py` (mounted→HF_HOME→edge→hub resolution), `gguf_store.py` (GGUF/PyTorch-free resolver, same order), `seed_cache.py` (Kaggle cache dataset pre-pull), `.env.example` |
 | `lip_sync/` | **NEW**: `lip_sync.py` provider abstraction (MuseTalk default ~4GB VRAM MIT / Wav2Lip torch-only fallback / Fake for tests), `LIP_SYNC.md` (model research + Kaggle fit + test plan) |
 | `kaggle_worker.ipynb` | Cell 4 = multitasker, Cell 5 = lip-sync (vLLM stop → GPU free), Cell 6 = legacy single-file path (bypass-guard, **deleted nahi**) |
 | `wire_multitasker.py` | Notebook wiring script (idempotent) |
@@ -89,6 +89,35 @@ Saare `stitcher_io.asm` ke header me likhe hain -- agli baar same galti na ho.
 Proof: `huggingface/test_hf_store.py` -- 16 checks, real localhost HTTP server
 (mock urllib se galat route chhoot jata, isliye mock nahi kiya).
 
+### GGUF path (`edge/model_gguf.go` + `huggingface/gguf_store.py`)
+
+Kaggle `test4_gotgVERSION`: 1067s of 1258s pip me vLLM+torch+CUDA lagta tha,
+phir `libcudart.so.13` pe crash. Torch stack jaa raha hai; llama.cpp/whisper.cpp
+har stage ke liye **ek file** load karte hain (`.gguf` / ggml `.bin`).
+
+* **Roster duplicat hai, mirrored hai**: `models_gguf.json` = Python copy of
+  `edge/model_gguf.go`; Go test `TestPythonRosterMirrorMatchesGo` field-for-field
+  compare karta hai, digest drift build fail hoti hai. Digest kabhi invent nahi
+  hoti -- `sha256=""` ⇒ size-check only.
+* **Same precedence, same order**: mounted → HF_HOME → edge `/gguf/<file>` →
+  hub `/resolve/<rev>/<file>`. `.gguf` ek file hai, isliye `ensure_gguf()` Path
+  return karta hai (snapshot DIR nahi).
+* **`/gguf/` route**: singular, ek bare filename. `X-Content-Sha256` header body
+  se pehle digest deta hai, `Range` resume ke liye. `edge/server.go` +
+  `gguf_server_test.go` (4 tests) -- sab PASS.
+* **Verify-then-delete**: size pehle, phir streaming sha256; mismatch pe file
+  DELETE + raise (cache hit bhi verify hota hai -- "wrote kab theek tha" hi
+  truncated download ka claim hai). Hub last resort pe `GgufError` raise karta
+  hai; baaki sab degrade → `None`.
+* **Resume**: `.part` bach raha hai to `Range: bytes=N-` se aage badhta hai,
+  digest poore file ka hota hai (prefix + tail). Server Range ignore kare to
+  200 pe digest zero se restart.
+
+Proof: `huggingface/test_gguf_store.py` -- 9 functions, real localhost servers
+(roster mirror, URL shapes, 4 discovery layouts, edge fetch + wrong digest,
+resume + Range-ignored, hub fallback via `HF_ENDPOINT`, warm_status, CLI).
+`python huggingface/test_gguf_store.py` → PASS exit 0; `go test ./...` → PASS.
+
 ### `multitasker_test.py` flake fix
 
 `assert elapsed < 12.0` ek wall-clock deadline hai. Docker Desktop boot hone
@@ -113,6 +142,11 @@ indirection ke saath. Asli win (48k→24k me `frac` sirf 2 values leta hai →
 | `cpp_accelerator/stitcher_io.h` | struct layout + symbol (asm/header/test teeno ek baat bolte hain) |
 | `cpp_accelerator/tests/io_equivalence_test.cpp` | equivalence + canary + benchmark |
 | `huggingface/test_hf_store.py` | 16 regression checks |
+| `huggingface/gguf_store.py` | PyTorch-free `.gguf` resolver: same precedence as hf_store, digest/`Range` resume, `HF_ENDPOINT` seam |
+| `huggingface/models_gguf.json` | GGUF roster mirror (`edge/model_gguf.go`) -- Go test enforces sync |
+| `huggingface/test_gguf_store.py` | gguf resolver regression checks (localhost, no network) |
+| `edge/model_gguf.go` + `edge/model_gguf_test.go` | GGUF roster + validation + mirror test |
+| `edge/gguf_server_test.go` | `/gguf/` route: role, manifest, digest header, Range, 404s |
 | `huggingface/SETUP_HF.md` | "kaha kya karna hai" -- setup steps + troubleshoot |
 
 ---

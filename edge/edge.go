@@ -90,7 +90,7 @@ type Entry struct {
 	Name string `json:"name"`
 
 	// Role lets a client select a subset without hardcoding file names:
-	// "pylibs", "weights", "pack".
+	// "pylibs", "weights", "pack", "gguf".
 	Role string `json:"role"`
 
 	SizeBytes int64  `json:"size_bytes"`
@@ -206,6 +206,11 @@ const ScratchDirName = ".scratch"
 
 // roleFor classifies by path so the client can ask for "weights" without
 // hardcoding a filename that will change on the next publish.
+//
+// "gguf" is the one role whose payload is a single file rather than an archive:
+// the /gguf/ route serves it with its digest in X-Content-Sha256, and
+// edge-fetch must never unpack it -- IsArchive already returns false for a
+// .gguf/.bin, so the unpack pass skips it as-is.
 func roleFor(rel string) string {
 	name := filepath.ToSlash(rel)
 	switch {
@@ -215,6 +220,8 @@ func roleFor(rel string) string {
 		return "weights"
 	case strings.HasPrefix(name, "pack/"):
 		return "pack"
+	case strings.HasPrefix(name, GgufDirName+"/"):
+		return "gguf"
 	default:
 		return "other"
 	}

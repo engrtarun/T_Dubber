@@ -93,10 +93,73 @@ The 74 s row is the one worth keeping: a 400 MB sample of the payload actually
 ships compressed at a ratio of **1.000** and decompresses at 121 MB/s, so
 `tar.gz` would have cost a minute and a quarter of CPU to move the same bytes.
 
+## GGUF models — the PyTorch-free path
+
+The `.tar` artefacts above still assume a torch stack. They are being retired for
+model weights, because the torch stack is what Kaggle run `test4_gotgVERSION`
+spent **1067 s of 1258 s** installing before it died on
+`ImportError: libcudart.so.13`. vLLM 0.26.0 ships CUDA 13 wheels; the Kaggle
+image ships CUDA 12, and no pin fixes that from the inside.
+
+The replacement loads a **single file** per stage — a `.gguf` for the
+translation model (llama.cpp), a ggml `.bin` for whisper (whisper.cpp) — and
+`huggingface/gguf_store.py` is the resolver for it. The 9–10 GB torch/pip storm
+becomes a 1.31 GB file plus a 1.62 GB file.
+
+**One roster, mirrored.** `huggingface/models_gguf.json` is the Python mirror of
+`edge/model_gguf.go`. A Go test (`TestPythonRosterMirrorMatchesGo`) compares the
+two field-for-field, so a digest cannot drift: same ids, same `file`, same
+`sha256`, same `size_bytes`, same defaults. **A digest is never invented** — a
+row with no confirmed digest carries `"sha256_verified": false` and is
+size-checked only, which is strictly better than a made-up value that fails
+verification forever.
+
+**The same precedence chain as `hf_store`, on purpose.** `ensure_gguf()` resolves
+in the order hf_store already uses, cheapest first:
+
+1. **mounted** — a Kaggle input dataset, already local, zero bytes;
+2. **HF_HOME** — `gguf/<file>`, `edge-gguf/<file>`, or a hub `snapshots/<rev>/`
+   copy from an earlier session;
+3. **edge** — the repo's own Space, `GET /gguf/<file>`;
+4. **hub** — `<hub>/<repo>/resolve/<rev>/<file>`.
+
+Steps 1 and 2 still verify before returning: "correct when it was written" is
+exactly the claim a truncated download makes. A mismatch **deletes** the file and
+raises, so a corrupt model cannot be silently loaded on the next run.
+
+**Why `/gguf/` and not `/artifact/`.** A `.gguf` is one file, so the edge route
+is task-shaped: one bare filename, and the digest travels in the
+`X-Content-Sha256` header *before* the body. That lets a client with no digest of
+its own decide what to verify against without first paying for 1.6 GB — and it
+still supports `Range`, so a reaped session resumes rather than restarts.
+
+Defaults, both loadable from either side: **llm** = `homura-2b-q4_k_m`
+(`IndexTeam/Index-Homura-2B-GGUF`, Q4_K_M, 1.31 GB), **asr** =
+`whisper-large-v3-turbo` (`ggerganov/whisper.cpp`, fp16, 1.62 GB).
+
+```python
+import gguf_store
+path = gguf_store.ensure_gguf("whisper-large-v3-turbo")   # or task="asr"
+gguf_store.warm_status()                                   # one row per roster entry
+```
+
+```powershell
+python huggingface/gguf_store.py               # warm status table
+python huggingface/gguf_store.py --ensure       # fetch every missing model
+python huggingface/gguf_store.py homura-2b-q4_k_m
+```
+
+Every failure degrades instead of crashing, with one deliberate exception: the
+**hub** step raises `GgufError` rather than returning `None`, because by then the
+caller has asked for a model *by name* and continuing silently is a dub that
+produces no subtitles and a green log.
+
 ## Verification, in the order worth doing
 
 ```powershell
 go test ./...                      # edge: 60+ tests incl. traversal/symlink/unpack
+python huggingface/test_hf_store.py    # torch-era resolver: 16 regression checks
+python huggingface/test_gguf_store.py  # gguf resolver: roster, routes, resume, degradation
 edge-publish -stage hf-repo -add pylibs=<tree>       # digest printed
 edge-server (EDGE_ROOT=...)                          # optional: local origin
 edge-fetch -url ... -dest ... -unpack-dir ... -role pylibs

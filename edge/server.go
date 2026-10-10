@@ -1,10 +1,33 @@
 // HTTP transport for the Space.
 //
-// Two endpoints, both stateless:
+// Four endpoints, all stateless:
 //
 //	GET  /healthz              liveness, no artefact access
 //	GET  /manifest.json        the artefact manifest
 //	GET  /artifact/<name>      one artefact, with Range and ETag support
+//	GET  /gguf/<file>          one model blob, with its sha256 in a header
+//
+// WHY A SECOND MODEL ROUTE WHEN /artifact/ ALREADY SERVES BYTES
+// -------------------------------------------------------------
+// /artifact/ is generic: it serves anything under the root and it has no idea
+// what a model is. The client fetching a .gguf has a problem /artifact/ cannot
+// answer on its own -- it needs the DIGEST of the blob it is about to download,
+// before it commits the transfer, and it needs to know the name it is asking for
+// is a model rather than some unrelated file that happens to share the tree.
+//
+// /gguf/<file> is that lookup, by role instead of by full path:
+//
+//   - it resolves the name against the roster's own layout, so a model is
+//     addressed as a model ("ggml-base.bin") rather than as a path the caller
+//     had to reconstruct
+//   - it returns X-Content-Sha256, so the client knows what it is verifying
+//     against before it spends the bandwidth
+//   - it also answers by basename, so a Space that keeps models under weights/
+//     (where the old tarball packs put them) serves this route without anyone
+//     moving 2 GB of files for the sake of a URL
+//
+// The bytes are the same bytes /artifact/ would serve and both routes go through
+// the same containment check, so this adds addressing, not a second way in.
 //
 // WHY RANGE AND ETAG MATTER HERE
 // -----------------------------
@@ -38,6 +61,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -150,6 +174,7 @@ func NewServer(cfg Config) (*Server, error) {
 	s.mux.HandleFunc("/healthz", s.requireGET(s.handleHealth))
 	s.mux.HandleFunc("/manifest.json", s.requireGET(s.handleManifest))
 	s.mux.HandleFunc("/artifact/", s.requireGET(s.handleArtifact))
+	s.mux.HandleFunc("/gguf/", s.requireGET(s.handleGguf))
 
 	// Anything else is a 404 from the mux. Deliberately not a redirect to a
 	// dashboard: this service has no UI, and inventing one would mean serving
@@ -274,8 +299,116 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entry, _ := s.findEntry(name)
-	etag := `"` + entry.SHA256 + `"`
-	if entry.SHA256 == "" {
+	s.serveBlob(w, r, name, full, info, entry.SHA256, nil)
+}
+
+// handleGguf serves one model blob, addressed by ONE bare filename.
+//
+// Exactly one path segment, and nothing else. /artifact/ is the route for paths;
+// this one is for the question "give me the file called ggml-base.bin", and
+// accepting "gguf/ggml-base.bin" or "a/b.gguf" would make the route's answer
+// depend on a fallback search -- two spellings, one meaning, and a client that
+// guesses wrong gets a 200 from the wrong path or a 404 for a model that is
+// sitting right there.
+func (s *Server) handleGguf(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/gguf/")
+	if unescaped, err := url.PathUnescape(name); err == nil {
+		name = unescaped
+	}
+	name = strings.Trim(name, "/")
+	if name == "" || strings.ContainsAny(name, "/\\") {
+		http.Error(w, "gguf not published", http.StatusNotFound)
+		return
+	}
+
+	full, entry, ok := s.resolveGguf(name)
+	if !ok {
+		http.Error(w, "gguf not published", http.StatusNotFound)
+		return
+	}
+	info, err := os.Stat(full)
+	if err != nil || info.IsDir() {
+		http.Error(w, "gguf not published", http.StatusNotFound)
+		return
+	}
+
+	// The digest gets a header of its own as well as serving as the ETag. The
+	// header is what the client reads to decide WHAT to verify against before it
+	// commits the transfer; the ETag is what it revalidates with afterwards.
+	s.serveBlob(w, r, name, full, info, entry.SHA256, map[string]string{
+		GgufSHAHeader: entry.SHA256,
+	})
+}
+
+// resolveGguf maps a bare model filename onto a file under the artefact root.
+//
+// gguf/<name> is tried first. If it is not there, any manifest entry whose ROLE is
+// "gguf" and whose basename matches is used -- that is what lets a Space that
+// keeps its models under weights/ (where the old tarball packs put them) answer
+// this route without anyone moving 2 GB of files for the sake of a URL. The role
+// check is what keeps that fallback from turning the route into a second,
+// weaker /artifact/.
+//
+// Both paths go through Resolve, so a crafted name is contained by exactly the
+// same check.
+func (s *Server) resolveGguf(name string) (string, Entry, bool) {
+	if full, err := Resolve(s.cfg.ArtefactRoot, GgufDirName+"/"+name); err == nil {
+		if info, statErr := os.Stat(full); statErr == nil && info.Mode().IsRegular() {
+			return full, s.entryForName(name), true
+		}
+	}
+
+	m, err := LoadManifest(s.cfg.ArtefactRoot)
+	if err != nil {
+		return "", Entry{}, false
+	}
+	for _, e := range m.Entries {
+		if e.Role != GgufDirName || path.Base(e.Name) != name {
+			continue
+		}
+		full, resolveErr := Resolve(s.cfg.ArtefactRoot, e.Name)
+		if resolveErr != nil {
+			continue
+		}
+		return full, e, true
+	}
+	return "", Entry{}, false
+}
+
+// entryForName looks a model up by its canonical name "gguf/<file>", then by
+// basename among gguf-role entries. A model that is in no manifest still gets
+// served, with the real digest computed from disk, so the client can verify the
+// bytes against it and disagree with the roster if it must. An artefact that
+// exists but cannot be verified is still better than a model the run has to pull
+// 5 GB of from the hub instead, so a weak validator is the fallback rather than a
+// 404.
+func (s *Server) entryForName(name string) Entry {
+	canonical := GgufDirName + "/" + name
+	if m, err := LoadManifest(s.cfg.ArtefactRoot); err == nil {
+		if e, ok := m.Find(canonical); ok {
+			return e
+		}
+		for _, e := range m.Entries {
+			if e.Role == GgufDirName && path.Base(e.Name) == name {
+				return e
+			}
+		}
+	}
+	sum, err := FileSHA256(path.Join(s.cfg.ArtefactRoot, GgufDirName, name))
+	if err != nil {
+		return Entry{Name: canonical}
+	}
+	return Entry{Name: canonical, SHA256: sum}
+}
+
+// serveBlob is the shared body path for /artifact/ and /gguf/.
+//
+// digest may be empty, in which case the weak mtime+size ETag is used and the
+// client has no way to verify what it received. That case is stated here rather
+// than left to be discovered during an incident.
+func (s *Server) serveBlob(w http.ResponseWriter, r *http.Request, name, full string, info os.FileInfo, digest string, extra map[string]string) {
+	etag := `"` + digest + `"`
+	if digest == "" {
 		// Not in the manifest: still serve it, but with a weak validator based
 		// on mtime and size so a client can at least revalidate cheaply.
 		etag = `"` + weakETag(info.ModTime(), info.Size()) + `"`
@@ -286,6 +419,16 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	// A Space is a public endpoint serving immutable build output, so the
 	// client may cache hard. That is what makes the second run cost nothing.
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	// Always say what the content is. The client picks its file name and its
+	// loader from this, so a wrong type here becomes a wrong model at load time.
+	if ct := contentTypeFor(name); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	for k, v := range extra {
+		if v != "" {
+			w.Header().Set(k, v)
+		}
+	}
 
 	if match := r.Header.Get("If-None-Match"); strings.Contains(match, strings.Trim(etag, `"`)) {
 		w.WriteHeader(http.StatusNotModified)
@@ -300,7 +443,7 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 
 	// start is the seek offset and length is the byte count. Both must be set on
-	// BOTH paths: ParseRange returns 0,0,false for a plain GET, and using that
+	// the BOTH paths: ParseRange returns 0,0,false for a plain GET, and using that
 	// length verbatim would send a zero-byte body behind a correct
 	// Content-Length, which a client reads as a silently truncated 5 GB file.
 	start, length, ranged := ParseRange(r.Header.Get("Range"), info.Size())
@@ -335,6 +478,25 @@ func (s *Server) handleArtifact(w http.ResponseWriter, r *http.Request) {
 		// The status line is already out, so this can only be logged. A short
 		// write here is exactly the case Range support exists to recover from.
 		s.log.Warn("artifact body truncated", "name", name, "err", err)
+	}
+}
+
+// contentTypeFor picks a media type from a file name.
+//
+// application/octet-stream is the default for a model and is correct: the client
+// picks its loader from the file name, and a server claiming a .gguf is
+// "application/json" would only create a new way to be wrong.
+func contentTypeFor(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, ".gguf"), strings.HasSuffix(lower, ".bin"):
+		return "application/octet-stream"
+	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
+		return "application/gzip"
+	case strings.HasSuffix(lower, ".zip"):
+		return "application/zip"
+	default:
+		return ""
 	}
 }
 
