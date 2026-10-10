@@ -44,6 +44,7 @@ import tarfile
 import tempfile
 import threading
 import traceback
+import types
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -102,6 +103,47 @@ def tar_of(snapshot_dir: Path, archive: Path, prefix: str = "models--X--Y/snapsh
         for item in sorted(snapshot_dir.iterdir()):
             tar.add(item, arcname=f"{prefix}/{item.name}")
     return archive
+
+
+class _StubHub:
+    """Stands in for huggingface_hub so a test cannot reach the real network."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def snapshot_download(self, **kwargs):
+        self.calls += 1
+        # The token is redacted rather than echoed. ensure_model resolves it from
+        # HuggingFace_PaperWork/ on the way in, and a test failure that prints it
+        # puts a live credential in someone's terminal and in any CI log that
+        # captures stderr.
+        shown = {k: ("<redacted>" if "token" in k else v) for k, v in kwargs.items()}
+        raise AssertionError(f"the hub must not be reached here: {shown}")
+
+
+class _no_hub:
+    """Swap huggingface_hub out for a stub that fails loudly if it is used.
+
+    The module docstring promises these tests never touch the network, and
+    without this the "falls through to the hub" assertions really do call out --
+    which is slow when it works, and misleading when it 401s. A test that
+    exercises the FALLBACK path must stub the fallback.
+    """
+
+    def __enter__(self):
+        self.stub = _StubHub()
+        self.saved = sys.modules.get("huggingface_hub")
+        module = types.ModuleType("huggingface_hub")
+        module.snapshot_download = self.stub.snapshot_download
+        sys.modules["huggingface_hub"] = module
+        return self
+
+    def __exit__(self, *exc):
+        if self.saved is None:
+            sys.modules.pop("huggingface_hub", None)
+        else:
+            sys.modules["huggingface_hub"] = self.saved
+        return False
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -309,6 +351,169 @@ def test_warm_status_agrees_with_resolver() -> None:
         shutil.rmtree(work, ignore_errors=True)
 
 
+# ---------------------------------------------------------------------------
+# 5: the Suffix parameter -- what may be a "weight file"
+# ---------------------------------------------------------------------------
+
+def test_weight_suffix_normalisation() -> None:
+    section("weight_suffixes: the Suffix argument, normalised")
+
+    # None is the pre-existing behaviour and must not move. This is the whole
+    # compatibility promise of adding a parameter.
+    check("None keeps the historical pair",
+          hf_store.weight_suffixes(None) == (".safetensors", ".bin"),
+          str(hf_store.weight_suffixes(None)))
+    check("omitting the argument is the same as None",
+          hf_store.weight_suffixes() == (".safetensors", ".bin"))
+
+    check("both spellings of a suffix work",
+          hf_store.weight_suffixes(".gguf") == hf_store.weight_suffixes("gguf")
+          == (".gguf",),
+          f"{hf_store.weight_suffixes('.gguf')} vs {hf_store.weight_suffixes('gguf')}")
+
+    check("case is normalised",
+          hf_store.weight_suffixes(".GGUF") == (".gguf",),
+          str(hf_store.weight_suffixes(".GGUF")))
+    check("whitespace is normalised",
+          hf_store.weight_suffixes("  .gguf ") == (".gguf",),
+          str(hf_store.weight_suffixes("  .gguf ")))
+    check("a sequence works",
+          hf_store.weight_suffixes([".gguf", "bin"]) == (".gguf", ".bin"),
+          str(hf_store.weight_suffixes([".gguf", "bin"])))
+    check("blanks are dropped",
+          hf_store.weight_suffixes([".gguf", "", "   "]) == (".gguf",),
+          str(hf_store.weight_suffixes([".gguf", "", "   "])))
+
+
+def test_suffix_predicates() -> None:
+    section("_has_weights / _is_snapshot honour the suffix")
+
+    work = Path(tempfile.mkdtemp(prefix="hfstore_suffix_"))
+    try:
+        # A gguf-only directory: the layout gguf_store hands back.
+        g = work / "ggufonly"
+        g.mkdir(parents=True)
+        (g / "Index-Homura-2B.Q4_K_M.gguf").write_bytes(b"\x00" * 32)
+
+        check("a .gguf is NOT a default weight file",
+              not hf_store._has_weights(g), "the default must stay torch-shaped")
+        check("a .gguf IS a weight file when asked for by name",
+              hf_store._has_weights(g, ".gguf"))
+        check("a .gguf is discoverable as a snapshot with suffix=.gguf",
+              hf_store._is_snapshot(g, ".gguf"))
+        # Discoverability is broader than loadability: a config.json makes a
+        # directory findable regardless, so substituting the pattern list would
+        # have made ensure_model(suffix=".gguf") unable to find it at all.
+        check("a .gguf is discoverable as a snapshot even without a suffix",
+              hf_store._is_snapshot(g))
+
+        # The whisper ggml .bin files. Already covered by the default, which is
+        # why the whisper resolver needs no suffix at all.
+        b = work / "binonly"
+        b.mkdir(parents=True)
+        (b / "ggml-base.bin").write_bytes(b"\x00" * 16)
+        check("a whisper ggml .bin counts by default",
+              hf_store._has_weights(b), "this is the pre-existing .bin rule")
+        check("a .bin is NOT a .gguf",
+              not hf_store._has_weights(b, ".gguf"),
+              "asking for gguf must not accept a faster-whisper CTranslate2 blob")
+
+        # The bad combination: a safetensors snapshot must not satisfy .gguf.
+        s = work / "torchonly"
+        s.mkdir(parents=True)
+        (s / "model.safetensors").write_bytes(b"\x00" * 16)
+        check("torch weights do not satisfy suffix=.gguf",
+              not hf_store._has_weights(s, ".gguf"))
+
+        # Threading it through ensure_model: a gguf-only cache entry is found
+        # when the caller asks for a gguf and ignored when it does not.
+        home = work / "home"
+        snap = hub_cache(home, "IndexTeam/Index-Homura-2B-GGUF", weights=False,
+                         config=False)
+        (snap / "Index-Homura-2B.Q4_K_M.gguf").write_bytes(b"\x00" * 32)
+        with _no_hub() as hub:
+            got = hf_store.ensure_model("IndexTeam/Index-Homura-2B-GGUF",
+                                        mounted_roots=[], hf_home=home,
+                                        edge_url="http://127.0.0.1:1",
+                                        suffix=".gguf")
+            check("ensure_model(suffix=.gguf) finds a gguf-only snapshot",
+                  got is not None and got == snap, f"got {got!r}")
+            got = hf_store.ensure_model("IndexTeam/Index-Homura-2B-GGUF",
+                                        mounted_roots=[], hf_home=home,
+                                        edge_url="http://127.0.0.1:1")
+            check("ensure_model with no suffix does NOT claim a gguf snapshot",
+                  got is None, f"got {got!r} -- it should fall through to the hub")
+            check("the hub was only reached by the case that was meant to miss",
+                  hub.stub.calls == 1, f"hub calls = {hub.stub.calls}")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def test_default_suffix_is_unchanged() -> None:
+    section("a .safetensors snapshot behaves exactly as it did before")
+
+    work = Path(tempfile.mkdtemp(prefix="hfstore_default_"))
+    try:
+        home = work / "home"
+        snap = hub_cache(home, "Systran/faster-whisper-large-v3")
+        got = hf_store.ensure_model("Systran/faster-whisper-large-v3",
+                                    mounted_roots=[], hf_home=home,
+                                    edge_url="http://127.0.0.1:1")
+        check("the faster-whisper snapshot still resolves with no suffix",
+              got == snap, f"got {got!r}")
+        check("and with an explicit None",
+              hf_store.ensure_model("Systran/faster-whisper-large-v3",
+                                    mounted_roots=[], hf_home=home,
+                                    edge_url="http://127.0.0.1:1",
+                                    suffix=None) == snap)
+        check("and with the default named explicitly",
+              hf_store.ensure_model("Systran/faster-whisper-large-v3",
+                                    mounted_roots=[], hf_home=home,
+                                    edge_url="http://127.0.0.1:1",
+                                    suffix=hf_store.DEFAULT_SUFFIX) == snap)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# 6: the one content-addressing helper
+# ---------------------------------------------------------------------------
+
+def test_sha256_file_streams() -> None:
+    section("sha256_file: correct, and bounded in memory")
+
+    import hashlib
+
+    work = Path(tempfile.mkdtemp(prefix="hfstore_hash_"))
+    try:
+        target = work / "model.gguf"
+        # 12 MiB: comfortably more than one 4 MiB block, so a single-read
+        # implementation and a streaming one are distinguishable.
+        payload = bytes(range(256)) * (12 * 1024 * 1024 // 256)
+        target.write_bytes(payload)
+
+        want = hashlib.sha256(payload).hexdigest()
+        check("digest matches hashlib", hf_store.sha256_file(target) == want)
+        check("a str path works too",
+              hf_store.sha256_file(str(target)) == want)
+
+        # The block size must be smaller than the file, and a 1-byte block must
+        # still produce the same digest -- that is what proves the loop is a
+        # loop and not a single read that happens to work on small files.
+        check("a 1-byte block gives the same digest",
+              hf_store.sha256_file(target, block=1) == want)
+        check("an empty file hashes to the empty digest",
+              hf_store.sha256_file(_touch(work / "empty", b"")) ==
+              hashlib.sha256(b"").hexdigest())
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _touch(path: Path, data: bytes) -> Path:
+    path.write_bytes(data)
+    return path
+
+
 def main() -> int:
     if not QUIET:
         print("hf_store regression tests")
@@ -316,7 +521,11 @@ def main() -> int:
     for test in (test_edge_fetch,
                  test_edge_unpack_without_filter_kwarg,
                  test_snapshot_discovery,
-                 test_warm_status_agrees_with_resolver):
+                 test_warm_status_agrees_with_resolver,
+                 test_weight_suffix_normalisation,
+                 test_suffix_predicates,
+                 test_default_suffix_is_unchanged,
+                 test_sha256_file_streams):
         try:
             test()
         except Exception:

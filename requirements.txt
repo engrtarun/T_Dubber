@@ -1,5 +1,31 @@
 # Local client for T_Dubber.
 # The Kaggle GPU worker installs its own (much heavier) stack separately.
+#
+# ---------------------------------------------------------------------------
+# WHY THERE IS NO torch / vllm / transformers IN THIS FILE
+# ---------------------------------------------------------------------------
+# Measured, not theoretical. Kaggle run `test4_gotgVERSION` spent
+# **1067 s of its 1258 s** pip-installing vllm 0.26.0 + torch + the whole
+# nvidia-*-cu13 wheel set, and then died before producing a single frame:
+#
+#     ImportError: libcudart.so.13: cannot open shared object file
+#
+# vLLM was built against CUDA 13; the Kaggle image ships CUDA 12. The wheel
+# set downloaded fine, which is the trap -- the failure is deferred to import
+# time, 18 minutes later, inside the serving cell. 85% of the run, zero output.
+#
+# The replacement is NOT a smaller pip package, it is a different kind of
+# artifact:
+#   * LLM   -> llama.cpp `llama-server`      (cpp_accelerator/runtimes)
+#   * ASR   -> whisper.cpp `whisper-cli`     (cpp_accelerator/runtimes)
+#   * TTS   -> onnxruntime                   (below)
+# Both binaries are fetched once, cached as a Kaggle input dataset, and cost
+# seconds instead of ~15 minutes.
+#
+# If you genuinely need the old stack (debugging the vLLM path), ask for it
+# explicitly -- it is NOT here by default:
+#   pip install -r requirements-legacy-torch.txt
+# or set TDUBBER_LLM_BACKEND=vllm in kaggle_worker.ipynb.
 
 gradio>=5.0
 telethon>=1.34
@@ -14,6 +40,10 @@ segno>=1.6
 # resolution, snapshot download for the Kaggle cache-dataset flow.
 huggingface-hub>=0.30
 
+# Torch-free TTS path (mazinger engine="onnxruntime"). ~200 MB, no CUDA
+# 12/13 ABI split to get wrong. Optional: only needed if you run ONNX TTS.
+# onnxruntime>=1.17
+
 # requests: kept transitively. Its last direct user was telegram_backup.py,
 # which is now archived (archive/telegram_backup.py) - telegram_uploader.py
 # does not need it. Dropping it is only safe once nothing else pulls it in.
@@ -22,3 +52,5 @@ requests>=2.31
 # Runtime tools that are NOT pip-installable and must be on PATH:
 #   ffmpeg / ffprobe   - compression, voice-sample extraction, muxing
 #   kaggle CLI config  - kaggle_paperWork/kaggle.json (never commit it)
+#   llama-server       - OpenAI-compatible LLM server (cpp_accelerator)
+#   whisper-cli        - local ASR (cpp_accelerator)

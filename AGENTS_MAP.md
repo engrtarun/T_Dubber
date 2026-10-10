@@ -118,6 +118,68 @@ Proof: `huggingface/test_gguf_store.py` -- 9 functions, real localhost servers
 resume + Range-ignored, hub fallback via `HF_ENDPOINT`, warm_status, CLI).
 `python huggingface/test_gguf_store.py` → PASS exit 0; `go test ./...` → PASS.
 
+## ROUND 2 — PyTorch eradication (CUDA_REMOVAL_TASKS.md)
+
+Kaggle run `test4_gotgVERSION`: **1067s of a 1258s run** went to
+`pip install vllm+torch+cu128`, then died with
+`ImportError: libcudart.so.13` (vLLM 0.26.0 built for CUDA 13, image ships
+CUDA 12). 85% of the run, zero output.
+
+**Owner constraint, non-negotiable: no CUDA, no PyTorch, any circumstance.**
+
+| # | Agent | Delivered | Verified |
+|---|---|---|---|
+| 1 | `cpp_accelerator` | `runtimes/` — `LlamaServer` + `WhisperCppRunner` bridges, CPU-only binaries | 72 passed, 2 skipped (POSIX-only). Real `llama-server` b11539 run end-to-end by hand: **start 1.9s, first `/v1/chat/completions` 0.1s** |
+| 2 | `mazinger` | torch purged, vLLM gated behind `TDUBBER_LLM_BACKEND`, default `llamacpp` | 29/29 AST guard. **Mutation-tested by hand**: injecting module-level `import torch` fails the guard, so it is not vacuous |
+| 3 | `edge` | `model_gguf.go` roster + `/gguf/` route + Go queue/ledger | `go build/vet/test` exit 0. **All 7 sha256 digests re-checked against the live HF API** — Homura×4, whisper×3, byte-for-byte match |
+| 4 | `tgup` | `chunking.py` + `chunk_ledger.py` | 110 passed (chunking + ledger + p0_direct) |
+
+### Drop-in replacement, not a rewrite
+`mazinger/llm.py::build_client()` already forwards an arbitrary `base_url` to
+`openai.OpenAI`. `llama-server` speaks `/v1/chat/completions`. So the LLM swap
+needed **zero** changes to translate/llm call sites.
+
+### Six real bugs the fake-binary tests could not have found
+Found only by running against real binaries: DLL-farm `WinError 216`; `--port 0`
+binding an unadvertised port; deprecated `main.exe` extracted *as*
+`whisper-cli.exe`; a `C:/x.gguf` path sent to `-hf`; `main` resolving to
+`System32\main.CPL` via PATH; llama/whisper DLL collision → per-project dirs.
+
+### Undeclared find — `multitasker.py:503`
+It hard-coded `--transcribe-method faster-whisper` and `--tts-engine omnivoice`.
+That silently **defeated** the whole mazinger round: the notebook set
+`TDUBBER_ASR_BACKEND=whispercpp`, multitasker overrode it back, and faster-whisper
+is not installed on a torch-free box → job died at import with no log line.
+Now env-overridable. *A hard-coded flag is a silent override of any env switch.*
+
+## `any-tts` (Rust/Candle) — what is actually true
+
+Verified against crates.io + the README on 2026-10-10. **Reuse this; do not
+re-research it.**
+
+* Real: v0.2.0, MIT OR Apache-2.0, 27k lines, `candle-core ^0.10.2`, needs
+  Rust ≥1.83 (local 1.99 OK). **Library only — `bin_names: []`**, so an
+  executable must be written.
+* **It is a LIBRARY and it does not ship a binary.** Anyone assuming a ready-made
+  TTS executable exists will waste a day.
+* **Voice cloning — the decisive column.** mazinger's TTS is fundamentally
+  cloning (`--voice-sample`), so this is what decides the backend:
+
+  | Backend | reference-audio cloning |
+  |---|---|
+  | OmniVoice *(mazinger's current default)* | ❌ not implemented in Rust |
+  | Qwen3-TTS | ❌ not implemented in Rust |
+  | Kokoro | ⚠️ only with style-encoder weights |
+  | **VibeVoice-1.5B** | ✅ **the only one** |
+  | VibeVoice-Realtime | ❌ |
+  | Voxtral | ❌ weights not shipped |
+
+* Consequence: a `rusttts` engine may **only** substitute when no reference audio
+  was supplied. With `--voice-sample` it must route to a cloning engine or fail
+  loudly — never speak in a default voice, which is worse than a crash.
+* `--features cuda` is the same `libcudart` trap that killed vLLM. CPU-only.
+* Repo is young (20 stars, ~6 months). Treat API stability as provisional.
+
 ### `multitasker_test.py` flake fix
 
 `assert elapsed < 12.0` ek wall-clock deadline hai. Docker Desktop boot hone
@@ -253,3 +315,89 @@ more") hai. Status + refs update karo, warna agla padhne wala ye 4 wajah
    claim isi par tika hai.
 5. Sirf P1 positive aaye to Stage 1 (`source.go`: `ReaderAt` + `probeRange` +
    `tailFollow`) shuru karo.
+
+## ROUND 3 — Rust TTS: `tts_forge` (candle engine) + `tdub_tts` (rusttts engine)
+
+Mission: ONNX ko goli maar, seedha HuggingFace Candle (Rust) `any-tts` crate —
+ek single Rust binary jo text + clone-audio le aur WAV kare, bina kisi
+PyTorch/CUDA dependency ke. Phir mazinger pipeline ka TTS engine.
+
+**W — Work**
+
+* `RustSetup/tts_forge/` (naya): `tts_forge` binary — `any-tts 0.2.0` (Candle)
+  pe built. 3 modes: `--version`, `--once` (one-shot), `stream` (JSONL server —
+  mazinger ka `candle` engine isse baat karta hai). Exit codes 0/2/3 documented.
+* `tts_rust/tdub_tts_bridge.py`: mazinger ke real call shapes ke liye fix —
+  `require_clone` default True→**False** (rusttts engine `clones=False` registered
+  hai; True default se har plain mazinger call `TtsReferenceAudioError` kar raha
+  tha — real integration bug, 2026-10-10 fix), `synthesize` me `language` kwarg,
+  `synthesize_many` me `items=[(text, ref_audio, out_wav)]` mode (ek invocation,
+  scratch dir, `shutil.move` per-item).
+* `tts_rust/test_tts_bridge.py`: 37→**43** checks. 3 purane tests ab explicit
+  `require_clone=True` lete hain; naya `MazingerInteropTests` class mazinger ke
+  exact calls pin karta hai (no-ref 2-arg synthesize, items-mode ×2, shared-ref
+  batch, disagreeing-refs loud fail, per-call language).
+
+**E — Evidence**
+
+* `python tts_rust/test_tts_bridge.py` → **43/43, exit 0** (fake binary real
+  process ke roop me, Windows pe `.bat` shim se CreateProcess exercise).
+* `pytest mazinger/tests/test_candle_tts.py test_tts_rust_backend.py
+  test_no_torch_import.py` → **81/81 pass** (tts_forge JSONL contract, rusttts
+  bridge contract, torch-import AST guard).
+* `grep -iE "cuda|cudarc|nvidia" Cargo.lock` → **0 matches** in BOTH
+  `RustSetup/tts_forge/` aur `tts_rust/`. `default-features = false` + sirf
+  family features (`omnivoice,qwen3-tts,kokoro,vibevoice,download`) — `cuda`
+  feature kabhi compiled nahi hota.
+* Contract audit: mazinger `_CandleTTSWrapper` (tts.py:1881-2150) ke spawn /
+  ready-line / request-fields / id-match sab re-read kiye; `main.rs` un sab ko
+  satisfy karta hai (ready-line pehle load se, har request ka exactly ek response,
+  id echo).
+* Voice-cloning rule verified against any-tts 0.2.0 **source** (not docs):
+  OmniVoice aur Qwen3-TTS Rust backends `reference_audio` reject karte hain;
+  sirf VibeVoice clone karta hai. Isliye reference + non-vibevoice family =
+  **loud error**, reference kabhi drop nahi hota.
+
+**M — Measure**
+
+* Bridge suite: 43 tests / ~21-82s (fake process spawn overhead).
+* Mazinger suites: 81 tests / 38.9s.
+* Compile: 3 rustc bugs fix hue (Python habits: `{other!r}`→`{other:?}`,
+  `exit(u8)`→`exit(i32::from())`, edition-2021 let-chain→nested if).
+
+**D — Deliver**
+
+* `RustSetup/tts_forge/target/release/tts_forge.exe` — mazinger ke
+  `find_candle_binary()` discovery path pe (release, phir debug, phir PATH).
+* `tts_rust/target/release/tdub_tts.exe` — rusttts engine binary.
+* Dono binaries CPU-only, zero CUDA crates, zero PyTorch. Pipeline ka
+  torch-free TTS path: `engine="candle"` (stream JSONL) ya `engine="rusttts"`
+  (tdub_tts bridge).
+* ⚠️ Honest limits (README me likhe hain): koi end-to-end synthesis abhi run
+  nahi hui (weights ~5.4 GB nahi hain); CPU throughput unmeasured; Hindi/Hinglish
+  unverified. `--probe` se pehle measure karna padega.
+
+**Build + smoke (2026-10-10, is session ke andar):**
+
+* `RustSetup/tts_forge/target/release/tts_forge.exe` — **BUILT**
+  (`cargo build --release -j 1` → `Finished release profile in 10m 54s`,
+  exit 0). 3 rustc errors fix hue (Python habits): `{other!r}` →
+  `{other:?}`, `exit(EX_OK)` → `exit(i32::from(EX_OK))`, edition-2021
+  let-chain → nested `if`.
+* `tts_rust/target/release/tdub_tts.exe` — **BUILT**
+  (`Finished release profile in 10m 00s`), unused-import warning fix.
+* Smoke tests (tts_forge):
+  * `--version` → `tts_forge 0.1.0`, exit 0.
+  * no mode → exit 2 · unknown arg → exit 2 · empty `--text` → exit 3
+    · bogus `--model` → exit 3.
+  * `stream` probe (verbatim): pehli line
+    `{"event":"ready","version":"0.1.0"}`; phir garbage JSON →
+    `{"error":"invalid JSON request: …","id":null,"ok":false}`;
+    empty text → `{"error":"request field 'text' is empty or missing",
+    "id":1,"ok":false}`; `--device cuda` + bogus family → loud stderr
+    CPU-only warning + `{"error":"unknown model family \"bogus\". …",
+    "id":2,"ok":false}`. id echo, ready-line, ek-request-ek-response —
+    sab contract-ke-mutabiq.
+  * Ek real `omnivoice` load probe (bina weights) Hub download pe
+    gaya — ye designed first-request download path hai (mazinger ka
+    900s timeout isi ke liye), protocol bug nahi.

@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "comment": "T_Dubber model roster. hf_store.py resolves every entry in this order: mounted Kaggle input -> HF_HOME cache -> edge Space -> huggingface hub. Sizes are approximate, for cache planning only.",
+  "models": [
+    {
+      "repo_id": "IndexTeam/Index-Homura-2B",
+      "role": "translation-llm",
+      "runtime": "vllm",
+      "served_name": "IndexTeam/Index-Homura-2B",
+      "gated": false,
+      "approx_gb": 5,
+      "notes": "The translation brain. Served by `vllm serve` on GPU 0; the worker passes --language-model-only and dtype half."
+    },
+    {
+      "repo_id": "k2-fsa/OmniVoice",
+      "role": "tts",
+      "runtime": "mazinger",
+      "gated": false,
+      "approx_gb": 2,
+      "notes": "Default TTS engine in the Kaggle worker (omnivoice, 24 languages)."
+    },
+    {
+      "repo_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "role": "tts",
+      "runtime": "mazinger",
+      "gated": false,
+      "approx_gb": 4,
+      "notes": "Voice-cloned TTS engine (--tts-engine qwen). Weights are vendored in mazinger/_vendor/qwen_tts for the tokenizer, but the model itself still comes from the hub."
+    },
+    {
+      "repo_id": "Systran/faster-whisper-large-v3",
+      "role": "asr",
+      "runtime": "mazinger",
+      "gated": false,
+      "approx_gb": 3,
+      "notes": "Default transcription backend (faster-whisper / CTranslate2). Use the 'distil-large-v3' variant when VRAM is tight."
+    },
+    {
+      "repo_id": "ResembleAI/chatterbox",
+      "role": "tts",
+      "runtime": "mazinger",
+      "gated": false,
+      "approx_gb": 1,
+      "notes": "Alternative TTS engine (--tts-engine chatterbox); needs no reference transcript."
+    },
+    {
+      "repo_id": "bakrianoo/mazinger-dubber-profiles",
+      "role": "voice-profiles",
+      "runtime": "dataset",
+      "gated": false,
+      "approx_gb": 0.1,
+      "notes": "HF DATASET of ready voice profiles (abubakr, daheeh-v1, 3b1b, italian-v1, morgan-freeman, trump-v1). mazinger.profiles.fetch_profile() consumes it."
+    }
+  ],
+  "gated_notes": "CohereX (Cohere Transcribe + wav2vec2) models are gated and are NOT listed by repo id here: mazinger[transcribe-coherex] resolves them internally. Set HF_TOKEN (see .env.example) before choosing --transcribe-method coherex."
+}

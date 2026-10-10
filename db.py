@@ -271,6 +271,26 @@ def _now_us() -> str:
             + f".{int((now % 1) * 1_000_000):06d}")
 
 
+def _retry_on_lock(step, attempts: int = 6):
+    """Run ``step``, retrying while SQLite reports the database is locked.
+
+    Same exponential backoff and budget as _write's BEGIN IMMEDIATE loop, for the
+    same reason: two connections that want a lock at the same instant have to
+    take turns, and the loser only needs to look again a moment later. Separate
+    from _write because the lock this guards is taken OUTSIDE any transaction --
+    see connect().
+    """
+    delay = 0.05
+    for attempt in range(attempts):
+        try:
+            return step()
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+            delay *= 2
+
+
 def connect() -> sqlite3.Connection:
     """Return this thread's connection, creating and migrating it on first use.
 
@@ -284,7 +304,15 @@ def connect() -> sqlite3.Connection:
 
     conn = sqlite3.connect(DB_PATH, timeout=BUSY_TIMEOUT_MS / 1000, isolation_level=None)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    # journal_mode=WAL takes a database-level lock to move the file out of
+    # rollback-journal mode, and the busy timeout does NOT cover that pragma on
+    # every platform. So several threads creating their FIRST connections at
+    # once -- what the Gradio loop and the upload worker do -- can all run this
+    # line together and all but one get "database is locked". It is raised here
+    # rather than inside a transaction, which is why _write's backoff never sees
+    # it. Retrying is the fix, not a longer timeout: the winner finishes in
+    # microseconds and the losers only need to look again.
+    _retry_on_lock(lambda: conn.execute("PRAGMA journal_mode=WAL"))
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA foreign_keys=ON")

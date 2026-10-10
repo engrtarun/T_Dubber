@@ -1,0 +1,25 @@
+# LEGACY: the PyTorch / vLLM stack.  NOT installed by `requirements.txt`.
+#
+# Read requirements.txt first -- the short version is that this file cost
+# 1067 s of a 1258 s Kaggle run and then failed to import:
+#
+#     ImportError: libcudart.so.13: cannot open shared object file
+#
+# vLLM 0.26.0 was built against CUDA 13; the Kaggle image ships CUDA 12.
+#
+# Install this ONLY when you are deliberately debugging the vLLM path, i.e.
+# with TDUBBER_LLM_BACKEND=vllm set in kaggle_worker.ipynb.  For anything
+# else use llama.cpp (LLM), whisper.cpp (ASR) and onnxruntime (TTS) -- see
+# requirements.txt and archive/pytorch_raddi/README.md.
+#
+# vllm is intentionally a floor, not a pin.  The exact pin (==0.26.0) is what
+# froze the CUDA-13 build in place with no way to move off it; 0.27.0+ needs
+# torch 2.13, which the cu128 index does not carry at all.
+torch>=2.0
+torchaudio>=2.0
+transformers>=4.48
+vllm>=0.26.0
+
+# The cu128 index, only if you are rebuilding the old stack from scratch and
+# need CUDA-12-tagged torch wheels:
+#   pip install --extra-index-url https://download.pytorch.org/whl/cu128 -r requirements-legacy-torch.txt

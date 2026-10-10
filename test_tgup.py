@@ -21,6 +21,7 @@ import contextlib
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -260,6 +261,173 @@ class TestManifestAgreement(unittest.TestCase):
         expected = {"part", "offset", "size", "sha256", "link"}
         for entry in self._parts():
             self.assertTrue(expected.issubset(entry.keys()), expected - entry.keys())
+
+
+class TestPerChunkRecoveryUsesTheVerifiedFetchPath(unittest.TestCase):
+    """Chunk recovery must go through tgup's fetch, not a second downloader.
+
+    The mission rule is "sirf us chunk ko Telegram se wapas manga kar retry" --
+    fetch THAT chunk back and retry only it. The tempting shortcut is to write a
+    small Telethon download for one part. That would be a second, weaker
+    implementation of something tgup already does, so these tests pin the
+    wiring: the call must go to ``tgup_bridge.fetch`` with ``verify=True``.
+
+    No session, no binary, no network: ``tgup_bridge.fetch`` is replaced with a
+    stub and the assertion is about which function was called and how.
+    """
+
+    def setUp(self):
+        import chunking
+
+        self.chunking = chunking
+        self.scratch = tempfile.mkdtemp(prefix="tgup_chunk_recovery_")
+        self.addCleanup(shutil.rmtree, self.scratch, True)
+        self.source = Path(self.scratch) / "movie.mkv"
+        payload = os.urandom(2 * 1024 * 1024 + 4096)
+        self.source.write_bytes(payload)
+        self.payload = payload
+
+        self.manifest = chunking.ChunkManifest.create(
+            self.source, chunk_bytes=1024 * 1024, channel="@testchan",
+        )
+        self.record = self.manifest.record(1)
+        self.manifest.begin(self.record)
+        # A prior attempt produced a message, so there is something to fetch.
+        self.record.link = "https://t.me/testchan/9001"
+
+        self.calls = []
+        self.saved_fetch = tgup_bridge.fetch
+        tgup_bridge.fetch = self._fake_fetch
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        tgup_bridge.fetch = self.saved_fetch
+
+    def _fake_fetch(self, **kwargs):
+        self.calls.append(kwargs)
+        # tgup names the downloaded file after the document; the stub writes
+        # that same name so the caller's resolution logic is exercised too.
+        dest = Path(kwargs["dest"])
+        filename = f"part{self.record.index:05d}.bin"
+        target = dest / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(
+            self.payload[self.record.offset:self.record.offset + self.record.length]
+        )
+        return tgup_bridge.GoUploadResult(
+            used_go=True, ok=True, filename=filename,
+        )
+
+    def test_recovery_calls_the_shared_bridge_with_verification_on(self):
+        result = self.chunking.fetch_chunk_from_telegram(
+            self.record, self.scratch, api_id=1, api_hash="h",
+        )
+        self.assertEqual(len(self.calls), 1)
+        call = self.calls[0]
+        # The link must be THIS chunk's link, and the fetch must verify.
+        self.assertEqual(call["link"], "https://t.me/testchan/9001")
+        self.assertTrue(call["verify"], "a fetch-back must verify, or it proves nothing")
+        self.assertEqual(call["api_id"], 1)
+        self.assertTrue(os.path.isfile(result))
+
+    def test_the_retry_helper_fetches_only_the_failed_chunk(self):
+        sends = []
+
+        def flaky(record, source_path):
+            sends.append(record.index)
+            raise OSError("dropped")
+
+        # fetch-back proves the bytes are already safe, so no second send.
+        result = self.chunking.upload_chunk_with_recovery(
+            self.record, str(self.source), flaky,
+            recover=lambda chunk: self.chunking.fetch_chunk_from_telegram(
+                chunk, self.scratch, api_id=1, api_hash="h",
+            ),
+            max_attempts=3,
+        )
+        self.assertTrue(result.get("recovered"))
+        self.assertEqual(len(sends), 1, "only this chunk was ever attempted")
+        self.assertEqual(len(self.calls), 1, "only this chunk was ever fetched")
+
+    def test_no_other_chunk_is_fetched_when_one_fails(self):
+        """The rest of the movie is not re-uploaded and not re-fetched."""
+        others = []
+        for record in self.manifest.chunks():
+            if record.index == self.record.index:
+                continue
+            self.manifest.complete(record, message_id=8000 + record.index,
+                                  link=f"https://t.me/testchan/{8000 + record.index}")
+            others.append(record.index)
+
+        def always_fails(record, source_path):
+            raise OSError("network is down")
+
+        def refusing(**kwargs):
+            self.calls.append(kwargs)
+            return tgup_bridge.GoUploadResult(
+                used_go=True, ok=False, error="connection reset",
+            )
+
+        tgup_bridge.fetch = refusing
+        with self.assertRaises(self.chunking.ChunkRetryExhausted):
+            self.chunking.upload_chunk_with_recovery(
+                self.record, str(self.source), always_fails,
+                recover=lambda chunk: self.chunking.fetch_chunk_from_telegram(
+                    chunk, self.scratch, api_id=1, api_hash="h",
+                ),
+                max_attempts=2,
+            )
+        # Exactly the failing chunk was fetched -- twice, once per attempt.
+        fetched_links = {call["link"] for call in self.calls}
+        self.assertEqual(fetched_links, {"https://t.me/testchan/9001"})
+        self.assertEqual(len(self.calls), 2)
+        for index in others:
+            self.assertNotIn(f"https://t.me/testchan/{8000 + index}", fetched_links)
+
+    def test_a_failed_fetch_reports_why_rather_than_claiming_success(self):
+        def refusing(**kwargs):
+            self.calls.append(kwargs)
+            return tgup_bridge.GoUploadResult(
+                used_go=True, ok=False,
+                fallback_reason="no tgup session at C:\\tmp\\tgup.session",
+            )
+
+        tgup_bridge.fetch = refusing
+        with self.assertRaises(self.chunking.ChunkingError) as ctx:
+            self.chunking.fetch_chunk_from_telegram(
+                self.record, self.scratch, api_id=1, api_hash="h",
+            )
+        self.assertIn("no tgup session", str(ctx.exception))
+        self.assertIn("chunk 1", str(ctx.exception))
+
+    def test_a_fetch_that_returns_no_file_is_not_treated_as_success(self):
+        def silent(**kwargs):
+            self.calls.append(kwargs)
+            # ok=True, and it names a file that never landed: what a vanished
+            # or expired message looks like from Python's side.
+            return tgup_bridge.GoUploadResult(
+                used_go=True, ok=True, filename="gone.bin",
+            )
+
+        tgup_bridge.fetch = silent
+        with self.assertRaises(self.chunking.ChunkingError) as ctx:
+            self.chunking.fetch_chunk_from_telegram(
+                self.record, self.scratch, api_id=1, api_hash="h",
+            )
+        # It must name the file it expected, or the message is untraceable.
+        self.assertIn("gone.bin", str(ctx.exception))
+
+    def test_a_fetch_with_no_name_falls_back_to_what_is_actually_there(self):
+        def anonymous(**kwargs):
+            self.calls.append(kwargs)
+            # No filename reported, but the bytes did land.
+            return tgup_bridge.GoUploadResult(used_go=True, ok=True)
+
+        tgup_bridge.fetch = anonymous
+        result = self.chunking.fetch_chunk_from_telegram(
+            self.record, self.scratch, api_id=1, api_hash="h",
+        )
+        self.assertTrue(os.path.isfile(result))
 
 
 class TestGoIsOptional(unittest.TestCase):

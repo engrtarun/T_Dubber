@@ -1,0 +1,61 @@
+[package]
+name = "tts_forge"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+description = "CPU-only any-tts (Candle) TTS server for the T_Dubber pipeline: text + clone audio in, WAV out, no PyTorch"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "tts_forge"
+path = "src/main.rs"
+
+[dependencies]
+# CPU-ONLY BY CONSTRUCTION — the same policy as tts_rust/Cargo.toml.
+#
+# `default-features = false` is the load-bearing part. any-tts 0.2's
+# default set is ["qwen3-tts", "kokoro", "omnivoice", "vibevoice",
+# "voxtral", "download"]; the `cuda` feature is NOT default and maps
+# straight onto candle-core/cuda + candle-nn/cuda + candle-transformers/
+# cuda (verified against the live crates.io API, 2026-10-10).
+#
+# The project owner's rule is absolute: NO CUDA, NO PYTORCH, in any
+# build flag, ever. The precedent is not theoretical — Kaggle run
+# `test4_gotgVERSION` spent 1067 s pip-installing vLLM+PyTorch+CUDA
+# and then died with `ImportError: libcudart.so.13`. Do not add
+# "cuda", "metal" or "accelerate" below, do not pass them via
+# --features, and do not add them to any CI config.
+#
+# The four families below are exactly `CANDLE_FAMILIES` on the Python
+# side (mazinger/mazinger/tts.py). voxtral and vibevoice-realtime are
+# deliberately absent: the pipeline has no code path that asks for
+# them, and every feature costs compile time.
+any-tts = { version = "0.2", default-features = false, features = [
+    "omnivoice",
+    "qwen3-tts",
+    "kokoro",
+    "vibevoice",
+    "download",
+] }
+
+# The stream contract is JSON-lines on stdout. serde_json is already
+# in the tree via any-tts; listing it explicitly keeps the protocol
+# code from hand-rolling JSON (which eats a quote in a Hinglish
+# segment — a real bug class here, the pipeline dubs Hindi films).
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+# thin LTO only: `codegen-units = 1` multiplies the candle-core build
+# for a negligible gain in a process that spends its life inside
+# inference kernels.
+#
+# DO NOT ADD `panic = "abort"`. Reproduced 2026-10-10 against a
+# 7-package probe crate on cargo/rustc 1.99.0 x86_64-pc-windows-msvc:
+# it breaks the build with "error: failed to remove ... .rcgu.o: The
+# process cannot access the file because it is being used by another
+# process. (os error 32)". The default unwind strategy has the same
+# outcome for our purposes — an escaping panic still exits non-zero,
+# and main() installs a panic hook that prints one identifiable line.
+lto = "thin"

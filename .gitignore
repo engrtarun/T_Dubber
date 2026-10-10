@@ -109,3 +109,7 @@ code*.txt
 t_dubber.db
 t_dubber.db-shm
 t_dubber.db-wal
+
+target/
+
+**/target/

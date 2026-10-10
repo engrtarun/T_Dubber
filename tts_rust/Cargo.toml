@@ -1,0 +1,62 @@
+[package]
+name = "tdub-tts"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+description = "CPU-only TTS CLI for the T_Dubber pipeline (VibeVoice voice cloning, no CUDA, no PyTorch)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "tdub_tts"
+path = "src/main.rs"
+
+[dependencies]
+# CPU-ONLY BY CONSTRUCTION.
+#
+# `default-features = false` is the load-bearing part. any-tts 0.2's default set
+# is ["qwen3-tts", "kokoro", "omnivoice", "vibevoice", "voxtral", "download"].
+# The `cuda` feature is NOT default, and it maps straight onto
+# `candle-core/cuda` + `candle-nn/cuda` + `candle-transformers/cuda`
+# (verified against the live crates.io API, 2026-10-10).
+#
+# The project owner's rule is absolute: NO CUDA, NO PYTORCH, in any build flag,
+# ever. The precedent is not theoretical -- Kaggle run `test4_gotgVERSION` spent
+# 1067 s pip-installing vLLM+PyTorch+CUDA and then died with
+# `ImportError: libcudart.so.13: cannot open shared object file`. Do not add
+# "cuda", "metal" or "accelerate" to the feature list below, do not pass them
+# via --features on the command line, and do not add them to any CI config.
+# See tts_rust/README.md "CPU-only rationale" and tts_rust/BUILD.md.
+any-tts = { version = "0.2", default-features = false, features = ["vibevoice", "download"] }
+
+# Already in the tree via any-tts; listed explicitly so `--json` emits real
+# escaped JSON instead of a hand-rolled concatenator that eats a quote in a
+# Hindi/Hinglish segment. Adding it costs zero extra compile time.
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+# thin LTO is fine; it only costs link time. `codegen-units = 1` was tried and
+# removed -- it multiplies the candle-core build for a negligible gain in a
+# process that spends its life inside inference kernels.
+#
+# CORRECTION (2026-10-10): an earlier note in this block blamed `os error 32`
+# on `panic = "abort"` below. That attribution was WRONG and was removed,
+# because it sends the next reader hunting a setting that is not there.
+#
+#   error: failed to remove/write target\release\deps\<crate>-<hash>...
+#   .rcgu.o / .rmeta: The process cannot access the file because it is being
+#   used by another process. (os error 32)
+#
+# Reproduced twice, with NO `panic` setting at all, against the full dep tree:
+# `libgemm_c32-*.rmeta` on one attempt and `darling_core-*-cgu.05.rcgu.o` on
+# the next -- a different file every time, which is the signature of a
+# filesystem lock race, not of a profile option. It is intermittent: the same
+# manifest built fine on a later attempt (see build_release.time: "SUCCESS on
+# attempt 7"). `panic = "abort"` may or may not also be a factor; nothing here
+# proves it, and this profile does not set it.
+#
+# Practical rule: if you hit os error 32, RETRY the build before changing any
+# Cargo.toml line. `.\build_release.ps1` does exactly this, and also re-proves
+# the CPU-only guarantee after the link.
+lto = "thin"

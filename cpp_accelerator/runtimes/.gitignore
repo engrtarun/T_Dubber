@@ -1,0 +1,9 @@
+# Downloaded runtime binaries are large (~50 MB of DLLs on Windows) and are
+# rebuilt by build_runtimes.py in ~20 s. They must never be committed.
+#
+# MANIFEST.sha256 is also ignored on purpose: it records the digests of
+# binaries that are not in the repository, so it would only ever be a file
+# that describes files nobody can see.
+bin/
+__pycache__/
+*.pyc

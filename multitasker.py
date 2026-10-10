@@ -503,21 +503,46 @@ class GpuWorker(threading.Thread):
         self.dubbed = 0
 
     def _mazinger_cmd(self, job: DubJob, job_dir: Path) -> list[str]:
-        """The exact invocation the legacy notebook cell used, per job."""
+        """The exact invocation the legacy notebook cell used, per job.
+
+        Two flags used to be hard-coded here, and each one silently defeated a
+        switch the notebook cell sets:
+
+          * ``--transcribe-method faster-whisper`` -- the CLI default is
+            ``None``, which means "resolve from $TDUBBER_ASR_BACKEND, else pick
+            whispercpp when the binary is present". Passing a literal made
+            ``resolve_asr_backend()`` take the ``name`` branch and ignore the
+            cell's ``TDUBBER_ASR_BACKEND=whispercpp``. On the torch-free image
+            faster-whisper is not even installed, so the job died at import
+            instead of using the C++ binary that IS installed.
+          * ``--tts-engine omnivoice`` -- OmniVoice imports torch. The torch-free
+            default is chosen by TDUBBER_TTS_ENGINE for the same reason.
+
+        Both are now env-overridable, and omitting the flag is what restores
+        mazinger's own auto-resolution -- the hard-coded value was the bug, not
+        the absence of one.
+        """
         base_dir = str(job_dir / "mazinger_output")
         os.makedirs(base_dir, exist_ok=True)
-        return [
+        cmd = [
             sys.executable, "-m", "mazinger", "dub", job.video_path,
-            "--tts-engine", "omnivoice", "--voice-sample", job.voice_sample,
+            "--tts-engine",
+            os.environ.get("TDUBBER_TTS_ENGINE", "").strip() or "omnivoice",
+            "--voice-sample", job.voice_sample,
             "--target-language", job.target_language,
             "--output-type", "video",
             "--device", "cuda",
-            "--transcribe-method", "faster-whisper",
             "--openai-base-url", self.base_url,
             "--openai-api-key", "EMPTY",
             "--base-dir", base_dir,
             "--llm-model", self.model_name,
         ]
+        # Unset -> leave the flag off -> mazinger resolves whispercpp/faster-whisper
+        # itself from TDUBBER_ASR_BACKEND and what is actually installed.
+        asr = os.environ.get("TDUBBER_ASR_BACKEND", "").strip()
+        if asr:
+            cmd += ["--transcribe-method", asr]
+        return cmd
 
     def _find_dubbed_mp4(self, base_dir: Path) -> Path | None:
         candidates = sorted(

@@ -36,6 +36,7 @@ model means.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -51,6 +52,46 @@ DEFAULT_HF_HOME = Path("/kaggle/working/hf_cache")
 FALLBACK_HF_HOME = Path.home() / ".cache" / "huggingface"
 
 _ROSTER_PATH = Path(__file__).resolve().parent / "models.json"
+
+# The suffixes that count as "there is something to load here", in the order the
+# old hardcoded glob list used them. Kept as a module constant so there is ONE
+# answer to "what counts as weights" in this file -- it was inlined in three
+# places before, and two of them had already drifted (see _has_weights).
+#
+# .bin is here for the whisper.cpp ggml models, which predate the .gguf
+# extension. .safetensors is here for the safetensors torch snapshot this
+# connector was originally written for, and stays the default so nothing about
+# the existing behaviour changes.
+WEIGHT_SUFFIXES: tuple[str, ...] = (".safetensors", ".bin")
+DEFAULT_SUFFIX: str = ".safetensors"
+
+# Read block for the streaming digest. 4 MiB matches what multitasker.py and the
+# Go side use, so all three spend the same syscall budget on the same file.
+_HASH_BLOCK = 4 * 1024 * 1024
+
+
+def sha256_file(path: str | Path, block: int = _HASH_BLOCK) -> str:
+    """Content digest of a file, read in bounded blocks.
+
+    THIS IS THE ONLY CONTENT-ADDRESSING HELPER IN THIS PACKAGE. gguf_store.py
+    verifies multi-gigabyte model blobs with it, so there is one implementation
+    to keep correct rather than two that can disagree about what "verified" means.
+
+    It reads blocks rather than ``path.read_bytes()`` on purpose. A .gguf here is
+    1.3 GB and the base whisper model 150 MB; slurping one costs more RAM than
+    the rest of the resolver, and on a Kaggle kernel that is the difference
+    between a fetch and an OOM. The block is fixed rather than taken from a
+    caller on the hot path because every caller wants the same answer.
+
+    The size is checked against the file's own stat only for the empty-file
+    case; a caller that knows the expected length should compare it itself and
+    use this for the digest.
+    """
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(block), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def setup_env(hf_home: str | Path | None = None) -> Path:
@@ -130,52 +171,107 @@ def resolve_token(explicit: str | None = None) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _is_snapshot(path: Path) -> bool:
+def weight_suffixes(suffix=None) -> tuple[str, ...]:
+    """Normalise a Suffix argument into the tuple of glob patterns to look for.
+
+    ``None``  -> WEIGHT_SUFFIXES, which is EXACTLY what this module checked
+                 before a suffix could be passed. Nothing about the existing
+                 ``ensure_model("Systran/faster-whisper-large-v3")`` behaviour
+                 changes.
+    ``".gguf"`` or ``"gguf"`` -> ``(".gguf",)``. Only that. Passing ".gguf" and
+                 still accepting ".bin" would mean a resolver asked for a gguf
+                 reports success on a directory holding a faster-whisper
+                 CTranslate2 blob, and the caller then hands llama.cpp a file it
+                 cannot load.
+    a sequence -> used as-is, with dots added where they are missing.
+
+    The "add the dot if it is missing" rule is because both spellings are what
+    people type, and a silent empty pattern would make every snapshot look
+    weightless -- i.e. a permanent silent re-download on every run.
+    """
+    if suffix is None:
+        return WEIGHT_SUFFIXES
+    if isinstance(suffix, str):
+        wanted = (suffix,)
+    else:
+        wanted = tuple(suffix)
+    out = []
+    for item in wanted:
+        item = str(item).strip().lower()
+        if not item:
+            continue
+        out.append(item if item.startswith(".") else "." + item)
+    return tuple(out)
+
+
+def _is_snapshot(path: Path, suffix=None) -> bool:
     """A directory looks like a usable snapshot if it has a config or weights.
 
     The original test was `config.json` alone, which is right for a model repo
     and wrong for the DATASET in the roster (bakrianoo/mazinger-dubber-profiles):
     a dataset has no config.json, so it was permanently invisible here and
     warm_status reported it missing forever however often it was downloaded.
+
+    `suffix` is ADDED to the pattern list rather than replacing it, because
+    discoverability and loadability are different questions: a snapshot is worth
+    finding if it has any of the usual markers, and worth *using* if it has the
+    weights the caller asked for. Substituting the list would have made
+    ensure_model(suffix=".gguf") unable to find a directory that also holds a
+    config.json.
+
+    ".gguf" is in the base list, so a directory holding nothing but a quantised
+    model is at least VISIBLE to a report. It still does not count as loadable
+    without the matching suffix -- discoverability says "there is something
+    here", _has_weights says "this is what you asked for".
     """
     if (path / "config.json").exists():
         return True
-    for pattern in ("*.safetensors", "*.bin", "*.pt", "*.jsonl"):
+    patterns = ("*.safetensors", "*.bin", "*.pt", "*.jsonl", "*.gguf")
+    for extra in weight_suffixes(suffix):
+        candidate = "*" + extra
+        if candidate not in patterns:
+            patterns = patterns + (candidate,)
+    for pattern in patterns:
         if next(path.glob(pattern), None) is not None:
             return True
     return False
 
 
-def _has_weights(path: Path) -> bool:
-    """The heavier half of _is_snapshot: is there anything to actually load?"""
-    for pattern in ("*.safetensors", "*.bin"):
-        if next(path.glob(pattern), None) is not None:
+def _has_weights(path: Path, suffix=None) -> bool:
+    """The heavier half of _is_snapshot: is there anything to actually load?
+
+    This is the predicate that decides "is the run warm", so it is the one the
+    Suffix argument has to reach. Default behaviour is unchanged: a safetensors
+    file or a .bin counts, exactly as before.
+    """
+    for pattern in weight_suffixes(suffix):
+        if next(path.glob("*" + pattern), None) is not None:
             return True
     return False
 
 
-def _snapshot_dirs(repo_id: str, base: Path):
+def _snapshot_dirs(repo_id: str, base: Path, suffix=None):
     """HuggingFace hub cache layout: models--<org>--<name>/snapshots/*."""
     key = "models--" + repo_id.replace("/", "--")
     try:
         for snap in base.glob(f"**/{key}/snapshots/*"):
-            if snap.is_dir() and _is_snapshot(snap):
+            if snap.is_dir() and _is_snapshot(snap, suffix):
                 yield snap
     except OSError:
         return
 
 
-def _mounted_snapshot(repo_id: str, roots) -> Path | None:
+def _mounted_snapshot(repo_id: str, roots, suffix=None) -> Path | None:
     for root in roots or []:
         if not root:
             continue
-        for snap in _snapshot_dirs(repo_id, Path(root)):
-            if _has_weights(snap):
+        for snap in _snapshot_dirs(repo_id, Path(root), suffix):
+            if _has_weights(snap, suffix):
                 return snap
     return None
 
 
-def _edge_fetch(repo_id: str, dest: Path, edge_url: str) -> Path | None:
+def _edge_fetch(repo_id: str, dest: Path, edge_url: str, suffix=None) -> Path | None:
     """Pull one model snapshot from the T_Dubber edge Space.
 
     Returns the resolved snapshot directory, or None on any miss.
@@ -235,7 +331,7 @@ def _edge_fetch(repo_id: str, dest: Path, edge_url: str) -> Path | None:
         # top-level directory the tarball created, saw no weights in it, and
         # declared the fetch a miss -- even though the download had worked.
         for candidate in sorted(dest.rglob("*")):
-            if candidate.is_dir() and _has_weights(candidate):
+            if candidate.is_dir() and _has_weights(candidate, suffix):
                 return candidate
         return None
     except Exception as exc:
@@ -251,17 +347,27 @@ def ensure_model(repo_id: str, revision: str = "",
                  mounted_roots=None,
                  hf_home: str | Path | None = None,
                  edge_url: str | None = None,
-                 token: str | None = None) -> Path | None:
+                 token: str | None = None,
+                 suffix=None) -> Path | None:
     """Resolve ``repo_id`` to a local snapshot directory, or None.
 
     Never raises for a missing/unreachable model -- returning None
     lets the caller choose a fallback (a smaller model, a different
     engine) instead of losing a GPU run.
+
+    ``suffix`` narrows what counts as a usable snapshot; see
+    :func:`weight_suffixes`. It defaults to ``None``, which is the
+    pre-existing behaviour (``.safetensors`` or ``.bin``) -- so every current
+    caller is unaffected, and ``gguf_store.py`` passes ``".gguf"`` explicitly.
+
+    Step 3 also takes the suffix, because an edge tarball that contains only a
+    .gguf would otherwise unpack, fail the _has_weights test, and be reported as
+    an unreachable Space.
     """
     home = Path(hf_home) if hf_home else setup_env()
 
     # 1. Mounted (Kaggle input dataset): zero cost.
-    mounted = _mounted_snapshot(repo_id, mounted_roots)
+    mounted = _mounted_snapshot(repo_id, mounted_roots, suffix)
     if mounted:
         return mounted
 
@@ -269,8 +375,8 @@ def ensure_model(repo_id: str, revision: str = "",
     #    predicate warm_status uses -- see the note there. Two different
     #    predicates across the resolve and report paths is how a report says
     #    "warm" for a snapshot the resolver will still re-download.
-    for snap in _snapshot_dirs(repo_id, home):
-        if _has_weights(snap):
+    for snap in _snapshot_dirs(repo_id, home, suffix):
+        if _has_weights(snap, suffix):
             return snap
 
     # 3. The repo's own edge Space (fast, optional). _edge_fetch returns the
@@ -279,7 +385,7 @@ def ensure_model(repo_id: str, revision: str = "",
     edge = edge_url or os.environ.get("TDUBBER_EDGE_URL", "").strip()
     if edge:
         dest = home / "edge-snapshots" / repo_id.replace("/", "--")
-        fetched = _edge_fetch(repo_id, dest, edge)
+        fetched = _edge_fetch(repo_id, dest, edge, suffix)
         if fetched:
             return fetched
 
@@ -306,7 +412,8 @@ def ensure_model(repo_id: str, revision: str = "",
 
 
 def warm_status(mounted_roots=None,
-                hf_home: str | Path | None = None) -> list[dict]:
+                hf_home: str | Path | None = None,
+                suffix=None) -> list[dict]:
     """Per-roster-entry report: where (if anywhere) it is already local.
 
     The worker prints this at startup so a slow run is never silent about WHY it
@@ -318,7 +425,9 @@ def warm_status(mounted_roots=None,
     over again by the resolver. The symptom is a run that is slow for a reason
     the log claims is not the reason.
 
-    So both use _has_weights, and the reason is recorded in the row.
+    So both use _has_weights, and the reason is recorded in the row. `suffix`
+    goes to both for the same reason: a report and a resolver with different
+    ideas of what counts as warm is exactly the bug this function documents.
     """
     home = Path(hf_home) if hf_home else setup_env()
     rows = []
@@ -326,12 +435,12 @@ def warm_status(mounted_roots=None,
         repo_id = entry.get("repo_id", "")
         source = "missing"
         note = ""
-        mounted = _mounted_snapshot(repo_id, mounted_roots)
+        mounted = _mounted_snapshot(repo_id, mounted_roots, suffix)
         if mounted:
             source = "mounted"
         else:
-            snapshots = list(_snapshot_dirs(repo_id, home))
-            if any(_has_weights(s) for s in snapshots):
+            snapshots = list(_snapshot_dirs(repo_id, home, suffix))
+            if any(_has_weights(s, suffix) for s in snapshots):
                 source = "hf_home"
             elif snapshots:
                 note = "dir present, no weight files -- will re-download"

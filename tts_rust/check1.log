@@ -1,0 +1,22 @@
+﻿cargo :    Compiling synstructure v0.14.0
+At line:2 char:1
++ cargo check --release --message-format short *>&1 | Out-String -Width ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling synstructure v0.14.0:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling zerocopy-derive v0.8.62
+   Compiling bytemuck_derive v1.12.1
+   Compiling serde v1.0.229
+   Compiling serde_derive v1.0.229
+   Compiling paste v1.0.15
+    Checking rayon-core v1.13.0
+   Compiling zerovec-derive v0.11.6
+error: failed to remove C:\Users\pocot\Music\T_Dubber\tts_rust\target\release\build\serde-41faced6629b7d63\build_script_build-41faced6629b7d63.ahykpnbdfn6ijtgvs6qseqgsz.rcgu.o: The process cannot access the file because it is being used by another process. (os error 32)
+error: could not compile `serde` (build script) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: failed to remove C:\Users\pocot\Music\T_Dubber\tts_rust\target\release\deps\bytemuck_derive-cd23c8d88fb21795.bytemuck_derive.934c7c8022c92077-cgu.2.rcgu.o: The process cannot access the file because it is being used by another process. (os error 32)
+error: could not compile `bytemuck_derive` (lib) due to 1 previous error
+error: failed to remove C:\Users\pocot\Music\T_Dubber\tts_rust\target\release\deps\zerocopy_derive-d6c044771ec43e49.zerocopy_derive.119bc04c2dc5bbed-cgu.03.rcgu.o: The process cannot access the file because it is being used by another process. (os error 32)
+error: could not compile `zerocopy-derive` (lib) due to 1 previous error
+

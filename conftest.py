@@ -26,6 +26,14 @@ def scratch():
     shutil.rmtree(path, ignore_errors=True)
 
 
+@pytest.fixture
+def state():
+    """Scratch state dir for test_tg_cloud.py (self-cleans after each test)."""
+    path = tempfile.mkdtemp(prefix="tgcloud_")
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
+
+
 @pytest.fixture(autouse=True)
 def _scratch_database_for_every_test():
     """No test may ever write to the real ``t_dubber.db`` -- not just the ones
