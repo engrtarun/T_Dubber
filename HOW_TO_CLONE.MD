@@ -75,7 +75,27 @@ const MODELS: Array<{ id: string; title: string }> = [
 Aur `lib/crawl/settings.ts` (line 44) mein default model badal:
 `model: s.model || 'openai/gpt-oss-120b',`
 
-> **Note:** Ye patch local hai (submodule ka working tree modified hai). Is machine par sab set hai — is machine par kuch nahi karna. Naye machine par ye 5-minute ka step repeat karna padega. Submodule pointer abhi bhi upstream commit `ab180fb` par hai, isliye clone kisi bhi machine par kaam karega.
+### 🐛 3 Aur Zaroori Fixes (Fresh Clone Par)
+
+**Fix 1 — `lib/crawl/llm.ts` line 27:** `openai/` prefix strip hatana hai (Groq par asli ID hi `openai/...` hai):
+```ts
+// Pehle: const model = (opts.model || cfg.model).replace(/^openai\//, '');
+const model = opts.model || cfg.model;
+```
+
+**Fix 2 — `lib/crawl/plan-strategy.ts` line ~83:** brace double-prepend fix (gpt-oss prefill `{` khud echo karta hai):
+```ts
+const txt = raw.trimStart().startsWith('{') ? raw : '{' + raw;
+const parsed = parseJsonLoose<...>(txt);
+```
+
+**Fix 3 — token limits badalna:**
+- `plan-strategy.ts` line 80: `maxTokens: 4000` → `maxTokens: 16000`
+- `analyze-site.ts` line 296: `maxTokens: 6000` → `maxTokens: 16000`
+
+(gpt-oss reasoning model hai — 4000 tokens reasoning mein khatam ho jate the, content khaali aa raha tha.)
+
+> **Note:** Ye sab fixes local hain (submodule ka working tree modified hai). Is machine par sab set hai. Naye machine par ye ~10-minute ka step repeat karna padega. Submodule pointer abhi bhi upstream commit `ab180fb` par hai, isliye clone kisi bhi machine par kaam karega.
 
 ---
 
@@ -103,6 +123,12 @@ Settings panel (top-right) mein AI model choose kar — Groq ke liye `openai/gpt
 3. **"Create task & open browser to log in"** dabba — real browser window khulegi, usme OneDrive mein login kar.
 4. Wapas tool UI par aa ke **"Start"** dabba. Baaki sab automatic (crawl → plan → build → distill → analyze).
 5. Output milega `deepclonewebsite/open-lovable/public/site-clone/<domain>/<taskId>/` folder mein (gitignored, repo mein nahi jayega).
+
+### ⚠️ Run Ke Dauraan Ye Kabhi Mat Karna
+
+- **Browser window band mat karna** crawl/build ke dauraan — build phase usi session mein pages capture karta hai. Band kiya to offline site 0 pages aa jayegi (ye error already ek baar aa chuka hai: `Target page, context or browser has been closed`). Minimize kar sakte hai, band nahi.
+- **Login ke bina Start mat dabana** — `onedrive.live.com/` bina login ke microsoft.com marketing page par redirect hota hai, aur tool marketing pages clone kar lega. Login hone ke baad files page visible hona chahiye, tab Start.
+- Login ek baar karne se profile save ho jata hai (`.crawl-sessions/profiles/`) — agli baar browser khud logged-in khulega.
 
 ---
 
