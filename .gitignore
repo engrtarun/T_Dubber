@@ -13,6 +13,12 @@ desktop.ini
 .vscode/
 .idea/
 
+# ---- SECRET screenshots (setup record me live credentials dikh rahe hain) ----
+# drive/docs/setup-screenshots/ ke 2 PNG me Supabase DB password +
+# Netlify access token plain-text dikhate hain (file names me SECRET hai,
+# details wahan ke README.md me). Inhe git me JABHI nahi jaana chahiye.
+drive/docs/setup-screenshots/*SECRET*.png
+
 # ---- Python (main branch artifacts) ----
 __pycache__/
 *.pyc

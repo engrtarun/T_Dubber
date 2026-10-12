@@ -108,9 +108,11 @@ npm run dev        # → http://localhost:3000
   310280 bytes index.html), redirect 307 + pages + assets sab 200.
 - **`npm run typecheck` = PASS (exit 0), `npm run build` = PASS (exit 0)**
   — routes: `/` (static) + `/api/db-check` (dynamic).
-- Agent ne **DB layer** bhi banaya: Postgres via `@neondatabase/serverless`
-  (`db/schema.sql` = users/folders/files, `db/init.mjs`, `lib/db.ts`,
-  `.env.example`, `GET /api/db-check` = deploy ka connection proof).
+- Agent ne **DB layer** bhi banaya: **Supabase Postgres** (pehle Neon tha,
+  ab `@supabase/supabase-js`) — `db/schema.sql` = users/folders/files,
+  `db/init.mjs` + `db/check.mjs` (`npm run db:check`), `lib/db.ts`,
+  `.env.local` (gitignored ✓), `GET /api/db-check` = deploy ka connection
+  proof. Setup record: `drive/docs/supabase-setup/` + `drive/docs/setup-screenshots/`.
   Reasoning drive/README.md me (serverless pe SQLite nahi chalta — sahi point).
 - Stack: Next.js 15.4.3 · React 19.1 · Tailwind 3.4.17 · TS 5 · Node 24.
 - ⚠️ `next@15.4.3` me CVE-2025-66478 hai — deploy/public se pehle upgrade karna
