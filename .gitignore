@@ -1,0 +1,26 @@
+# ---- Node / Next.js (drive/ app) ----
+node_modules/
+.next/
+out/
+*.log
+*.tsbuildinfo
+.env*.local
+
+# ---- OS / editor junk ----
+Thumbs.db
+.DS_Store
+desktop.ini
+.vscode/
+.idea/
+
+# ---- Python (main branch artifacts) ----
+__pycache__/
+*.pyc
+
+# =========================================================================
+# MERGE NOTE (main <-> ui):
+# main branch ka apna bhi .gitignore hai (pack/, cpp_accelerator/build/,
+# _pack_stage/ wagera). Merge ke waqt DONO ko UNION karna hai — sirf ek
+# side mat lena. Run:  git merge main --allow-unrelated-histories
+# phir .gitignore conflict par main ka poora content + upar wala block rakhlo.
+# =========================================================================

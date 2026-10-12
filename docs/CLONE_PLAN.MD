@@ -54,12 +54,12 @@ Offline site dekhne ke liye: `index.html` par double-click karke browser mein kh
 
 ## 📝 Screenshots (Renamed)
 
-| File | Kya hai |
+| File (ab `docs/reference/screenshots/` mein) | Kya hai |
 |---|---|
 | `screenshot-groq-api-key-console.jpg` | Groq console ka API key wala screenshot |
 | `screenshot-openai-free-api-search.png` | "openai api key free" search result (OpenAI free nahi deta isliye Groq chuna) |
 | `screenshot-site-clone-ui-initial.png` | Tool UI ka pehla screenshot (patch se pehle) |
-| `Refrance Screenshot/screenshot-onedrive-reference-page.png` | OneDrive reference page |
+| `screenshot-onedrive-reference-page.png` | OneDrive reference page (pehle `Refrance Screenshot/` mein tha) |
 
 ## ⚠️ Notes
 
