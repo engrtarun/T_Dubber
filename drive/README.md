@@ -1,8 +1,8 @@
 <div align="center">
 
-# 📁 drive
+# 📁 drive — T9 Cloud
 
-**Apna drive — Next.js + Tailwind + TypeScript + Supabase**
+**T9 Cloud · Next.js + Tailwind + TypeScript + Supabase**
 
 [![Live demo](https://img.shields.io/badge/LIVE-t%20dubber%20drive-0078D4?style=flat-square&logo=netlify&logoColor=white)](https://t-dubber-drive-test.netlify.app/drive-ui/index.html)
 
@@ -11,6 +11,48 @@
 <sub>Captured drive UI, byte-for-byte unchanged · Supabase Postgres · Netlify + Cloudflare ready</sub>
 
 </div>
+
+---
+
+## 🏷️ T9 Cloud — branding
+
+Poora T9 ecosystem ka vision [`T9_ALL.md`](../T9_ALL.md) me hai. Ye app uska
+**storage + compute layer** hai.
+
+Do builds hain, aur dono jaan-boojh ke alag rakhe gaye hain:
+
+| Build | Path | Kya hai |
+|---|---|---|
+| **T9 Cloud** 🏷️ | `public/t9-cloud/` | Dark theme, storage upsell hata, "T9 Cloud" branding |
+| **Capture** 📸 | `public/drive-ui/` | OneDrive ka **pristine** reference — byte-identical, kabhi edit nahi |
+
+`/` → `/t9-cloud/index.html` (branded build). Capture `/drive-ui/index.html` par
+compare ke liye available hai.
+
+### Branding kaise re-apply hoti hai
+
+```bash
+npm run brand
+```
+
+`scripts/brand-t9.mjs` pristine capture se T9 build **generate** karta hai. Ye
+isliye script hai, manual edit nahi — kyunki capture ko byte-identical rakhna
+ek claim hai jo hash se prove hona chahiye, aur "logo change kiya" + "capture
+pristine hai" dono ek saath true rehne chahiye.
+
+4 changes, chaaron derived:
+
+| # | Change | Kaise |
+|---|---|---|
+| 1 | **Dark by default** | Capture me dono Fluent palettes already maujood hain `[data-theme]` se scoped — body attribute flip karna hai, theme likhna nahi |
+| 2 | **"Get 100 GB free" banner hata** | Storage Telegram ka kaam hai, paid quota nahi (root README §6.5) |
+| 3 | **"Buy storage" prompts hata** | Wahi wajah — 5 GB quota + Buy button ek jhooth hai jab storage effectively unlimited hai |
+| 4 | **OneDrive → T9 Cloud** | HTML me text replace + runtime DOM pass (capture ka React tree late re-render karta hai) |
+
+> Ek trap jo laga: left-nav ka "Buy storage" button `data-automationid` se nahi,
+> `id="LeftNavStorageButton"` se tagged hai. Sirf banner ke selectors likhne se
+> wo chup-chaap reh jaata — isliye CSS, JS aur HTML teenon me dono selector
+> rakhe hain.
 
 ---
 

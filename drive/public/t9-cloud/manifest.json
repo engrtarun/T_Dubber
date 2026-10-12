@@ -1,0 +1,55 @@
+{
+  "jobId": "mv3vey2r-z3b9",
+  "rootHost": "onedrive.live.com",
+  "builtAt": "2026-10-11T13:41:09.352Z",
+  "pages": [
+    {
+      "label": "Home",
+      "pattern": "/",
+      "file": "index.html",
+      "url": "https://onedrive.live.com/",
+      "assets": 13,
+      "bytes": 85159
+    },
+    {
+      "label": "My Files",
+      "pattern": "/my",
+      "file": "pages/my.html",
+      "url": "https://onedrive.live.com/my",
+      "assets": 8,
+      "bytes": 9493
+    },
+    {
+      "label": "Shared Files",
+      "pattern": "/shared",
+      "file": "pages/shared.html",
+      "url": "https://onedrive.live.com/shared",
+      "assets": 8,
+      "bytes": 33181
+    },
+    {
+      "label": "Recycle Bin",
+      "pattern": "/recycle",
+      "file": "pages/recycle.html",
+      "url": "https://onedrive.live.com/recycle",
+      "assets": 4,
+      "bytes": 2291
+    },
+    {
+      "label": "People",
+      "pattern": "/people",
+      "file": "pages/people.html",
+      "url": "https://onedrive.live.com/people",
+      "assets": 3,
+      "bytes": 0
+    },
+    {
+      "label": "Storage Settings",
+      "pattern": "/?…",
+      "file": "pages/page.html",
+      "url": "https://onedrive.live.com/?v=managestorage&sw=bypassConfig",
+      "assets": 2,
+      "bytes": 36969
+    }
+  ]
+}

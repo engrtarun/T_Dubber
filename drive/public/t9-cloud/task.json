@@ -1,0 +1,317 @@
+{
+  "id": "mv3udyvo-npb0",
+  "domain": "onedrive.live.com",
+  "rootUrl": "https://onedrive.live.com/",
+  "name": "onedrive ",
+  "locale": "en",
+  "createdAt": "2026-10-11T13:11:41.268Z",
+  "updatedAt": "2026-10-11T13:41:19.151Z",
+  "options": {
+    "depth": "structure",
+    "outputs": [
+      "site",
+      "design"
+    ]
+  },
+  "status": "done",
+  "progress": [
+    {
+      "at": "2026-10-11T13:12:14.020Z",
+      "step": "crawling",
+      "msg": "Crawling site structure (sampling same templates)…"
+    },
+    {
+      "at": "2026-10-11T13:12:41.046Z",
+      "step": "crawling",
+      "msg": "[5/30] d1 /people  https://onedrive.live.com/people"
+    },
+    {
+      "at": "2026-10-11T13:13:17.168Z",
+      "step": "crawling",
+      "msg": "[10/30] d3 /personal/:id/Documents/Pictures  https://onedrive.live.com/personal/ca2372da03ce11c3/Documents/Pictures"
+    },
+    {
+      "at": "2026-10-11T13:13:26.312Z",
+      "step": "crawling",
+      "msg": "Crawled: 12 pages / 11 types"
+    },
+    {
+      "at": "2026-10-11T13:13:26.354Z",
+      "step": "planning",
+      "msg": "LLM deciding capture strategy (merge templates / pick representatives)…"
+    },
+    {
+      "at": "2026-10-11T13:13:30.952Z",
+      "step": "error",
+      "msg": "✗ Expected property name or '}' in JSON at position 1 (line 1 column 2)"
+    },
+    {
+      "at": "2026-10-11T13:33:03.319Z",
+      "step": "crawling",
+      "msg": "Crawling site structure (sampling same templates)…"
+    },
+    {
+      "at": "2026-10-11T13:33:25.421Z",
+      "step": "crawling",
+      "msg": "[5/30] d1 /people  https://onedrive.live.com/people"
+    },
+    {
+      "at": "2026-10-11T13:33:57.405Z",
+      "step": "crawling",
+      "msg": "[10/30] d3 /personal/:id/Documents/Pictures  https://onedrive.live.com/personal/ca2372da03ce11c3/Documents/Pictures"
+    },
+    {
+      "at": "2026-10-11T13:34:06.527Z",
+      "step": "crawling",
+      "msg": "Crawled: 12 pages / 11 types"
+    },
+    {
+      "at": "2026-10-11T13:34:06.580Z",
+      "step": "planning",
+      "msg": "LLM deciding capture strategy (merge templates / pick representatives)…"
+    },
+    {
+      "at": "2026-10-11T13:34:10.642Z",
+      "step": "planning",
+      "msg": "Strategy: 5 types to capture"
+    },
+    {
+      "at": "2026-10-11T13:34:10.660Z",
+      "step": "building",
+      "msg": "Faithfully capturing representative pages + downloading assets…"
+    },
+    {
+      "at": "2026-10-11T13:34:10.686Z",
+      "step": "building",
+      "msg": "Capturing Home …"
+    },
+    {
+      "at": "2026-10-11T13:34:10.699Z",
+      "step": "building",
+      "msg": "✗ Home capture failed: browserContext.newPage: Target page, context or browser has been closed"
+    },
+    {
+      "at": "2026-10-11T13:34:10.706Z",
+      "step": "building",
+      "msg": "Capturing Settings …"
+    },
+    {
+      "at": "2026-10-11T13:34:10.712Z",
+      "step": "building",
+      "msg": "✗ Settings capture failed: browserContext.newPage: Target page, context or browser has been closed"
+    },
+    {
+      "at": "2026-10-11T13:34:10.717Z",
+      "step": "building",
+      "msg": "Capturing FileListSection …"
+    },
+    {
+      "at": "2026-10-11T13:34:10.726Z",
+      "step": "building",
+      "msg": "✗ FileListSection capture failed: browserContext.newPage: Target page, context or browser has been closed"
+    },
+    {
+      "at": "2026-10-11T13:34:10.731Z",
+      "step": "building",
+      "msg": "Capturing People …"
+    },
+    {
+      "at": "2026-10-11T13:34:10.736Z",
+      "step": "building",
+      "msg": "✗ People capture failed: browserContext.newPage: Target page, context or browser has been closed"
+    },
+    {
+      "at": "2026-10-11T13:34:10.742Z",
+      "step": "building",
+      "msg": "Capturing FolderView …"
+    },
+    {
+      "at": "2026-10-11T13:34:10.747Z",
+      "step": "building",
+      "msg": "✗ FolderView capture failed: browserContext.newPage: Target page, context or browser has been closed"
+    },
+    {
+      "at": "2026-10-11T13:34:10.758Z",
+      "step": "building",
+      "msg": "Offline site: 0 pages / 0 assets"
+    },
+    {
+      "at": "2026-10-11T13:34:10.767Z",
+      "step": "distilling",
+      "msg": "Distilling page semantic skeletons…"
+    },
+    {
+      "at": "2026-10-11T13:34:12.924Z",
+      "step": "analyzing",
+      "msg": "LLM reverse-engineering product docs…"
+    },
+    {
+      "at": "2026-10-11T13:34:12.932Z",
+      "step": "analyzing",
+      "msg": "LLM generating: Components & Design System"
+    },
+    {
+      "at": "2026-10-11T13:34:18.234Z",
+      "step": "done",
+      "msg": "✅ Task complete"
+    },
+    {
+      "at": "2026-10-11T13:39:32.175Z",
+      "step": "crawling",
+      "msg": "Crawling site structure (sampling same templates)…"
+    },
+    {
+      "at": "2026-10-11T13:40:00.940Z",
+      "step": "crawling",
+      "msg": "[5/30] d1 /people  https://onedrive.live.com/people"
+    },
+    {
+      "at": "2026-10-11T13:40:22.997Z",
+      "step": "crawling",
+      "msg": "Crawled: 7 pages / 7 types"
+    },
+    {
+      "at": "2026-10-11T13:40:23.026Z",
+      "step": "planning",
+      "msg": "LLM deciding capture strategy (merge templates / pick representatives)…"
+    },
+    {
+      "at": "2026-10-11T13:40:26.437Z",
+      "step": "planning",
+      "msg": "Strategy: 6 types to capture"
+    },
+    {
+      "at": "2026-10-11T13:40:26.480Z",
+      "step": "building",
+      "msg": "Faithfully capturing representative pages + downloading assets…"
+    },
+    {
+      "at": "2026-10-11T13:40:26.518Z",
+      "step": "building",
+      "msg": "Capturing Home …"
+    },
+    {
+      "at": "2026-10-11T13:40:33.580Z",
+      "step": "building",
+      "msg": "✓ Home → index.html (13 assets)"
+    },
+    {
+      "at": "2026-10-11T13:40:33.617Z",
+      "step": "building",
+      "msg": "Capturing My Files …"
+    },
+    {
+      "at": "2026-10-11T13:40:42.630Z",
+      "step": "building",
+      "msg": "✓ My Files → pages/my.html (8 assets)"
+    },
+    {
+      "at": "2026-10-11T13:40:42.645Z",
+      "step": "building",
+      "msg": "Capturing Shared Files …"
+    },
+    {
+      "at": "2026-10-11T13:40:48.534Z",
+      "step": "building",
+      "msg": "✓ Shared Files → pages/shared.html (8 assets)"
+    },
+    {
+      "at": "2026-10-11T13:40:48.550Z",
+      "step": "building",
+      "msg": "Capturing Recycle Bin …"
+    },
+    {
+      "at": "2026-10-11T13:40:53.150Z",
+      "step": "building",
+      "msg": "✓ Recycle Bin → pages/recycle.html (4 assets)"
+    },
+    {
+      "at": "2026-10-11T13:40:53.157Z",
+      "step": "building",
+      "msg": "Capturing People …"
+    },
+    {
+      "at": "2026-10-11T13:40:59.482Z",
+      "step": "building",
+      "msg": "✓ People → pages/people.html (3 assets)"
+    },
+    {
+      "at": "2026-10-11T13:40:59.488Z",
+      "step": "building",
+      "msg": "Capturing Storage Settings …"
+    },
+    {
+      "at": "2026-10-11T13:41:09.355Z",
+      "step": "building",
+      "msg": "✓ Storage Settings → pages/page.html (2 assets)"
+    },
+    {
+      "at": "2026-10-11T13:41:09.389Z",
+      "step": "building",
+      "msg": "Offline site: 6 pages / 22 assets"
+    },
+    {
+      "at": "2026-10-11T13:41:09.421Z",
+      "step": "distilling",
+      "msg": "Distilling page semantic skeletons…"
+    },
+    {
+      "at": "2026-10-11T13:41:11.629Z",
+      "step": "distilling",
+      "msg": "Distilling Home"
+    },
+    {
+      "at": "2026-10-11T13:41:11.995Z",
+      "step": "distilling",
+      "msg": "Distilling My Files"
+    },
+    {
+      "at": "2026-10-11T13:41:12.512Z",
+      "step": "distilling",
+      "msg": "Distilling Shared Files"
+    },
+    {
+      "at": "2026-10-11T13:41:12.703Z",
+      "step": "distilling",
+      "msg": "Distilling Recycle Bin"
+    },
+    {
+      "at": "2026-10-11T13:41:12.798Z",
+      "step": "distilling",
+      "msg": "Distilling People"
+    },
+    {
+      "at": "2026-10-11T13:41:13.149Z",
+      "step": "distilling",
+      "msg": "Distilling Storage Settings"
+    },
+    {
+      "at": "2026-10-11T13:41:13.794Z",
+      "step": "analyzing",
+      "msg": "LLM reverse-engineering product docs…"
+    },
+    {
+      "at": "2026-10-11T13:41:13.805Z",
+      "step": "analyzing",
+      "msg": "LLM generating: Components & Design System"
+    },
+    {
+      "at": "2026-10-11T13:41:19.151Z",
+      "step": "done",
+      "msg": "✅ Task complete"
+    }
+  ],
+  "result": {
+    "types": 7,
+    "pages": 6,
+    "assets": 22,
+    "siteIndex": "index.html",
+    "docs": [
+      {
+        "key": "design",
+        "title": "Components & Design System",
+        "file": "analysis/design-system.md"
+      }
+    ]
+  }
+}

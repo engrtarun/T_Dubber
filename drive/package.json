@@ -8,7 +8,8 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "db:check": "node --env-file-if-exists=.env.local db/check.mjs",
-    "db:schema": "node --env-file-if-exists=.env.local db/apply-schema.mjs"
+    "db:schema": "node --env-file-if-exists=.env.local db/apply-schema.mjs",
+    "brand": "node scripts/brand-t9.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",

@@ -1,0 +1,39 @@
+/* T9 Cloud brand layer — injected by scripts/brand-t9.mjs.
+   The capture below is untouched; everything here is additive. */
+
+/* 1. Dark by default. The capture already contains both Fluent palettes scoped
+      by [data-theme]; this only forces the attribute before first paint. */
+html[data-theme="fluent-light"] { color-scheme: dark; }
+
+/* 2/3. Storage upsells are meaningless here — bytes live on Telegram, which is
+        effectively unlimited, so a 5 GB quota with a "Buy storage" button is a
+      lie. Remove the whole quota banner and the nav purchase prompts. */
+.od-QuotaBannerWrapper,
+.od-QuotaBanner-upsell,
+.od-QBannerUpsell-main,
+.od-QBannerUpsell-barBtn,
+.od-QBannerUpsell-freeTrialCTA,
+#LeftNavStorageButton,
+.buyStorageButton_7ff103ac,
+.getMoreStorageButton_7ff103ac,
+.storageButtonText_7ff103ac,
+[data-automationid="getMoreStorageButton"],
+[data-automationid="upgradeButton"] { display: none !important; }
+
+/* Give the freed banner height back to the content instead of leaving a gap. */
+.od-QuotaBannerWrapper-placeholder { flex: 0 !important; }
+
+/* 4. Product rename. The capture's own markup still says OneDrive; this is a
+      belt-and-braces layer for any element the script in <head> missed. */
+.t9-rebrand { font-weight: 600; letter-spacing: -0.01em; }
+
+/* The account name sits where a brand lockup would be — T9 Cloud gets a mark. */
+.t9-cloud-mark {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-weight: 700; letter-spacing: -0.02em;
+}
+.t9-cloud-mark::before {
+  content: ""; width: 10px; height: 10px; border-radius: 3px;
+  background: linear-gradient(135deg, #0f6cbd, #4a92ff);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.18) inset;
+}
