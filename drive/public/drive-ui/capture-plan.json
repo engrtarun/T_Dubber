@@ -1,0 +1,99 @@
+{
+  "model": "openai/gpt-oss-120b",
+  "plannedAt": "2026-10-11T13:40:26.429Z",
+  "siteSummary": "OneDrive cloud storage web interface with home, file management, shared, recycle, contacts, and settings pages.",
+  "sharedComponentsGuess": [
+    "Header navigation",
+    "Sidebar",
+    "Footer",
+    "Search bar",
+    "User avatar menu"
+  ],
+  "types": [
+    {
+      "label": "Home",
+      "role": "home",
+      "pattern": "/",
+      "representativeUrl": "https://onedrive.live.com/",
+      "mergedFrom": [
+        "/"
+      ],
+      "totalCount": 1,
+      "capture": true,
+      "reason": "Root landing page of the service."
+    },
+    {
+      "label": "My Files",
+      "role": "list",
+      "pattern": "/my",
+      "representativeUrl": "https://onedrive.live.com/my",
+      "mergedFrom": [
+        "/my"
+      ],
+      "totalCount": 1,
+      "capture": true,
+      "reason": "User's personal file overview page."
+    },
+    {
+      "label": "Shared Files",
+      "role": "list",
+      "pattern": "/shared",
+      "representativeUrl": "https://onedrive.live.com/shared",
+      "mergedFrom": [
+        "/shared"
+      ],
+      "totalCount": 1,
+      "capture": true,
+      "reason": "List of files shared with the user."
+    },
+    {
+      "label": "Recycle Bin",
+      "role": "list",
+      "pattern": "/recycle",
+      "representativeUrl": "https://onedrive.live.com/recycle",
+      "mergedFrom": [
+        "/recycle"
+      ],
+      "totalCount": 1,
+      "capture": true,
+      "reason": "Page showing deleted items."
+    },
+    {
+      "label": "People",
+      "role": "list",
+      "pattern": "/people",
+      "representativeUrl": "https://onedrive.live.com/people",
+      "mergedFrom": [
+        "/people"
+      ],
+      "totalCount": 1,
+      "capture": true,
+      "reason": "Contacts or people management page."
+    },
+    {
+      "label": "Storage Settings",
+      "role": "utility",
+      "pattern": "/?…",
+      "representativeUrl": "https://onedrive.live.com/?v=managestorage&sw=bypassConfig",
+      "mergedFrom": [
+        "/?…"
+      ],
+      "totalCount": 1,
+      "capture": true,
+      "reason": "Utility page for managing storage settings."
+    },
+    {
+      "label": "Auth Redirect",
+      "role": "auth",
+      "pattern": "/_forms/default.aspx?…",
+      "representativeUrl": "https://onedrive.live.com/_forms/default.aspx?wreply=https%3A%2F%2Fonedrive.live.com%2F%3Fv%3Dmanagestorage%26sw%3DbypassConfig&returnUrl=https%3A%2F%2Fonedrive.live.com%2F%3Fv%3Dmanagestorage%26sw%3DbypassConfig",
+      "mergedFrom": [
+        "/_forms/default.aspx?…"
+      ],
+      "totalCount": 1,
+      "capture": false,
+      "reason": "Login/redirect page used for authentication flows."
+    }
+  ],
+  "captureCount": 6
+}

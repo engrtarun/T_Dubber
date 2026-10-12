@@ -1,0 +1,18 @@
+node_modules
+.next
+out
+*.log
+.env*.local
+.netlify
+
+# Screenshots that contain live credentials in plaintext.
+#
+# These were captured while setting up Supabase and Netlify, and they show a
+# database password and a personal access token as readable text. Rotating both
+# is the real fix; until then these must not be pushed anywhere, because a
+# commit is permanent and a leaked token outlives the repo it leaked from.
+#
+# Paths here are relative to THIS directory (drive/), not to the repo root.
+# The same rule is mirrored in the repo-root .gitignore as a second lock.
+docs/setup-screenshots/*SECRET*.png
+docs/setup-screenshots/_token-*.png

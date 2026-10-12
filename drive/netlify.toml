@@ -1,0 +1,29 @@
+# Netlify deployment for the drive app.
+#
+# Next.js is NOT a static site — it has server routes (/api/db-check) that must
+# run as Netlify Functions. The @netlify/plugin-nextjs plugin is what wires the
+# build output to those functions; without it Netlify would serve .next as a
+# plain folder and every /api route would 404.
+#
+# Deploy with:  netlify deploy --prod
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  # Netlify defaults to an older Node than the app is developed on; pin it so
+  # the build machine matches what the code expects.
+  NODE_VERSION = "22"
+
+# Captured UI files are large-ish and immutable: cache them hard.
+[[headers]]
+  for = "/drive-ui/*"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
+
+# The API route must never be cached — a stale row count is a wrong answer.
+[[headers]]
+  for = "/api/*"
+  [headers.values]
+    Cache-Control = "no-store"

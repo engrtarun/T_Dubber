@@ -1,0 +1,358 @@
+{
+  "rootHost": "onedrive.live.com",
+  "outlines": [
+    {
+      "label": "Home",
+      "pattern": "/",
+      "file": "index.html",
+      "url": "https://onedrive.live.com/",
+      "outline": {
+        "title": "Home - OneDrive",
+        "landmarks": {
+          "nav": 1
+        },
+        "navItems": [
+          "Home",
+          "My files",
+          "Shared",
+          "Recycle bin",
+          "People",
+          "1.4 GB"
+        ],
+        "headings": [
+          "h1: Get started",
+          "h2: Recent"
+        ],
+        "forms": [],
+        "buttons": [
+          "Photos",
+          "Files",
+          "Get more storage",
+          "TD",
+          "Create or upload",
+          "Browse files by",
+          "Buy storage",
+          "Start free trial",
+          "",
+          "firstTDexcelFile",
+          "Tarun Dilwal"
+        ],
+        "repeated": [
+          {
+            "sig": "li.navLink_ed0dcd6a",
+            "count": 4,
+            "fields": [
+              "Home"
+            ]
+          },
+          {
+            "sig": "li.cardWrapper_f90905be",
+            "count": 4,
+            "fields": [
+              "Word",
+              "Supercharge your writing"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "label": "My Files",
+      "pattern": "/my",
+      "file": "pages/my.html",
+      "url": "https://onedrive.live.com/my",
+      "outline": {
+        "title": "My files - OneDrive",
+        "landmarks": {
+          "nav": 1
+        },
+        "navItems": [
+          "Home",
+          "My files",
+          "Shared",
+          "Recycle bin",
+          "People",
+          "1.4 GB"
+        ],
+        "headings": [
+          "h1: My files"
+        ],
+        "forms": [],
+        "buttons": [
+          "Photos",
+          "Files",
+          "Get more storage",
+          "TD",
+          "Create or upload",
+          "Browse files by",
+          "Buy storage",
+          "Start free trial",
+          "",
+          "My files",
+          "Details",
+          "名称",
+          "修改时间",
+          "File size",
+          "共享",
+          "Apps",
+          "Private",
+          "Attachments",
+          "Desktop",
+          "Documents",
+          "Microsoft Copilot Ch",
+          "Personal Vault",
+          "Pictures",
+          "Restore Firefox",
+          "Videos"
+        ],
+        "repeated": [
+          {
+            "sig": "div.row_594fd7b1",
+            "count": 10,
+            "fields": [
+              "Apps",
+              "2月17日",
+              "1 item",
+              "Private"
+            ]
+          },
+          {
+            "sig": "li.navLink_ed0dcd6a",
+            "count": 4,
+            "fields": [
+              "Home"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "label": "Shared Files",
+      "pattern": "/shared",
+      "file": "pages/shared.html",
+      "url": "https://onedrive.live.com/shared",
+      "outline": {
+        "title": "OneDrive",
+        "landmarks": {
+          "nav": 1
+        },
+        "navItems": [
+          "Home",
+          "My files",
+          "Shared",
+          "Recycle bin",
+          "People",
+          "1.4 GB"
+        ],
+        "headings": [
+          "h1: Shared"
+        ],
+        "forms": [],
+        "buttons": [
+          "Photos",
+          "Files",
+          "Get more storage",
+          "TD",
+          "Create or upload",
+          "Browse files by",
+          "Buy storage",
+          "Start free trial",
+          "",
+          "With you",
+          "By you",
+          "Back to People"
+        ],
+        "repeated": [
+          {
+            "sig": "li.navLink_ed0dcd6a",
+            "count": 4,
+            "fields": [
+              "Home"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "label": "Recycle Bin",
+      "pattern": "/recycle",
+      "file": "pages/recycle.html",
+      "url": "https://onedrive.live.com/recycle",
+      "outline": {
+        "title": "Recycle Bin - OneDrive",
+        "landmarks": {
+          "nav": 1
+        },
+        "navItems": [
+          "Home",
+          "My files",
+          "Shared",
+          "Recycle bin",
+          "People",
+          "1.4 GB"
+        ],
+        "headings": [
+          "h1: Recycle bin"
+        ],
+        "forms": [],
+        "buttons": [
+          "Photos",
+          "Files",
+          "Get more storage",
+          "TD",
+          "Create or upload",
+          "Browse files by",
+          "Buy storage",
+          "Start free trial",
+          "",
+          "Show Personal Vault ",
+          "Empty recycle bin",
+          "Name",
+          "Deleted",
+          "File size",
+          "Tarun Dilwal"
+        ],
+        "repeated": [
+          {
+            "sig": "div.row_594fd7b1",
+            "count": 30,
+            "fields": [
+              "FirefoxBackup_Original profile_b84edbab_",
+              "My Files > Restore Firefox",
+              "4h ago",
+              "Tarun Dilwal",
+              "53.5 MB"
+            ]
+          },
+          {
+            "sig": "li.navLink_ed0dcd6a",
+            "count": 4,
+            "fields": [
+              "Home"
+            ]
+          },
+          {
+            "sig": "div.odsp-spartan-headerCell",
+            "count": 4,
+            "fields": [
+              "Name"
+            ]
+          },
+          {
+            "sig": "div.odsp-spartan-cell",
+            "count": 4,
+            "fields": [
+              "FirefoxBackup_Original profile_b84edbab_",
+              "My Files > Restore Firefox"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "label": "People",
+      "pattern": "/people",
+      "file": "pages/people.html",
+      "url": "https://onedrive.live.com/people",
+      "outline": {
+        "title": "OneDrive",
+        "landmarks": {
+          "nav": 1
+        },
+        "navItems": [
+          "Home",
+          "My files",
+          "Shared",
+          "Recycle bin",
+          "People",
+          "1.4 GB"
+        ],
+        "headings": [
+          "h1: People"
+        ],
+        "forms": [],
+        "buttons": [
+          "Photos",
+          "Files",
+          "Get more storage",
+          "TD",
+          "Create or upload",
+          "Browse files by",
+          "Buy storage",
+          "Start free trial",
+          ""
+        ],
+        "repeated": [
+          {
+            "sig": "li.navLink_ed0dcd6a",
+            "count": 4,
+            "fields": [
+              "Home"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "label": "Storage Settings",
+      "pattern": "/?…",
+      "file": "pages/page.html",
+      "url": "https://onedrive.live.com/?v=managestorage&sw=bypassConfig",
+      "outline": {
+        "title": "OneDrive",
+        "landmarks": {
+          "nav": 1,
+          "main": 2,
+          "footer": 1
+        },
+        "navItems": [
+          "Manage storage",
+          "Plans and upgrades",
+          "Office file formats",
+          "Personal Vault",
+          "Photos",
+          "Notifications",
+          "Import cloud photos and ",
+          "Restore your OneDrive",
+          "Digital legacy"
+        ],
+        "headings": [
+          "h1: Manage storage",
+          "h2: Storage summary",
+          "h2: Free up space",
+          "h2: Your current plans",
+          "h3: Free version of Microsoft 365"
+        ],
+        "forms": [],
+        "buttons": [
+          "",
+          "",
+          "Tarun DilwalTD",
+          "Sign in",
+          "View Microsoft accou",
+          "Get more storage",
+          "View recycle bin",
+          "View files",
+          "Go to Microsoft acco",
+          "Upgrade"
+        ],
+        "repeated": [
+          {
+            "sig": "a.LeftNav-subLink",
+            "count": 9,
+            "fields": [
+              "Manage storage"
+            ]
+          },
+          {
+            "sig": "div.M3pcB5evSAtYMozck1WU7A==",
+            "count": 8,
+            "fields": [
+              ""
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

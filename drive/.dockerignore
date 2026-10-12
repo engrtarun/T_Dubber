@@ -1,0 +1,14 @@
+# Build context hygiene — everything here either bloats the image or must never
+# reach a layer.
+.git
+.gitignore
+node_modules
+.next
+.netlify
+Dockerfile
+.dockerignore
+README.md
+docs
+.env*
+.env*.local
+*.log

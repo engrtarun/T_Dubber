@@ -1,0 +1,134 @@
+{
+  "rootUrl": "https://onedrive.live.com/",
+  "rootHost": "onedrive.live.com",
+  "crawledAt": "2026-10-11T13:40:22.951Z",
+  "stats": {
+    "visited": 7,
+    "discovered": 7,
+    "types": 7,
+    "maxDepthReached": 2
+  },
+  "types": [
+    {
+      "pattern": "/",
+      "representativeUrl": "https://onedrive.live.com/",
+      "title": "Home - OneDrive",
+      "depth": 0,
+      "count": 1,
+      "domFingerprint": "7210332f",
+      "sampleUrls": [
+        "https://onedrive.live.com/"
+      ]
+    },
+    {
+      "pattern": "/my",
+      "representativeUrl": "https://onedrive.live.com/my",
+      "title": "My files - OneDrive",
+      "depth": 1,
+      "count": 1,
+      "domFingerprint": "cd7c66ad",
+      "sampleUrls": [
+        "https://onedrive.live.com/my"
+      ]
+    },
+    {
+      "pattern": "/shared",
+      "representativeUrl": "https://onedrive.live.com/shared",
+      "title": "OneDrive",
+      "depth": 1,
+      "count": 1,
+      "domFingerprint": "d915b073",
+      "sampleUrls": [
+        "https://onedrive.live.com/shared"
+      ]
+    },
+    {
+      "pattern": "/recycle",
+      "representativeUrl": "https://onedrive.live.com/recycle",
+      "title": "Recycle Bin - OneDrive",
+      "depth": 1,
+      "count": 1,
+      "domFingerprint": "d11fe664",
+      "sampleUrls": [
+        "https://onedrive.live.com/recycle"
+      ]
+    },
+    {
+      "pattern": "/people",
+      "representativeUrl": "https://onedrive.live.com/people",
+      "title": "OneDrive",
+      "depth": 1,
+      "count": 1,
+      "domFingerprint": "bf215f93",
+      "sampleUrls": [
+        "https://onedrive.live.com/people"
+      ]
+    },
+    {
+      "pattern": "/?…",
+      "representativeUrl": "https://onedrive.live.com/?v=managestorage&sw=bypassConfig",
+      "title": "OneDrive",
+      "depth": 1,
+      "count": 1,
+      "domFingerprint": "fedbecf1",
+      "sampleUrls": [
+        "https://onedrive.live.com/?v=managestorage&sw=bypassConfig"
+      ]
+    },
+    {
+      "pattern": "/_forms/default.aspx?…",
+      "representativeUrl": "https://onedrive.live.com/_forms/default.aspx?wreply=https%3A%2F%2Fonedrive.live.com%2F%3Fv%3Dmanagestorage%26sw%3DbypassConfig&returnUrl=https%3A%2F%2Fonedrive.live.com%2F%3Fv%3Dmanagestorage%26sw%3DbypassConfig",
+      "title": "OneDrive",
+      "depth": 2,
+      "count": 1,
+      "domFingerprint": "fedbecf1",
+      "sampleUrls": [
+        "https://onedrive.live.com/_forms/default.aspx?wreply=https%3A%2F%2Fonedrive.live.com%2F%3Fv%3Dmanagestorage%26sw%3DbypassConfig&returnUrl=https%3A%2F%2Fonedrive.live.com%2F%3Fv%3Dmanagestorage%26sw%3DbypassConfig"
+      ]
+    }
+  ],
+  "allPages": [
+    {
+      "url": "https://onedrive.live.com/",
+      "pattern": "/",
+      "title": "Home - OneDrive",
+      "depth": 0
+    },
+    {
+      "url": "https://onedrive.live.com/my",
+      "pattern": "/my",
+      "title": "My files - OneDrive",
+      "depth": 1
+    },
+    {
+      "url": "https://onedrive.live.com/shared",
+      "pattern": "/shared",
+      "title": "OneDrive",
+      "depth": 1
+    },
+    {
+      "url": "https://onedrive.live.com/recycle",
+      "pattern": "/recycle",
+      "title": "Recycle Bin - OneDrive",
+      "depth": 1
+    },
+    {
+      "url": "https://onedrive.live.com/people",
+      "pattern": "/people",
+      "title": "OneDrive",
+      "depth": 1
+    },
+    {
+      "url": "https://onedrive.live.com/?v=managestorage&sw=bypassConfig",
+      "pattern": "/?…",
+      "title": "OneDrive",
+      "depth": 1
+    },
+    {
+      "url": "https://onedrive.live.com/_forms/default.aspx?wreply=https%3A%2F%2Fonedrive.live.com%2F%3Fv%3Dmanagestorage%26sw%3DbypassConfig&returnUrl=https%3A%2F%2Fonedrive.live.com%2F%3Fv%3Dmanagestorage%26sw%3DbypassConfig",
+      "pattern": "/_forms/default.aspx?…",
+      "title": "OneDrive",
+      "depth": 2
+    }
+  ]
+}
