@@ -20,6 +20,24 @@ Do cheezein is repo me ek saath hain:
 | Asli dubbing app (pipeline, workers, Gradio UI) | `main` branch |
 | UI/design work — OneDrive clone reference + naya `drive/` web app | `ui` branch |
 
+### 🎯 ui branch ka maksad (roadmap — 3 stages)
+
+Maksad **OneDrive ka UI copy karna NAHI** hai — balki best-in-class file-UI ka
+**clean-room reference** lena (structure + `analysis/design-system.md` ke real
+design tokens) taaki **T_Dubber ka apna UI** un patterns pe bane. Isiliye
+`deepclonewebsite` tool se capture hua (`docs/CLONE_PLAN.MD` ka Goal wahi hai).
+
+| Stage | Kya hai | Status |
+|---|---|---|
+| 1. **Reference** | OneDrive capture (35 files) + design tokens + saved pages/screenshots | ✅ Complete |
+| 2. **Sandbox + infra** | `drive/` Next.js app (capture byte-for-byte serve) + Supabase DB + Netlify deploy | ✅ Done (12 Oct) |
+| 3. **Apna UI/UX** ⭐ | Capture hata ke **apne components/branding** se T_Dubber ke pages (§6 ka plan) → Gradio ke saath integrate | ⏳ AGENDA — abhi shuru nahi hua |
+
+⚠️ Stage 3 se pehle `drive/` sirf **sandbox** hai — final UI me Microsoft ka
+look/branding **nahi** aayega (trademark + disclaimer §8). Capture sirf
+reference rahega, code apna hoga. Do UI (Gradio on `main` + Next.js on `ui`)
+tab tak alag hain; converge ka plan §6 me hai.
+
 ---
 
 ## 2. ⚠️ Branch map (pehle ye samajh lo — sabse important)
