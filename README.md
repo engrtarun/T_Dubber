@@ -100,18 +100,26 @@ npm run dev        # → http://localhost:3000
 | `/drive-ui/pages/people.html` | People |
 | `/drive-ui/pages/page.html` | Storage settings |
 
-### ✅ Verification status (12 Oct 2026)
+### ✅ Verification status (12 Oct 2026, 22:13 — agent ka setup COMPLETE)
 
 - Capture ke **35/35 files** deepclonewebsite source se **SHA256 identical**
   (`deepclonewebsite/open-lovable/public/site-clone/onedrive.live.com/mv3udyvo-npb0/`).
 - Dev server par **byte-for-byte serve** verified (served hash == disk hash,
-  310280 bytes index.html), redirect + pages + assets sab 200.
+  310280 bytes index.html), redirect 307 + pages + assets sab 200.
+- **`npm run typecheck` = PASS (exit 0), `npm run build` = PASS (exit 0)**
+  — routes: `/` (static) + `/api/db-check` (dynamic).
+- Agent ne **DB layer** bhi banaya: Postgres via `@neondatabase/serverless`
+  (`db/schema.sql` = users/folders/files, `db/init.mjs`, `lib/db.ts`,
+  `.env.example`, `GET /api/db-check` = deploy ka connection proof).
+  Reasoning drive/README.md me (serverless pe SQLite nahi chalta — sahi point).
 - Stack: Next.js 15.4.3 · React 19.1 · Tailwind 3.4.17 · TS 5 · Node 24.
 - ⚠️ `next@15.4.3` me CVE-2025-66478 hai — deploy/public se pehle upgrade karna
   (drive/README.md me note hai).
 - ⚠️ `public/drive-ui/` me `task.json`, `capture-plan.json`, `sitemap.json`,
   `analysis/` bhi publicly serve hote hain — test deploy me chalega, production
   se pehle hata dena.
+- 📌 drive/ abhi **untracked** hai (`?? drive/`) — merge se pehle commit karna
+  zaroori hai (§5 me steps).
 
 ### Deploy — Netlify TEST (org final Cloudflare Pages par hoga)
 
@@ -135,18 +143,25 @@ netlify deploy --dir=drive/public --prod   # test ke liye
    - **Base directory:** `drive`
    - **Build command:** `npm run build`
    - **Publish directory:** `.next` (Netlify ka Next.js plugin auto-detect karta hai)
-4. ya CLI: `cd drive && npx netlify-cli deploy --build` (netlify.toml ho to):
+4. ya CLI (drive/ ke andar se): `npx netlify-cli deploy --build`, pehle
+   `drive/netlify.toml` banao (exact file drive/README.md §Netlify me hai):
 
 ```toml
-# drive/netlify.toml (chahiye to ye daal do)
+# drive/netlify.toml  (file drive/ ke andar hai, isliye base ki zaroorat nahi)
 [build]
-  base = "drive"
   command = "npm run build"
   publish = ".next"
 
 [build.environment]
   NODE_VERSION = "24"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"    # API routes (/api/db-check) ke liye zaroori
 ```
+
+> ❌ `netlify deploy --dir .` mat chalao — wo source+node_modules static
+> publish karega aur API routes banenge hi nahi. Static-only test chahiye to
+> `--dir=public` (Option A).
 
 **Cloudflare Pages (final/org):** base=`drive`, build=`npm run build`.
 Static output chahiye to `drive/next.config.ts` me `output: "export"` add karo
