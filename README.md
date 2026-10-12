@@ -263,6 +263,39 @@ laayein, chrome minimal.
 
 ---
 
+## 6.5 Data architecture — SQLite vs Postgres vs Telegram (kya kahan)
+
+Teen "databases" hain aur **teeno ka role alag hai — judne ki zaroorat nahi,
+bridge = application layer:**
+
+| Store | Kaun use karta hai | Kya rakhta hai | Kyun wahan |
+|---|---|---|---|
+| **SQLite** `t_dubber.db` (main, `db.py`) | Local dubbing app | `projects`, `job_queue`, `pipeline_stages`, `quality_metrics`, `speakers` + **`telegram_archives`/`telegram_parts`/`channel_daily_quota`** (TG ka ledger!) | Single-writer local telemetry — waisa hi sahi |
+| **Telegram** (tgup/Telethon) | Dono apps | **File BYTES** — videos, dubbed output, archives (chunks, channels) | Ye hamara **asli free cloud/object storage** hai — unlimited-ish, 1900 MiB parts, direct-link upload |
+| **Postgres** (Supabase) | `drive/` app (serverless) | Sirf **metadata**: `users`, `folders`, `files(storage_key, size, mime)` | Serverless pe filesystem ephemeral; Supabase free tier ke bytes budget me nahi — isliye bytes yahan NAHI, sirf index |
+
+**Data flow (jab ek hi cheez teeno me chahiye):**
+
+```
+dub output (main app)
+  → tgup se TG channel me upload        [BYTES → Telegram]
+  → SQLite me ledger: archive/parts/msg  [INDEX → SQLite]
+  → drive ke files.storage_key = TG ref  [CLOUD INDEX → Postgres]
+  → drive UI (Netlify/CF) list dikhaye, download TG se
+```
+
+**Rules:**
+1. SQLite ↔ Postgres ka **direct sync nahi** — alag engines, alag machines.
+   Chahiye to application layer se one-way push/pull (drive ka API ya export
+   script). Aaj zaroorat nahi — dono apps alag hain.
+2. **Bytes kabhi Postgres me mat daalo** (Supabase free = ~500MB) — bytes
+   Telegram pe, Postgres me sirf `storage_key` (TG message ref/link).
+3. `files.storage_key` ka intended meaning yahi hai: object-storage pointer —
+   wo pointer **Telegram** ban sakta hai (Supabase Storage se bhi chalega,
+   par TG = zero cost + unlimited).
+
+---
+
 ## 7. Setup / clone
 
 Detail: **[docs/HOW_TO_CLONE.MD](docs/HOW_TO_CLONE.MD)** ·
