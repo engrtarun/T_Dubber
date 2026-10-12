@@ -30,3 +30,6 @@ __pycache__/
 # side mat lena. Run:  git merge main --allow-unrelated-histories
 # phir .gitignore conflict par main ka poora content + upar wala block rakhlo.
 # =========================================================================
+
+# Local Netlify folder
+.netlify

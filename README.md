@@ -4,6 +4,21 @@
 > isko padh ke context le sakta hai — branches, structure, UI plan, deploy,
 > aur merge status yahin hai.
 
+<div align="center">
+
+### 🟢 LIVE — drive app deployed
+
+**[➡️ Open the live demo](https://t-dubber-drive-test.netlify.app/drive-ui/index.html)**
+
+`https://t-dubber-drive-test.netlify.app/drive-ui/index.html`
+
+![Live Netlify deploy — Home](drive/docs/setup-screenshots/10-live-netlify-home.png)
+
+<sub>Next.js 15.5.27 · Tailwind · TypeScript · Supabase Postgres · Netlify<br>
+UI capture byte-for-byte unchanged · <code>/api/db-check</code> → live DB proof</sub>
+
+</div>
+
 ---
 
 ## 1. Ye repo hai kya
@@ -30,7 +45,7 @@ design tokens) taaki **T_Dubber ka apna UI** un patterns pe bane. Isiliye
 | Stage | Kya hai | Status |
 |---|---|---|
 | 1. **Reference** | OneDrive capture (35 files) + design tokens + saved pages/screenshots | ✅ Complete |
-| 2. **Sandbox + infra** | `drive/` Next.js app (capture byte-for-byte serve) + Supabase DB + Netlify deploy | ✅ Done (12 Oct) |
+| 2. **Sandbox + infra** | `drive/` Next.js app (capture byte-for-byte serve) + Supabase DB + Netlify deploy | ✅ Done + **LIVE** (12 Oct) |
 | 3. **Apna UI/UX** ⭐ | Capture hata ke **apne components/branding** se T_Dubber ke pages (§6 ka plan) → Gradio ke saath integrate | ⏳ AGENDA — abhi shuru nahi hua |
 
 ⚠️ Stage 3 se pehle `drive/` sirf **sandbox** hai — final UI me Microsoft ka
@@ -45,7 +60,7 @@ tab tak alag hain; converge ka plan §6 me hai.
 | Branch | Kya hai | HEAD | Commits |
 |---|---|---|---|
 | `main` | Poora T_Dubber app: Python pipeline, Go, Rust/C++ binaries, Gradio UI (`app.py`), Kaggle worker, Telegram upload, 10 submodules | `c8027ec` (v0.1 Zero-Torch) | 70 |
-| `ui` | OneDrive clone reference + `deepclonewebsite` submodule + `drive/` (Next.js UI app) + docs | `0b5c8bd` | 5 (ROOT branch) |
+| `ui` | OneDrive clone reference + `deepclonewebsite` submodule + `drive/` (Next.js UI app) + docs | `bbfad7f` | 6 (ROOT branch) |
 
 ### 🚨 Critical: dono branches UNRELATED hain
 
@@ -108,7 +123,57 @@ npm install
 npm run dev        # → http://localhost:3000
 ```
 
+### 🟢 Live deploy (12 Oct 2026 — Netlify)
+
+**https://t-dubber-drive-test.netlify.app/drive-ui/index.html**
+
+Ye **Next.js app poora** deploy hai (sirf static nahi) — isliye `/` redirect,
+`/api/db-check` API route, aur teeno chal rahe hain.
+
 | URL | Kya hai |
+|---|---|
+| `/` | redirect → `/drive-ui/index.html` |
+| `/api/db-check` | Live DB proof (Supabase se actually query) |
+| `/drive-ui/index.html` | Home |
+| `/drive-ui/pages/my.html` | My Files |
+| `/drive-ui/pages/shared.html` | Shared |
+| `/drive-ui/pages/recycle.html` | Recycle Bin |
+| `/drive-ui/pages/people.html` | People |
+| `/drive-ui/pages/page.html` | Storage settings |
+
+Live `/api/db-check` ka response:
+
+```json
+{ "ok": true, "configured": true, "backend": "postgres",
+  "counts": { "users": {"rows":0}, "folders": {"rows":0}, "files": {"rows":0} },
+  "latency_ms": 1989 }
+```
+
+**Deploy kaise bana** (dobara banana ho to):
+
+```bash
+cd drive
+netlify login                       # browser authorize — token share karne ki zaroorat nahi
+netlify env:set DATABASE_URL "postgresql://…" --context production --context deploy --context build --secret
+netlify deploy --prod
+```
+
+| | |
+|---|---|
+| Project | [t-dubber-drive-test](https://app.netlify.com/projects/t-dubber-drive-test) |
+| Site ID | `a79393cc-d607-4a6b-9aae-02cd49af50e2` |
+| Build | `drive/netlify.toml` — `@netlify/plugin-nextjs` ke bina API routes 404 hote |
+| Docker | `drive/Dockerfile` — multi-stage, standalone, non-root (⚠️ image test nahi hua, daemon nahi tha) |
+
+<details>
+<summary>🖼️ Live screenshots</summary>
+
+**My Files**
+![Live deploy — My Files](drive/docs/setup-screenshots/11-live-netlify-my-files.png)
+
+</details>
+
+| URL (local) | Kya hai |
 |---|---|
 | `/` | redirect → `/drive-ui/index.html` |
 | `/drive-ui/index.html` | Home |
@@ -126,66 +191,69 @@ npm run dev        # → http://localhost:3000
   310280 bytes index.html), redirect 307 + pages + assets sab 200.
 - **`npm run typecheck` = PASS (exit 0), `npm run build` = PASS (exit 0)**
   — routes: `/` (static) + `/api/db-check` (dynamic).
-- Agent ne **DB layer** bhi banaya: **Supabase Postgres** (pehle Neon tha,
-  ab `@supabase/supabase-js`) — `db/schema.sql` = users/folders/files,
-  `db/init.mjs` + `db/check.mjs` (`npm run db:check`), `lib/db.ts`,
-  `.env.local` (gitignored ✓), `GET /api/db-check` = deploy ka connection
-  proof. Setup record: `drive/docs/supabase-setup/` + `drive/docs/setup-screenshots/`.
-  Reasoning drive/README.md me (serverless pe SQLite nahi chalta — sahi point).
-- Stack: Next.js 15.4.3 · React 19.1 · Tailwind 3.4.17 · TS 5 · Node 24.
-- ⚠️ `next@15.4.3` me CVE-2025-66478 hai — deploy/public se pehle upgrade karna
-  (drive/README.md me note hai).
+- Agent ne **DB layer** bhi banaya: **Supabase Postgres** — `db/schema.sql` =
+  users/folders/files, `db/apply-schema.mjs` (`npm run db:schema`, seedha TCP
+  se schema apply karta hai — SQL Editor ki zaroorat nahi) + `db/check.mjs`
+  (`npm run db:check`), `lib/db.ts`, `.env.local` (gitignored ✓),
+  `GET /api/db-check` = deploy ka connection proof.
+  Setup record: `drive/docs/supabase-setup/` + `drive/docs/setup-screenshots/`.
+  **Schema live apply ho chuka hai** (PostgreSQL 17.11, teeno tables OK).
+- Stack: **Next.js 15.5.27** · React 19.1 · Tailwind 3.4.17 · TS 5 · Node 24.
+- ✅ **CVE-2025-66478 fix ho gaya.** Pehle `next@15.4.3` tha aur **Netlify ne
+  deploy hi block kar diya** (HTTP 400: *"blocking further deploys until you
+  update your Next.js version"*). Ab patched 15.x pe hai.
+- ✅ **`drive/` commit + push ho chuka hai** — `bbfad7f` on `ui` branch,
+  64 files, GitHub se verified (`local == remote hash`).
+- ✅ **Live deploy working** — UI 200 (310,305 bytes) · asset 200 · My Files 200 ·
+  `/api/db-check` 200 `ok:true`. Netlify build 3m41s.
+- ⚠️ **Screenshot security** — setup screenshots me 2 PNG live secrets dikhate
+  the (DB password + Netlify token). Wo **git se exclude** hain
+  (`*SECRET*.png`, do jagah `.gitignore` me). Deep scan clean — koi tracked
+  file me token/password/service_role key nahi. **Credentials rotate karna
+  abhi bhi baaki hai** (Supabase → Database → Reset password; Netlify → Tokens).
 - ⚠️ `public/drive-ui/` me `task.json`, `capture-plan.json`, `sitemap.json`,
   `analysis/` bhi publicly serve hote hain — test deploy me chalega, production
   se pehle hata dena.
-- 📌 drive/ abhi **untracked** hai (`?? drive/`) — merge se pehle commit karna
-  zaroori hai (§5 me steps).
 
-### Deploy — Netlify TEST (org final Cloudflare Pages par hoga)
+### Deploy — Netlify ✅ ho chuka (Cloudflare Pages baaki, org standard)
 
-**Option A — sabse fast (sirf static files, koi build nahi):**
+**Status:** Netlify par **live hai** (upar §4 dekho). Cloudflare Pages org
+ka final target hai — uske liye driver choice already Cloudflare-safe rakha
+gaya hai (HTTPS pehle, TCP sirf fallback).
+
+**Netlify dobara deploy karna ho to:**
 
 ```bash
-# drive/ abhi commit nahi hai, isliye CLI drag se kaam chalega
-npm i -g netlify-cli
-netlify login
-netlify deploy --dir=drive/public          # preview URL milega
-netlify deploy --dir=drive/public --prod   # test ke liye
-# open: https://<site>.netlify.app/drive-ui/index.html
-# (/ par 404 aayega — wo Next ka redirect hai, static me nahi; test ke liye OK)
+cd drive
+netlify login          # browser authorize — personal token share karne ki zaroorat nahi
+netlify deploy --prod  # netlify.toml build + plugin khud chalayega
 ```
 
-**Option B — poora Next.js app (recommended, redirect bhi chalega):**
+**Netlify GUI se (GitHub integration):**
 
-1. `drive/` ko commit + push karo (main repo ke andar, `ui` branch par).
-2. Netlify → "Add new site" → "Import an existing project" → GitHub repo chuno.
-3. Build settings:
-   - **Base directory:** `drive`
-   - **Build command:** `npm run build`
-   - **Publish directory:** `.next` (Netlify ka Next.js plugin auto-detect karta hai)
-4. ya CLI (drive/ ke andar se): `npx netlify-cli deploy --build`, pehle
-   `drive/netlify.toml` banao (exact file drive/README.md §Netlify me hai):
+1. Netlify → "Add new site" → "Import an existing project" → repo chuno
+2. **Base directory:** `drive` · **Build:** `npm run build` · **Publish:** `.next`
+3. Environment variables me `DATABASE_URL` add karo (production scope)
 
-```toml
-# drive/netlify.toml  (file drive/ ke andar hai, isliye base ki zaroorat nahi)
-[build]
-  command = "npm run build"
-  publish = ".next"
+`drive/netlify.toml` already `@netlify/plugin-nextjs` + `NODE_VERSION` set karta
+hai — bina iske API routes 404 hote hain.
 
-[build.environment]
-  NODE_VERSION = "24"
+> ❌ `netlify deploy --dir .` mat chalao — wo source + node_modules static
+> publish karega aur API routes banenge hi nahi.
 
-[[plugins]]
-  package = "@netlify/plugin-nextjs"    # API routes (/api/db-check) ke liye zaroori
+**Cloudflare Pages (org standard, abhi nahi kiya):**
+
+```bash
+npm i -g wrangler && wrangler login
+# build: npm run build   ·   output: .next   ·   Node 22+
+# Next.js on Pages ke liye @cloudflare/next-on-pages adapter chahiye
 ```
 
-> ❌ `netlify deploy --dir .` mat chalao — wo source+node_modules static
-> publish karega aur API routes banenge hi nahi. Static-only test chahiye to
-> `--dir=public` (Option A).
-
-**Cloudflare Pages (final/org):** base=`drive`, build=`npm run build`.
-Static output chahiye to `drive/next.config.ts` me `output: "export"` add karo
-→ build `out/` dega, wo directly Pages/Netlify par bina runtime ke chalega.
+⚠️ Cloudflare **free tier me outbound TCP allow nahi karta** — isliye wahan
+`DATABASE_URL` (pg/raw TCP) backend **kaam nahi karega**. Sirf
+`NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (HTTPS/REST backend)
+chalega. `lib/db.ts` isliye HTTPS ko pehle rakhta hai: Cloudflare deploy
+kabhi us socket pe depend nahi ho sakti jo use khulega hi nahi.
 
 ---
 
