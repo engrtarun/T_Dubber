@@ -43,6 +43,7 @@ call is refused up front with a reason, and the caller uses Telethon.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
 import os
@@ -51,12 +52,16 @@ import shutil
 import subprocess
 import sys
 import threading
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING
 
 import telethon_session
+
+if TYPE_CHECKING:
+    # Annotation-only (see `from __future__ import annotations` above), so the
+    # import never needs to exist at runtime.
+    from collections.abc import Callable
 
 ROOT = Path(__file__).resolve().parent
 TGUP_DIR = ROOT
@@ -101,11 +106,18 @@ def get_base_command() -> list[str]:
     on_path = shutil.which("tgup")
     if on_path:
         return [str(on_path)]
-    
+
     # Fallback to Go source via PS1 conductor
     if (ROOT / "run_go.ps1").is_file():
-        return ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "run_go.ps1")]
-        
+        return [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(ROOT / "run_go.ps1"),
+        ]
+
     return []
 
 
@@ -124,6 +136,9 @@ def binary_version(base_cmd: list[str]) -> str | None:
             timeout=30,
             creationflags=_no_window(),
             cwd=str(ROOT),
+            # stdin=DEVNULL: "help" never reads stdin, and this runs from the
+            # Gradio worker where an inherited console handle could stall.
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -159,7 +174,7 @@ class TransferProgress:
     message: str = ""
 
     @classmethod
-    def from_json(cls, line: str) -> "TransferProgress | None":
+    def from_json(cls, line: str) -> TransferProgress | None:
         line = line.strip()
         if not line.startswith("{"):
             return None
@@ -201,7 +216,7 @@ class GoUploadResult:
     parts: list = field(default_factory=list)
 
     @classmethod
-    def from_json(cls, data: dict) -> "GoUploadResult":
+    def from_json(cls, data: dict) -> GoUploadResult:
         return cls(
             ok=bool(data.get("ok", False)),
             used_go=True,
@@ -314,18 +329,18 @@ def record_session_state(authorized: bool, detail: str = "") -> None:
     and the UI can answer "is the session good?" without paying for
     another process launch and network call on every status poll.
     """
-    try:
+    # A missing cache must never break a run.
+    with contextlib.suppress(OSError):
         session_state_path().write_text(
-            json.dumps({
-                "checked_at": datetime.datetime.now(
-                    datetime.timezone.utc).isoformat(timespec="seconds"),
-                "authorized": bool(authorized),
-                "detail": detail or "",
-            }),
+            json.dumps(
+                {
+                    "checked_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
+                    "authorized": bool(authorized),
+                    "detail": detail or "",
+                }
+            ),
             encoding="utf-8",
         )
-    except OSError:
-        pass  # a missing cache must never break a run
 
 
 def session_state() -> dict:
@@ -347,9 +362,8 @@ def session_state() -> dict:
     try:
         stamp = datetime.datetime.fromisoformat(checked_at)
         if stamp.tzinfo is None:
-            stamp = stamp.replace(tzinfo=datetime.timezone.utc)
-        age = (datetime.datetime.now(datetime.timezone.utc)
-               - stamp).total_seconds()
+            stamp = stamp.replace(tzinfo=datetime.UTC)
+        age = (datetime.datetime.now(datetime.UTC) - stamp).total_seconds()
     except ValueError:
         age = None
     if age is None or age > SESSION_STATE_TTL_SECONDS:
@@ -396,10 +410,9 @@ def _refuse(command: str, on_human: Callable[[str], None] | None) -> str:
     """Report a refusal through the human log and return the reason."""
     reason = session_refusal(command)
     if reason and on_human is not None:
-        try:
+        # A broken display never changes the answer.
+        with contextlib.suppress(Exception):
             on_human(reason)
-        except Exception:  # noqa: BLE001 - a broken display never changes the answer
-            pass
     return reason
 
 
@@ -454,10 +467,9 @@ def ensure_session(on_human: Callable[[str], None] | None = None) -> str:
         f"dc{info['dc']} {info['addr']}); no OTP needed"
     )
     if on_human is not None:
-        try:
+        # A broken display never changes the answer.
+        with contextlib.suppress(Exception):
             on_human(note)
-        except Exception:  # noqa: BLE001 - a broken display never changes the answer
-            pass
     return note
 
 
@@ -502,7 +514,10 @@ def run_command(
     errors: list[BaseException] = []
 
     def drain() -> None:
-        assert proc.stderr is not None
+        # stderr=PIPE is set above, so this cannot be None; a bare assert would
+        # vanish under python -O and strand the reader thread.
+        if proc.stderr is None:
+            raise RuntimeError("tgup stderr pipe disappeared")
         try:
             for raw in proc.stderr:
                 text = raw.decode("utf-8", "replace")
@@ -511,17 +526,14 @@ def run_command(
                     line = text.rstrip("\n")
                     human.append(line)
                     if on_human is not None:
-                        try:
+                        # A broken display must never abort a live transfer.
+                        with contextlib.suppress(Exception):
                             on_human(line)
-                        except Exception:
-                            pass
                     continue
                 if on_progress is not None:
-                    try:
+                    # A broken display must never abort a live transfer.
+                    with contextlib.suppress(Exception):
                         on_progress(progress)
-                    except Exception:
-                        # A broken display must never abort a live transfer.
-                        pass
         except BaseException as exc:  # noqa: BLE001 - reported, not swallowed
             errors.append(exc)
 
@@ -591,9 +603,7 @@ def upload(
         ensure_session(on_human)
     reason = "" if dry_run else _refuse("upload", on_human)
     if reason:
-        return GoUploadResult(
-            used_go=True, ok=False, fallback_reason=reason, error=reason
-        )
+        return GoUploadResult(used_go=True, ok=False, fallback_reason=reason, error=reason)
     if bool(str(file).strip()) == bool(str(url).strip()):
         # Both or neither. Guessing here would pick one source and silently
         # upload the wrong bytes, which is the worst available failure.
@@ -604,18 +614,20 @@ def upload(
         )
         if on_human:
             on_human(f"tgup upload: {detail}")
-        return GoUploadResult(used_go=True, ok=False, error=detail,
-                              fallback_reason=detail)
+        return GoUploadResult(used_go=True, ok=False, error=detail, fallback_reason=detail)
     args = ["upload"]
     if str(url).strip():
         args += ["--url", str(url).strip()]
     else:
         args += ["--file", str(file)]
     args += [
-        "--channel", channel,
+        "--channel",
+        channel,
         "--credentials-stdin",
-        "--session", str(session_path()),
-        "--concurrency", str(max(1, int(concurrency))),
+        "--session",
+        str(session_path()),
+        "--concurrency",
+        str(max(1, int(concurrency))),
     ]
     if dry_run:
         args += ["--dry-run"]
@@ -661,16 +673,18 @@ def fetch(
     ensure_session()
     reason = session_refusal("fetch")
     if reason:
-        return GoUploadResult(
-            used_go=True, ok=False, fallback_reason=reason, error=reason
-        )
+        return GoUploadResult(used_go=True, ok=False, fallback_reason=reason, error=reason)
     args = [
         "fetch",
-        "--link", link,
-        "--dest", str(dest),
+        "--link",
+        link,
+        "--dest",
+        str(dest),
         "--credentials-stdin",
-        "--session", str(session_path()),
-        "--concurrency", str(max(1, int(concurrency))),
+        "--session",
+        str(session_path()),
+        "--concurrency",
+        str(max(1, int(concurrency))),
     ]
     if not verify:
         args.append("--verify=false")
@@ -698,15 +712,18 @@ def bench(
     ensure_session(on_human)
     reason = session_refusal("bench")
     if reason:
-        return {"ok": False, "returncode": 2, "log": reason, "rows": {},
-                "fallback_reason": reason}
+        return {"ok": False, "returncode": 2, "log": reason, "rows": {}, "fallback_reason": reason}
     args = [
         "bench",
-        "--channel", channel,
+        "--channel",
+        channel,
         "--credentials-stdin",
-        "--session", str(session_path()),
-        "--size", str(max(1, int(size_mb)) * 1024 * 1024),
-        "--concurrency", levels,
+        "--session",
+        str(session_path()),
+        "--size",
+        str(max(1, int(size_mb)) * 1024 * 1024),
+        "--concurrency",
+        levels,
     ]
     if phone:
         args += ["--phone", phone]
@@ -793,8 +810,7 @@ def check() -> dict:
         return {
             "runnable": False,
             "reason": (
-                f"{base_cmd} exists but will not start; Smart App Control may be "
-                "blocking it"
+                f"{base_cmd} exists but will not start; Smart App Control may be blocking it"
             ),
             "path": str(base_cmd),
             "session": session_ready(),
@@ -807,7 +823,9 @@ def check() -> dict:
         "session_path": str(session_path()),
         "needs_login": needs_login(),
         "login_allowed": login_allowed(),
-        "size_mb": round(Path(base_cmd[-1]).stat().st_size / (1024 * 1024), 2) if Path(base_cmd[-1]).exists() else 0.0,
+        "size_mb": round(Path(base_cmd[-1]).stat().st_size / (1024 * 1024), 2)
+        if Path(base_cmd[-1]).exists()
+        else 0.0,
     }
 
 

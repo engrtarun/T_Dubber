@@ -10,11 +10,14 @@ import glob
 import zipfile
 import sys
 import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 # Optional: havaldar_core telemetry daemon integration
 try:
     from havaldar import HavaldarDaemon
+
     _HAS_HAVALDAR = True
 except ImportError:
     _HAS_HAVALDAR = False
@@ -53,6 +56,7 @@ os.environ["KAGGLE_CONFIG_DIR"] = local_kaggle_dir
 # take down the whole Gradio app, not just the telemetry.
 try:
     import db
+
     _DB_IMPORT_ERROR = None
 except Exception as _exc:  # pragma: no cover - telemetry is not load-bearing
     db = None
@@ -78,7 +82,7 @@ _MAX_MESSAGE = 500
 _MAX_ERROR = 2000
 _TEL_WARN_LIMIT = 5
 
-_tel_started = {}   # (project_id, stage) -> time.monotonic() at "running"
+_tel_started = {}  # (project_id, stage) -> time.monotonic() at "running"
 _tel_ready = set()  # project ids confirmed to exist in `projects`
 _tel_warned = 0
 
@@ -137,11 +141,18 @@ def _env_flag(name: str, default: bool = True) -> bool:
 # logged -- a silent fallback here would produce a video with no subtitles
 # and no explanation.
 
+
 def _subtitle_forge_binary() -> str:
     """Locate the subtitle_forge binary, or "" when unavailable."""
     candidates = [
         os.environ.get("SUBTITLE_FORGE_BIN", ""),
-        os.path.join(APP_DIR, "subtitle_forge", "target", "release", "subtitle_forge.exe" if sys.platform == "win32" else "subtitle_forge"),
+        os.path.join(
+            APP_DIR,
+            "subtitle_forge",
+            "target",
+            "release",
+            "subtitle_forge.exe" if sys.platform == "win32" else "subtitle_forge",
+        ),
         os.path.join(APP_DIR, "subtitle_forge", "target", "release", "subtitle_forge"),
     ]
     for cand in candidates:
@@ -151,8 +162,9 @@ def _subtitle_forge_binary() -> str:
     return found or ""
 
 
-def generate_subtitles(transcript_json: str, output_stem: str,
-                       srt: bool = True, ass: bool = True) -> dict:
+def generate_subtitles(
+    transcript_json: str, output_stem: str, srt: bool = True, ass: bool = True
+) -> dict:
     """Generate .srt/.ass subtitles from a faster-whisper JSON transcript.
 
     Returns ``{"srt": path_or_None, "ass": path_or_None, "ok": bool}``.
@@ -190,13 +202,19 @@ def generate_subtitles(transcript_json: str, output_stem: str,
         return {"srt": None, "ass": None, "ok": False}
 
     if res.returncode != 0:
-        print(f"[pipeline] subtitle_forge exited {res.returncode}: {(res.stderr or res.stdout or '')[-500:]}", file=sys.stderr)
+        print(
+            f"[pipeline] subtitle_forge exited {res.returncode}: {(res.stderr or res.stdout or '')[-500:]}",
+            file=sys.stderr,
+        )
         return {"srt": None, "ass": None, "ok": False}
 
     # Verify at least one output file was actually produced.
     produced = {k: v for k, v in outputs.items() if os.path.isfile(v) and os.path.getsize(v) > 0}
     if not produced:
-        print(f"[pipeline] subtitle_forge produced no output files for {transcript_json}", file=sys.stderr)
+        print(
+            f"[pipeline] subtitle_forge produced no output files for {transcript_json}",
+            file=sys.stderr,
+        )
         return {"srt": None, "ass": None, "ok": False}
     return {"srt": produced.get("srt"), "ass": produced.get("ass"), "ok": True}
 
@@ -252,8 +270,9 @@ def _tel_ensure_project(project_id, manifest):
         _tel_warn(f"could not create the projects row for {project_id}: {exc}")
 
 
-def track_stage(project_id, stage_number, status, message=None, error=None,
-                manifest=None, duration_sec=None):
+def track_stage(
+    project_id, stage_number, status, message=None, error=None, manifest=None, duration_sec=None
+):
     """Record one stage transition. Returns True on success, never raises.
 
     ``status`` is "running", "success" or "failed". ``duration_sec`` is measured
@@ -287,15 +306,17 @@ def track_stage(project_id, stage_number, status, message=None, error=None,
         )
         # Mirror the transition to havaldar_core (best-effort, never raises).
         if _havaldar_enabled():
-            _havaldar_post({
-                "project_id": project_id,
-                "stage": stage_number,
-                "stage_name": name,
-                "status": status,
-                "message": _tel_truncate(message, _MAX_MESSAGE),
-                "error": _tel_truncate(error, _MAX_ERROR),
-                "duration_sec": duration_sec,
-            })
+            _havaldar_post(
+                {
+                    "project_id": project_id,
+                    "stage": stage_number,
+                    "stage_name": name,
+                    "status": status,
+                    "message": _tel_truncate(message, _MAX_MESSAGE),
+                    "error": _tel_truncate(error, _MAX_ERROR),
+                    "duration_sec": duration_sec,
+                }
+            )
         return True
     except Exception as exc:
         _tel_warn(f"{project_id} stage {stage_number} {status} not recorded: {exc}")
@@ -310,6 +331,7 @@ def project_id_for(project_dir):
     """The projects.id for a project directory (its basename)."""
     return os.path.basename(os.path.abspath(project_dir))
 
+
 def run_cmd(cmd):
     """Run a subprocess with UTF-8-safe output capture on Windows and Linux."""
     child_env = os.environ.copy()
@@ -322,8 +344,15 @@ def run_cmd(cmd):
         )
     print(f"Executing command string: {cmd}")
     return subprocess.run(
-        cmd, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=child_env
+        cmd,
+        shell=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=child_env,
     )
+
 
 def kernel_id_for(username):
     """The single reusable private worker notebook for this Kaggle account."""
@@ -374,8 +403,9 @@ def _collect_kernel_logs(project_dir):
     return "", None
 
 
-def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seconds=30,
-                     stage_number=5, manifest=None):
+def _wait_for_kernel(
+    kernel_id, project_dir, timeout, stage="STAGE:5", poll_seconds=30, stage_number=5, manifest=None
+):
     """Poll a Kaggle kernel until it finishes, yielding progress lines.
 
     Returns ``{"success": bool, "network_error": bool, "status": str}``. This is
@@ -390,9 +420,13 @@ def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seco
     output_cmd = ["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir]
 
     project_id = project_id_for(project_dir)
-    track_stage(project_id, stage_number, "running",
-                message=f"Waiting on Kaggle worker {kernel_id} (timeout {int(timeout / 3600)}h)",
-                manifest=manifest)
+    track_stage(
+        project_id,
+        stage_number,
+        "running",
+        message=f"Waiting on Kaggle worker {kernel_id} (timeout {int(timeout / 3600)}h)",
+        manifest=manifest,
+    )
 
     start_time = time.time()
     last_report = 0
@@ -401,9 +435,13 @@ def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seco
         elapsed = time.time() - start_time
         if elapsed > timeout:
             yield f"[{stage}] ❌ Timeout: Worker did not finish within {int(timeout / 3600)} hours.\n"
-            track_stage(project_id, stage_number, "failed",
-                        message=f"Timed out after {int(elapsed)}s",
-                        error=f"Kaggle worker did not finish within {int(timeout / 3600)} hours")
+            track_stage(
+                project_id,
+                stage_number,
+                "failed",
+                message=f"Timed out after {int(elapsed)}s",
+                error=f"Kaggle worker did not finish within {int(timeout / 3600)} hours",
+            )
             return {"success": False, "network_error": False, "status": "timeout"}
 
         result = run_cmd(status_cmd)
@@ -414,16 +452,20 @@ def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seco
         # a transient error and retry — do NOT treat as kernel failure.
         if result.returncode != 0:
             yield f"[{stage}] ⚠️ Kaggle status check failed (exit {result.returncode}); retrying in {poll_seconds}s...\n"
-            if (result.stderr or result.stdout):
+            if result.stderr or result.stdout:
                 yield f"[{stage}] CLI output: {(result.stderr or result.stdout).strip()[-500:]}\n"
             time.sleep(poll_seconds)
             continue
 
         if "complete" in lowered:
             yield f"[{stage}] ✅ Kaggle execution completed!\n"
-            track_stage(project_id, stage_number, "success",
-                        message=f"Kaggle execution completed in {int(elapsed)}s",
-                        manifest=manifest)
+            track_stage(
+                project_id,
+                stage_number,
+                "success",
+                message=f"Kaggle execution completed in {int(elapsed)}s",
+                manifest=manifest,
+            )
             return {"success": True, "network_error": False, "status": "complete"}
 
         if "error" in lowered or "cancel" in lowered:
@@ -437,6 +479,12 @@ def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seco
                 if _collect_kernel_logs(project_dir)[0]:
                     break
 
+            # This failure download mirrors the whole /kaggle/working too.
+            # The logs the report below is built from are kept (error_log.txt
+            # plus the newest *.log); pylibs/, mazinger_output/ and the voice
+            # wavs are dead weight on a run that has already failed.
+            _prune_kernel_download(project_dir)
+
             content, source = _collect_kernel_logs(project_dir)
             if content:
                 yield f"[{stage}] ❌ Error Details (from {os.path.basename(source)}):\n{content[-2000:]}\n"
@@ -444,18 +492,27 @@ def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seco
                     "could not resolve host" in content.lower()
                     or "network is unreachable" in content.lower()
                 )
-                track_stage(project_id, stage_number, "failed",
-                            message="Kaggle execution failed or was cancelled",
-                            error=content[-_MAX_ERROR:], manifest=manifest)
+                track_stage(
+                    project_id,
+                    stage_number,
+                    "failed",
+                    message="Kaggle execution failed or was cancelled",
+                    error=content[-_MAX_ERROR:],
+                    manifest=manifest,
+                )
                 return {"success": False, "network_error": network_error, "status": "error"}
             yield f"[{stage}] ❌ No error log or .log file found in {project_dir}\n"
-            if (result.stderr or result.stdout):
+            if result.stderr or result.stdout:
                 yield f"[{stage}] Kaggle CLI said:\n{(result.stderr or result.stdout).strip()[-1200:]}\n"
             cli_said = (result.stderr or result.stdout or "").strip()
-            track_stage(project_id, stage_number, "failed",
-                        message="Kaggle execution failed; no worker log was downloaded",
-                        error=cli_said or "Kaggle reported an error but produced no log",
-                        manifest=manifest)
+            track_stage(
+                project_id,
+                stage_number,
+                "failed",
+                message="Kaggle execution failed; no worker log was downloaded",
+                error=cli_said or "Kaggle reported an error but produced no log",
+                manifest=manifest,
+            )
             return {"success": False, "network_error": False, "status": "error"}
 
         # Report at most once a minute so the log stays readable on long jobs.
@@ -468,7 +525,37 @@ def _wait_for_kernel(kernel_id, project_dir, timeout, stage="STAGE:5", poll_seco
         time.sleep(poll_seconds)
 
 
-def reattach_to_kernel(project_dir, kernel_id, timeout=10 * 60 * 60, poll_seconds=30):
+def reattach_to_kernel(
+    project_dir: str, kernel_id: str, timeout: float = 10 * 60 * 60, poll_seconds: int = 30
+) -> (
+    Any
+):  # Any: the outcome dict is produced by the untyped kernel poller and passed through untouched
+    """Resume monitoring a Kaggle worker that was already submitted.
+
+    This is the PC-died case. The kernel keeps running on Kaggle regardless of
+    the user's machine, so all that is needed is to point this at the same
+    kernel id and wait again. Yields the same ``[STAGE:X]`` log lines as a live
+    run, then hands off to the output download.
+
+    Zero-residue contract is the same as run_pipeline's: the `finally` removes
+    any scratch still sitting in the project dir -- notably a compressed temp
+    leaked by a run that crashed before this cleanup existed, which would
+    otherwise be picked up as a candidate output.mp4 by the download stage.
+    """
+    try:
+        yield from _reattach_to_kernel_impl(
+            project_dir,
+            kernel_id,
+            timeout=timeout,
+            poll_seconds=poll_seconds,
+        )
+    finally:
+        _cleanup_scratch(*_project_scratch_paths(project_dir))
+
+
+def _reattach_to_kernel_impl(
+    project_dir: str, kernel_id: str, timeout: float = 10 * 60 * 60, poll_seconds: int = 30
+) -> Any:  # Any: same untyped poller outcome as reattach_to_kernel
     """Resume monitoring a Kaggle worker that was already submitted.
 
     This is the PC-died case. The kernel keeps running on Kaggle regardless of
@@ -485,50 +572,76 @@ def reattach_to_kernel(project_dir, kernel_id, timeout=10 * 60 * 60, poll_second
     yield f"[STAGE:5] 🔗 Worker URL: https://www.kaggle.com/code/{kernel_id}\n"
 
     outcome = yield from _wait_for_kernel(
-        kernel_id, project_dir, timeout=timeout, stage="STAGE:5", poll_seconds=poll_seconds,
-        stage_number=5, manifest=tel_manifest,
+        kernel_id,
+        project_dir,
+        timeout=timeout,
+        stage="STAGE:5",
+        poll_seconds=poll_seconds,
+        stage_number=5,
+        manifest=tel_manifest,
     )
     if not outcome["success"]:
         return outcome
 
     yield "[STAGE:6] ⬇️ Downloading final outputs from Kaggle...\n"
-    track_stage(project_id, 6, "running", message="Downloading Kaggle outputs",
-                manifest=tel_manifest)
+    track_stage(
+        project_id, 6, "running", message="Downloading Kaggle outputs", manifest=tel_manifest
+    )
     output_cmd = ["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir]
     yield f"[STAGE:6] Executing: {' '.join(output_cmd)}\n"
     run_cmd(output_cmd)
 
-    mp4_files = [
-        f
-        for f in glob.glob(os.path.join(project_dir, "*.mp4"))
-        if os.path.getsize(f) > 0
-    ]
+    mp4_files = [f for f in glob.glob(os.path.join(project_dir, "*.mp4")) if os.path.getsize(f) > 0]
     if mp4_files:
-        track_stage(project_id, 6, "success",
-                    message=f"Downloaded {len(mp4_files)} file(s) from Kaggle",
-                    manifest=tel_manifest)
+        track_stage(
+            project_id,
+            6,
+            "success",
+            message=f"Downloaded {len(mp4_files)} file(s) from Kaggle",
+            manifest=tel_manifest,
+        )
         stale = os.path.join(project_dir, "error_log.txt")
         if os.path.isfile(stale):
             os.remove(stale)
+        # Same junk mirror as run_pipeline's download stage: the moment the
+        # outputs have landed, pylibs/, mazinger_output/, voice wavs and
+        # duplicate logs are dead weight nothing downstream reads.
+        _prune_kernel_download(project_dir)
         biggest = max(mp4_files, key=lambda f: os.path.getsize(f))
         yield f"[STAGE:7] 🎉 Pipeline finished successfully! Output: {os.path.basename(biggest)}"
-        track_stage(project_id, 7, "success",
-                    message=f"Verified output {os.path.basename(biggest)}",
-                    manifest=tel_manifest)
+        track_stage(
+            project_id,
+            7,
+            "success",
+            message=f"Verified output {os.path.basename(biggest)}",
+            manifest=tel_manifest,
+        )
         outcome["output_video"] = biggest
     else:
-        track_stage(project_id, 6, "success",
-                    message="Downloaded Kaggle outputs (no video present)",
-                    manifest=tel_manifest)
+        track_stage(
+            project_id,
+            6,
+            "success",
+            message="Downloaded Kaggle outputs (no video present)",
+            manifest=tel_manifest,
+        )
         content, _source = _collect_kernel_logs(project_dir)
         if content:
             yield f"[STAGE:7] ❌ Worker Error Log:\n{content[-2500:]}\n"
         else:
             yield "[STAGE:7] ❌ Worker reported success but produced no video.\n"
-        track_stage(project_id, 7, "failed",
-                    message="Worker reported success but produced no video",
-                    error=content[-_MAX_ERROR:] if content else "No output video and no worker log",
-                    manifest=tel_manifest)
+        track_stage(
+            project_id,
+            7,
+            "failed",
+            message="Worker reported success but produced no video",
+            error=content[-_MAX_ERROR:] if content else "No output video and no worker log",
+            manifest=tel_manifest,
+        )
+        # The logs have been read into `content` above; the multi-MB junk the
+        # failure download mirrored is safe to drop now. error_log.txt and the
+        # newest *.log stay as the post-mortem.
+        _prune_kernel_download(project_dir)
     return outcome
 
 
@@ -551,8 +664,7 @@ def _worker_fetches(backup_link):
     ``TDUBBER_WORKER_FETCH=off`` keeps the media in the dataset, exactly
     as it was before P0-3.
     """
-    return bool(_channel_archive_link(backup_link)) and _env_flag(
-        "TDUBBER_WORKER_FETCH", True)
+    return bool(_channel_archive_link(backup_link)) and _env_flag("TDUBBER_WORKER_FETCH", True)
 
 
 def _resolve_source_sha256(video_path, source_sha256, worker_fetches):
@@ -576,9 +688,264 @@ def _sha256_file(path, block=4 * 1024 * 1024):
     return digest.hexdigest()
 
 
-def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
-                 backup_link=None, source_url=None, source_title=None, source_size=None,
-                 source_sha256=None):
+# ---------------------------------------------------------------------------
+# Zero-residue scratch cleanup
+# ---------------------------------------------------------------------------
+# Until today every run left its staging on disk forever: dataset_safe/ grew a
+# second full copy of the source plus a whole mazinger tree per project (78.5
+# MB across 8 projects, all orphaned), kernel_safe/ kept the pushed notebook,
+# compressed_<id>.mp4 leaked on every early return and on any exception, and
+# `kaggle kernels output` mirrored the worker's entire /kaggle/working --
+# pylibs/ (tens of MB of vendored wheels), mazinger_output/, voice-reference
+# wavs and a fresh set of duplicate logs -- into the project directory.
+#
+# None of it is read again by anything downstream: grep of app.py and
+# dashboard_server.py finds no reference to pylibs, mazinger_output,
+# source_voice_reference, dataset_safe or kernel_safe. So every scratch
+# artifact is deleted at the earliest point after which it is provably unused
+# (the proof note sits at each call site), and the generators' `finally`
+# blocks remove whatever an early return, an exception, a Ctrl+C or a consumer
+# that simply stopped iterating would have left behind.
+#
+# What survives a run, on purpose: the dubbed video, .srt/.ass subtitles,
+# report.json, the transcript the subtitles were built from, one worker log
+# and the project manifest. That is the product; everything else is scratch.
+
+# Directories the worker leaves in /kaggle/working that `kaggle kernels
+# output` mirrors back into the project dir. Nothing on this side reads them.
+_WORKER_JUNK_DIRS = ("pylibs", "mazinger_output")
+
+# project.json "state" values app.py writes once a run is no longer live.
+# While a project is "processing" its staging may belong to a running job, so
+# the startup sweep only touches it through the age gate below.
+_FINISHED_STATES = ("success", "failed", "failed_missing_output")
+
+# Age gate for scratch in projects whose state is "processing" or unknown
+# (projects older than project.json have no state at all). Seven days is far
+# beyond any Kaggle timeout, so by then the run cannot still be live.
+_STALE_PROCESSING_AGE_HOURS = 7 * 24
+
+# yt-dlp debris: a download that was interrupted leaves these next to its
+# target. None of them can ever be a deliverable.
+_PARTIAL_SUFFIXES = (".part", ".ytdl", ".restoring")
+
+
+def _cleanup_scratch(*paths: str) -> None:
+    """Best-effort removal of scratch files or directories. Never raises.
+
+    This runs from generators' `finally` blocks, where a raised cleanup error
+    would either mask the original failure or turn a successful run into a
+    failed one -- both strictly worse than a leftover file, which the startup
+    sweep (:func:`sweep_stale_scratch`) collects later.
+    """
+    for path in paths:
+        if not path:
+            continue
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path, ignore_errors=True)
+                if os.path.isdir(path):
+                    print(
+                        f"[pipeline] scratch dir still present after cleanup: {path}",
+                        file=sys.stderr,
+                    )
+            elif os.path.lexists(path):
+                os.remove(path)
+        except OSError as exc:
+            print(f"[pipeline] could not remove scratch {path}: {exc}", file=sys.stderr)
+
+
+def _project_scratch_paths(project_dir: str) -> list[str]:
+    """Every scratch artifact a run may have left inside ``project_dir``.
+
+    Pattern-based on purpose: ``compressed_*.mp4`` also catches temps from a
+    previous crashed run, and it can never match a deliverable -- this side
+    only ever names its own encode ``compressed_<id>.mp4`` and the worker only
+    ever writes ``output.mp4``.
+    """
+    return [
+        os.path.join(project_dir, "dataset_safe"),
+        os.path.join(project_dir, "kernel_safe"),
+        *sorted(glob.glob(os.path.join(project_dir, "compressed_*.mp4"))),
+    ]
+
+
+def _prune_kernel_download(project_dir: str, keep_logs: bool = True) -> None:
+    """Drop the junk `kaggle kernels output` mirrored from /kaggle/working.
+
+    The worker's working directory is not a deliverable: pylibs/ is a vendored
+    pip tree, mazinger_output/ its scratch dir, and *.wav a re-encoded voice
+    reference. Nothing downstream reads them (grep of app.py and
+    dashboard_server.py: no hits), and every run re-creates whatever it needs,
+    so the mirror is safe to drop the moment the outputs have landed.
+
+    ``keep_logs`` keeps the single newest ``*.log`` for post-mortems.
+    ``error_log.txt`` is left alone here: the callers delete it on success and
+    read it (only the newest matters) on failure.
+    """
+    if not os.path.isdir(project_dir):
+        return
+    for name in _WORKER_JUNK_DIRS:
+        _cleanup_scratch(os.path.join(project_dir, name))
+    for wav_path in glob.glob(os.path.join(project_dir, "*.wav")):
+        _cleanup_scratch(wav_path)
+    logs = sorted(
+        (os.path.getmtime(log_path), log_path)
+        for log_path in glob.glob(os.path.join(project_dir, "*.log"))
+        if os.path.isfile(log_path)
+    )
+    if keep_logs and logs:
+        logs.pop()  # the newest log is the one worth keeping
+    for _mtime, log_path in logs:
+        _cleanup_scratch(log_path)
+
+
+def _is_file_older_than(path: str, cutoff: float) -> bool:
+    """True when ``path`` exists and its mtime is before ``cutoff``."""
+    try:
+        return os.path.getmtime(path) < cutoff
+    except OSError:
+        return False
+
+
+def _project_run_state(project_dir: str) -> str:
+    """The project manifest's ``state``, or "" when there is none.
+
+    ``project.json`` is written by app.py and its ``state`` is the only thing
+    that knows whether a run is still live. A missing or unreadable manifest
+    reads as "" (unknown), which makes the sweep fall back to the age gate
+    instead of guessing.
+    """
+    try:
+        with open(os.path.join(project_dir, "project.json"), encoding="utf-8") as handle:
+            state = json.load(handle).get("state", "")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return ""
+    return state if isinstance(state, str) else ""
+
+
+def sweep_stale_scratch(projects_dir: str, max_age_hours: float = 24) -> dict[str, int]:
+    """Remove stale pipeline scratch under ``projects/``. Idempotent, fast.
+
+    app.py should call this once at startup:
+    ``pipeline.sweep_stale_scratch(app.PROJECTS_DIR)``. The in-generator
+    cleanup covers every exit path of a live run, but it cannot help runs
+    that crashed before this code existed or a machine that was switched off
+    mid-run; this sweep is what empties those. It is also the reason old
+    leftovers (the orphaned dataset_safe/mazinger trees from previous months)
+    disappear without anyone having to hand-delete them.
+
+    What is swept -- each pattern-scoped and age-gated, so no deliverable
+    (output video, subtitles, report.json, transcript, manifest) can match:
+
+      1. ``compressed_*.mp4`` anywhere under a project dir, older than
+         ``max_age_hours``. These are this side's throwaway 480p encodes.
+      2. ``dataset_safe/`` and ``kernel_safe/`` in a project whose
+         project.json state says the run is over (see ``_FINISHED_STATES``).
+         A "processing", legacy or manifest-less project keeps its staging
+         unless it is older than ``_STALE_PROCESSING_AGE_HOURS`` -- that run
+         may still be live.
+      3. ``*.part`` / ``*.ytdl`` / ``*.restoring`` download debris older than
+         ``max_age_hours``.
+
+    Old ``error_log.txt`` files are deliberately NOT swept: they belong to
+    failed runs and are the only post-mortem the user has. They are small;
+    an age-based sweep for them can be added later if they ever accumulate.
+
+    Returns a counter dict (``{"compressed": n, "staging": n, "partial": n}``)
+    so callers can log what was reclaimed.
+    """
+    removed = {"compressed": 0, "staging": 0, "partial": 0}
+    if not projects_dir or not os.path.isdir(projects_dir):
+        return removed
+    now = time.time()
+    junk_cutoff = now - (max_age_hours * 3600)
+    staging_cutoff = now - (_STALE_PROCESSING_AGE_HOURS * 3600)
+
+    for entry in os.scandir(projects_dir):
+        if not entry.is_dir(follow_symlinks=False):
+            continue
+        try:
+            # 1 + 3: loose files at the top of a project dir. A recursive walk
+            # is deliberately avoided: the only place this side ever writes a
+            # compressed temp or lets yt-dlp stall is the project dir itself,
+            # and walking into a live run's staging tree would be both slow
+            # and rude. Staging trees are reaped wholesale by rule 2 anyway.
+            for name in os.listdir(entry.path):
+                path = os.path.join(entry.path, name)
+                if name.startswith("compressed_") and name.endswith(".mp4"):
+                    if _is_file_older_than(path, junk_cutoff):
+                        _cleanup_scratch(path)
+                        removed["compressed"] += 1
+                elif name.endswith(_PARTIAL_SUFFIXES):
+                    if _is_file_older_than(path, junk_cutoff):
+                        _cleanup_scratch(path)
+                        removed["partial"] += 1
+
+            # 2: staging dirs of finished (or long-dead) runs.
+            run_finished = _project_run_state(entry.path) in _FINISHED_STATES
+            for staging_name in ("dataset_safe", "kernel_safe"):
+                staging_path = os.path.join(entry.path, staging_name)
+                if not os.path.isdir(staging_path):
+                    continue
+                if run_finished or _is_file_older_than(staging_path, staging_cutoff):
+                    _cleanup_scratch(staging_path)
+                    removed["staging"] += 1
+        except OSError:  # a racing delete must not kill the sweep
+            continue
+    return removed
+
+
+def run_pipeline(
+    video_path: str | None,
+    project_dir: str,
+    target_lang: str,
+    speaker_detection: bool,
+    backup_link: str | None = None,
+    source_url: str | None = None,
+    source_title: str | None = None,
+    source_size: int | None = None,
+    source_sha256: str | None = None,
+) -> Iterator[str]:
+    """Zero-residue wrapper around :func:`_run_pipeline_impl`.
+
+    The orchestrator body lives in _run_pipeline_impl, unchanged; this shell
+    exists so the storage guarantee has exactly one home. The `finally` is the
+    safety net for every exit path the body itself does not already clean:
+    an early ``return`` at any stage, an exception (a crash mid-upload, a
+    failing ffmpeg), Ctrl+C or a closed browser tab (both arrive here as
+    GeneratorExit), and a consumer that simply stops iterating. The helpers
+    are idempotent, so the in-body deletions and this net overlap on purpose.
+
+    Contract unchanged: same signature, same ``[STAGE:X]`` yielded lines.
+    """
+    try:
+        yield from _run_pipeline_impl(
+            video_path,
+            project_dir,
+            target_lang,
+            speaker_detection,
+            backup_link=backup_link,
+            source_url=source_url,
+            source_title=source_title,
+            source_size=source_size,
+            source_sha256=source_sha256,
+        )
+    finally:
+        _cleanup_scratch(*_project_scratch_paths(project_dir))
+
+
+def _run_pipeline_impl(
+    video_path: str | None,
+    project_dir: str,
+    target_lang: str,
+    speaker_detection: bool,
+    backup_link: str | None = None,
+    source_url: str | None = None,
+    source_title: str | None = None,
+    source_size: int | None = None,
+    source_sha256: str | None = None,
+) -> Iterator[str]:
     """
     Orchestrator function (Generator) using Kaggle API to push the job to a cloud GPU.
     Yields status logs incrementally with [STAGE:X] markers for the UI stepper.
@@ -591,10 +958,18 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     :func:`track_stage`, so the dashboard can show real progress instead of
     guessing. Those writes are strictly best-effort: a database problem logs to
     stderr and never interrupts the run.
+
+    Scratch discipline (see the zero-residue section above): heavy staging is
+    deleted at the earliest provable point -- dataset_safe right after the
+    dataset upload, the compressed temp right after its copy into the dataset,
+    kernel_safe right after the push loop -- and whatever an abnormal exit
+    skips is removed by run_pipeline's `finally`.
     """
     project_id = project_id_for(project_dir)
     manifest = {
-        "title": source_title or os.path.splitext(os.path.basename(video_path or project_id))[0] or project_id,
+        "title": source_title
+        or os.path.splitext(os.path.basename(video_path or project_id))[0]
+        or project_id,
         "source_video": os.path.basename(video_path) if video_path else None,
         "source_url": source_url,
         "source_size": source_size,
@@ -605,7 +980,10 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     }
 
     # Start havaldar_core telemetry daemon (optional, best-effort)
-    havaldar = None
+    # (Local annotation: the daemon class ships without stubs, and this name
+    # only exists when the guarded import above succeeded -- the annotation is
+    # not evaluated at runtime, so the guard keeps working.)
+    havaldar: HavaldarDaemon | None = None
     if _HAS_HAVALDAR:
         db_path = os.path.join(APP_DIR, "t_dubber.db")
         havaldar = HavaldarDaemon(db_path=db_path, port=8080)
@@ -624,19 +1002,30 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     if source_url:
         yield f"[STAGE:1] 🔗 Source resolved from: {source_url}\n"
 
-
     kaggle_creds_path = os.path.join(local_kaggle_dir, "kaggle.json")
     if not os.path.exists(kaggle_creds_path):
         yield f"[STAGE:1] ❌ Error: Missing Kaggle credentials!\nCould not find kaggle.json at {kaggle_creds_path}.\n"
-        track_stage(project_id, 1, "failed", message="Missing Kaggle credentials",
-                    error=f"kaggle.json not found at {kaggle_creds_path}", manifest=manifest)
+        track_stage(
+            project_id,
+            1,
+            "failed",
+            message="Missing Kaggle credentials",
+            error=f"kaggle.json not found at {kaggle_creds_path}",
+            manifest=manifest,
+        )
         return
 
     yield "[STAGE:1] 🔍 Checking Kaggle CLI installation...\n"
     if run_cmd(["python", "-m", "kaggle", "--version"]).returncode != 0:
         yield "[STAGE:1] ❌ Error: Kaggle API CLI not installed or authenticated.\n"
-        track_stage(project_id, 1, "failed", message="Kaggle API CLI missing or unauthenticated",
-                    error="`kaggle --version` exited non-zero", manifest=manifest)
+        track_stage(
+            project_id,
+            1,
+            "failed",
+            message="Kaggle API CLI missing or unauthenticated",
+            error="`kaggle --version` exited non-zero",
+            manifest=manifest,
+        )
         return
 
     try:
@@ -645,10 +1034,41 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
             KAGGLE_USERNAME = kcreds.get("username", "YOUR_KAGGLE_USERNAME")
     except Exception as e:
         yield f"[STAGE:1] ❌ Error reading kaggle.json: {e}\n"
-        track_stage(project_id, 1, "failed", message="Could not read kaggle.json",
-                    error=f"{type(e).__name__}: {e}", manifest=manifest)
+        track_stage(
+            project_id,
+            1,
+            "failed",
+            message="Could not read kaggle.json",
+            error=f"{type(e).__name__}: {e}",
+            manifest=manifest,
+        )
         return
-    
+
+    # Fail fast on an unusable mazinger submodule, BEFORE anything is staged.
+    # This exact condition used to surface only minutes deep into stage 2
+    # ("Mazinger source was not copied") -- after the source video, the whole
+    # mazinger tree and the source zip had already been copied into
+    # dataset_safe, every one of them left behind. The check mirrors the later
+    # bundle check (dataset_safe/mazinger/pyproject.toml) one for one, so no
+    # run that used to succeed can start failing here.
+    mazinger_src = os.path.join(APP_DIR, "mazinger")
+    if not os.path.isfile(os.path.join(mazinger_src, "pyproject.toml")):
+        reason = (
+            f"the mazinger/ source tree is empty or missing (no pyproject.toml under "
+            f"{mazinger_src}). Fix: run `git submodule update --init --recursive mazinger` "
+            "and start the run again."
+        )
+        yield f"[STAGE:1] ❌ Refusing to start: {reason}\n"
+        track_stage(
+            project_id,
+            1,
+            "failed",
+            message="mazinger submodule empty; refusing to stage a broken run",
+            error=reason,
+            manifest=manifest,
+        )
+        raise RuntimeError(f"run_pipeline: {reason}")
+
     unique_id = uuid.uuid4().hex[:6]
     # Reuse one private dataset so normal jobs create versions instead of
     # repeatedly calling Kaggle's less reliable CreateDataset endpoint.
@@ -656,10 +1076,10 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     dataset_slug = f"dubber-video-{install_key}"
     dataset_title = f"Dubber Input {install_key}"
     dataset_id = f"{KAGGLE_USERNAME}/{dataset_slug}"
-    
+
     dataset_dir = os.path.join(project_dir, "dataset_safe")
     os.makedirs(dataset_dir, exist_ok=True)
-    
+
     video_filename = "source_video" + ((Path(video_path).suffix.lower()) if video_path else ".mp4")
     # A stable filename lets dataset versions replace the previous input cleanly.
     for old_video in Path(dataset_dir).glob("source_video.*"):
@@ -703,10 +1123,15 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     needs_compression = bool(video_path) and file_size_mb > 30
     if not needs_compression and video_path:
         probe_cmd = [
-            "ffprobe", "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=height",
-            "-of", "csv=s=x:p=0",
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=height",
+            "-of",
+            "csv=s=x:p=0",
             video_path,
         ]
         try:
@@ -716,9 +1141,12 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
                 if height > 1080:
                     needs_compression = True
         except Exception as exc:
-            print(f"[pipeline] ffprobe probe failed ({exc}); assuming no compression needed", file=sys.stderr)
+            print(
+                f"[pipeline] ffprobe probe failed ({exc}); assuming no compression needed",
+                file=sys.stderr,
+            )
 
-    compressed_video_path = None
+    compressed_video_path: str | None = None
     if worker_fetches:
         # Encoding here would be throwaway work: the encoded file is never
         # uploaded anywhere. The worker performs the identical encode after it
@@ -728,18 +1156,38 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
             f"[STAGE:1] ☁️ Source stays off the dataset: the worker restores it "
             f"from {archive_link} (sha256 {source_sha256[:12]}).\n"
         )
-    elif needs_compression:
+    elif needs_compression and video_path is not None:
+        # `video_path is not None` is type narrowing, not a behaviour change:
+        # needs_compression can only be True when video_path was truthy (see
+        # its computation above), so the same branch always ran here.
         yield f"[STAGE:1] 🛠️ Video is large or >1080p ({file_size_mb:.1f}MB). Compressing to 480p...\n"
-        track_stage(project_id, 1, "running",
-                    message=f"Compressing {file_size_mb:.1f}MB source to 480p", manifest=manifest)
+        track_stage(
+            project_id,
+            1,
+            "running",
+            message=f"Compressing {file_size_mb:.1f}MB source to 480p",
+            manifest=manifest,
+        )
         compressed_video_path = os.path.join(project_dir, f"compressed_{unique_id}.mp4")
-        ffmpeg_cmd = ["ffmpeg", "-y", "-i", video_path, "-vf", "scale=854:480",
-                      "-b:v", "1M", compressed_video_path]
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            video_path,
+            "-vf",
+            "scale=854:480",
+            "-b:v",
+            "1M",
+            compressed_video_path,
+        ]
         yield f"[STAGE:1] Executing: {' '.join(ffmpeg_cmd)}\n"
         res = run_cmd(ffmpeg_cmd)
         if res.returncode != 0:
-            print(f"[pipeline] ffmpeg compression exited {res.returncode}: {(res.stderr or '')[-500:]}", file=sys.stderr)
-        
+            print(
+                f"[pipeline] ffmpeg compression exited {res.returncode}: {(res.stderr or '')[-500:]}",
+                file=sys.stderr,
+            )
+
         if os.path.exists(compressed_video_path) and os.path.getsize(compressed_video_path) > 0:
             target_upload_path = compressed_video_path
             video_filename = "source_video.mp4"
@@ -750,11 +1198,10 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
             target_upload_path = video_path
     else:
         target_upload_path = video_path
-        
+
     # Stage 1 spans everything from "start" through "input staged for upload".
     if worker_fetches:
-        stage_message = ("Source left on Telegram; the worker restores it from "
-                         "the channel archive")
+        stage_message = "Source left on Telegram; the worker restores it from the channel archive"
     elif needs_compression and compressed_video_path:
         stage_message = "Compressed to 480p and staged for upload"
     else:
@@ -764,8 +1211,22 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     # ------------------------------------------------------------------
     # P0-3: no media copy when the worker can restore from the channel.
     # ------------------------------------------------------------------
-    if not worker_fetches:
+    # The `is not None` is a type-narrowing no-op: a None video_path can only
+    # survive stage 1 when the worker restores from Telegram, which is exactly
+    # the branch excluded here (see the refusal above), so target_upload_path
+    # is always a real file in this branch.
+    if not worker_fetches and target_upload_path is not None:
         shutil.copy(target_upload_path, os.path.join(dataset_dir, video_filename))
+        if compressed_video_path:
+            # The staged copy in dataset_safe is all Kaggle needs from here:
+            # the copy above was this file's LAST reader. Keeping the temp on
+            # disk until the worker finished (the old behaviour) parked a
+            # second full-size video on disk for hours AND poisoned stage 6's
+            # `glob(project_dir/*.mp4)`, which could pick this 480p SOURCE as
+            # the biggest "output" of the run.
+            _cleanup_scratch(compressed_video_path)
+            compressed_video_path = None
+            yield "[STAGE:1] 🧹 Temporary compressed video deleted; the staged dataset copy is all that remains.\n"
     else:
         yield (
             "[STAGE:1] 📤 Dataset will carry code + job config only — "
@@ -794,30 +1255,41 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     }
     with open(job_config_path, "w", encoding="utf-8") as config_file:
         json.dump(job_config, config_file, ensure_ascii=False, indent=2)
-    
+
     # Task 3: Ensure no .git directory in dataset folder
     git_dir = os.path.join(dataset_dir, ".git")
     if os.path.exists(git_dir):
         shutil.rmtree(git_dir)
-    
+
     yield "[STAGE:2] 📦 Creating Dataset structure...\n"
-    track_stage(project_id, 2, "running", message="Bundling Mazinger source and dataset metadata",
-                manifest=manifest)
+    track_stage(
+        project_id,
+        2,
+        "running",
+        message="Bundling Mazinger source and dataset metadata",
+        manifest=manifest,
+    )
 
     # Add the local mazinger source code to the dataset for offline installation
     mazinger_src = os.path.join(APP_DIR, "mazinger")
     if os.path.exists(mazinger_src):
         shutil.copytree(
-            mazinger_src, 
-            os.path.join(dataset_dir, "mazinger"), 
+            mazinger_src,
+            os.path.join(dataset_dir, "mazinger"),
             ignore=shutil.ignore_patterns(".git", ".venv*", ".pytest_cache", "site-packages"),
-            dirs_exist_ok=True
+            dirs_exist_ok=True,
         )
     bundled_mazinger = os.path.join(dataset_dir, "mazinger", "pyproject.toml")
     if not os.path.isfile(bundled_mazinger):
         yield "[STAGE:2] ❌ Local Mazinger source was not copied into the Kaggle dataset; refusing to upload a broken worker input.\n"
-        track_stage(project_id, 2, "failed", message="Mazinger source was not bundled",
-                    error=f"{bundled_mazinger} is missing after copytree", manifest=manifest)
+        track_stage(
+            project_id,
+            2,
+            "failed",
+            message="Mazinger source was not bundled",
+            error=f"{bundled_mazinger} is missing after copytree",
+            manifest=manifest,
+        )
         return
     # Kaggle CLI's datasets create defaults to --dir-mode skip, so nested
     # directories are not uploaded. Keep an explicit ZIP at the dataset root.
@@ -828,7 +1300,9 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         for source_file in Path(mazinger_src).rglob("*"):
             relative_path = source_file.relative_to(mazinger_src)
             if not source_file.is_file() or any(
-                part in {".git", "__pycache__", ".pytest_cache", "site-packages"} or part.startswith(".venv") for part in relative_path.parts
+                part in {".git", "__pycache__", ".pytest_cache", "site-packages"}
+                or part.startswith(".venv")
+                for part in relative_path.parts
             ):
                 continue
             archive.write(source_file, relative_path.as_posix())
@@ -848,7 +1322,8 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     hf_src = os.path.join(APP_DIR, "huggingface")
     if os.path.isdir(hf_src):
         shutil.copytree(
-            hf_src, os.path.join(dataset_dir, "huggingface"),
+            hf_src,
+            os.path.join(dataset_dir, "huggingface"),
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"),
             dirs_exist_ok=True,
         )
@@ -856,12 +1331,13 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     lip_sync_src = os.path.join(APP_DIR, "lip_sync")
     if os.path.isdir(lip_sync_src):
         shutil.copytree(
-            lip_sync_src, os.path.join(dataset_dir, "lip_sync"),
+            lip_sync_src,
+            os.path.join(dataset_dir, "lip_sync"),
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"),
             dirs_exist_ok=True,
         )
         yield "[STAGE:2] 📎 lip_sync/ provider attached to the input dataset.\n"
-        
+
     meta_path = os.path.join(dataset_dir, "dataset-metadata.json")
     if not os.path.isfile(meta_path):
         init_cmd = ["python", "-m", "kaggle", "datasets", "init", "-p", dataset_dir]
@@ -869,9 +1345,14 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         init_result = run_cmd(init_cmd)
         if init_result.returncode != 0:
             yield f"[STAGE:2] ❌ Could not initialize dataset metadata:\n{init_result.stderr or init_result.stdout}\n"
-            track_stage(project_id, 2, "failed", message="kaggle datasets init failed",
-                        error=(init_result.stderr or init_result.stdout or "").strip(),
-                        manifest=manifest)
+            track_stage(
+                project_id,
+                2,
+                "failed",
+                message="kaggle datasets init failed",
+                error=(init_result.stderr or init_result.stdout or "").strip(),
+                manifest=manifest,
+            )
             return
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
@@ -881,19 +1362,34 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
 
-    track_stage(project_id, 2, "success",
-                message=f"Bundled Mazinger source and dataset metadata for {dataset_id}",
-                manifest=manifest)
+    track_stage(
+        project_id,
+        2,
+        "success",
+        message=f"Bundled Mazinger source and dataset metadata for {dataset_id}",
+        manifest=manifest,
+    )
 
     yield f"[STAGE:3] ☁️ Uploading video to reusable Kaggle dataset ({dataset_id})...\n"
-    track_stage(project_id, 3, "running", message=f"Uploading input dataset {dataset_id}",
-                manifest=manifest)
+    track_stage(
+        project_id, 3, "running", message=f"Uploading input dataset {dataset_id}", manifest=manifest
+    )
     status_cmd = ["python", "-m", "kaggle", "datasets", "status", dataset_id]
     status_result = run_cmd(status_cmd)
     dataset_exists = status_result.returncode == 0
     if dataset_exists:
         yield "[STAGE:3] 📚 Existing dataset found; uploading a new version.\n"
-        upload_cmd = ["python", "-m", "kaggle", "datasets", "version", "-p", dataset_dir, "-m", f"Dubbing input {unique_id}"]
+        upload_cmd = [
+            "python",
+            "-m",
+            "kaggle",
+            "datasets",
+            "version",
+            "-p",
+            dataset_dir,
+            "-m",
+            f"Dubbing input {unique_id}",
+        ]
     else:
         yield "[STAGE:3] 🆕 Dataset not found; creating it once.\n"
         upload_cmd = ["python", "-m", "kaggle", "datasets", "create", "-p", dataset_dir]
@@ -912,7 +1408,9 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         # Check the stable ID before retrying or switching to a version upload.
         status_result = run_cmd(status_cmd)
         status_text = (status_result.stdout + "\n" + status_result.stderr).lower()
-        if status_result.returncode == 0 and any(word in status_text for word in ("ready", "complete", "processing")):
+        if status_result.returncode == 0 and any(
+            word in status_text for word in ("ready", "complete", "processing")
+        ):
             if not dataset_exists:
                 dataset_exists = True
                 yield "[STAGE:3] ✅ Kaggle confirms the dataset was created despite the upload response; continuing with it.\n"
@@ -923,39 +1421,76 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
             # on the next pass falls through to status detection above.
             pass
         elif attempt < max_retries - 1:
-            upload_cmd = ["python", "-m", "kaggle", "datasets", "version", "-p", dataset_dir, "-m", f"Dubbing input {unique_id}"]
+            upload_cmd = [
+                "python",
+                "-m",
+                "kaggle",
+                "datasets",
+                "version",
+                "-p",
+                dataset_dir,
+                "-m",
+                f"Dubbing input {unique_id}",
+            ]
         if attempt < max_retries - 1:
-            delay = 15 * (2 ** attempt)
+            delay = 15 * (2**attempt)
             yield f"[STAGE:3] ⚠️ Kaggle upload failed ({(last_result.stderr or last_result.stdout).strip()[-500:]}); checking again in {delay}s.\n"
             time.sleep(delay)
 
     if not upload_success:
-        error_text = (last_result.stderr or last_result.stdout or "No error details returned.").strip()
+        error_text = (
+            last_result.stderr or last_result.stdout or "No error details returned."
+        ).strip()
         yield f"[STAGE:3] ❌ Dataset upload failed after {max_retries} attempts:\n{error_text}\n"
         yield "[STAGE:3] Kaggle did not confirm that the dataset exists. Check Kaggle service/account status, then retry; this run did not submit a worker.\n"
-        track_stage(project_id, 3, "failed",
-                    message=f"Dataset upload failed after {max_retries} attempts",
-                    error=error_text, manifest=manifest)
+        track_stage(
+            project_id,
+            3,
+            "failed",
+            message=f"Dataset upload failed after {max_retries} attempts",
+            error=error_text,
+            manifest=manifest,
+        )
         return
 
-    track_stage(project_id, 3, "success",
-                message=f"Input dataset uploaded to {dataset_id}", manifest=manifest)
+    track_stage(
+        project_id,
+        3,
+        "success",
+        message=f"Input dataset uploaded to {dataset_id}",
+        manifest=manifest,
+    )
     yield "[STAGE:3] ✅ Upload complete.\n"
-    
+
+    # Earliest provable point to drop dataset_safe: the last reader was the
+    # `kaggle datasets version/create -p dataset_dir` upload loop above (the
+    # dataset status/metadata reads all happened inside that stage too).
+    # Everything from here on references the dataset by its REMOTE id -- the
+    # kernel push attaches `dataset_id`, and `kaggle kernels output` writes
+    # into project_dir -- so the local staging (a second copy of the source
+    # plus the mazinger tree plus the zip, ~80 MB per run) would only sit on
+    # disk for the hours the worker runs.
+    _cleanup_scratch(dataset_dir)
+    yield "[STAGE:3] 🧹 Local dataset staging removed; Kaggle has its copy.\n"
+
     # Push Kaggle Notebook (The Worker)
     kernel_dir = os.path.join(project_dir, "kernel_safe")
     os.makedirs(kernel_dir, exist_ok=True)
-    
-    shutil.copy(os.path.join(APP_DIR, "kaggle_worker.ipynb"), os.path.join(kernel_dir, "kaggle_worker.ipynb"))
-    
+
+    shutil.copy(
+        os.path.join(APP_DIR, "kaggle_worker.ipynb"),
+        os.path.join(kernel_dir, "kaggle_worker.ipynb"),
+    )
+
     yield "[STAGE:4] ⚙️ Initializing Kaggle Worker Kernel...\n"
     manifest["kernel_id"] = kernel_id = kernel_id_for(KAGGLE_USERNAME)
-    track_stage(project_id, 4, "running", message=f"Preparing worker kernel {kernel_id}",
-                manifest=manifest)
+    track_stage(
+        project_id, 4, "running", message=f"Preparing worker kernel {kernel_id}", manifest=manifest
+    )
     k_init_cmd = ["python", "-m", "kaggle", "kernels", "init", "-p", kernel_dir]
     yield f"[STAGE:4] Executing: {' '.join(k_init_cmd)}\n"
     run_cmd(k_init_cmd)
-    
+
     kmeta_path = os.path.join(kernel_dir, "kernel-metadata.json")
     # Keep one private notebook so its configuration persists between video runs.
 
@@ -981,38 +1516,58 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         kmeta["dataset_sources"] = sorted(
             {*(kmeta.get("dataset_sources") or []), *required_sources}
         )
-        
+
         with open(kmeta_path, "w") as f:
             json.dump(kmeta, f, indent=4)
 
     yield "[STAGE:4] ⚠️ If the worker cannot download its model, open the Kaggle notebook URL and enable Internet in Settings.\n"
-            
+
     worker_url = f"https://www.kaggle.com/code/{kernel_id}"
     yield f"[STAGE:4] 🔗 Kaggle Worker URL: {worker_url}\n"
     yield "[STAGE:4] ⬇️ First run downloads vLLM and Homura-2B; setup may take up to 20 minutes. Keep Kaggle Notebook Internet enabled.\n"
     for kernel_attempt in range(2):
         yield "[STAGE:4] 💡 If downloads fail, open the worker URL and enable Internet in Kaggle Notebook Settings.\n"
-        yield f"[STAGE:4] 🔥 Pushing execution code to Kaggle GPU Worker ({kernel_id}) [Attempt {kernel_attempt+1}]...\n"
+        yield f"[STAGE:4] 🔥 Pushing execution code to Kaggle GPU Worker ({kernel_id}) [Attempt {kernel_attempt + 1}]...\n"
         k_push_cmd = ["python", "-m", "kaggle", "kernels", "push", "-p", kernel_dir]
         yield f"[STAGE:4] Executing: {' '.join(k_push_cmd)}\n"
         res = run_cmd(k_push_cmd)
         if res.returncode != 0:
             yield f"[STAGE:4] ❌ Error pushing kernel:\n{res.stderr}\n"
-            if "could not resolve" in res.stderr.lower() or "500" in res.stderr or "network" in res.stderr.lower():
+            if (
+                "could not resolve" in res.stderr.lower()
+                or "500" in res.stderr
+                or "network" in res.stderr.lower()
+            ):
                 if kernel_attempt == 0:
                     yield "[STAGE:4] ⚠️ Network error during push. Retrying in 60 seconds...\n"
-                    track_stage(project_id, 4, "running",
-                                message="Network error during kernel push; retrying in 60s",
-                                error=(res.stderr or "").strip() or None, manifest=manifest)
+                    track_stage(
+                        project_id,
+                        4,
+                        "running",
+                        message="Network error during kernel push; retrying in 60s",
+                        error=(res.stderr or "").strip() or None,
+                        manifest=manifest,
+                    )
                     time.sleep(60)
                     continue
-            track_stage(project_id, 4, "failed", message="Kernel push failed",
-                        error=(res.stderr or res.stdout or "").strip() or "kaggle kernels push exited non-zero",
-                        manifest=manifest)
+            track_stage(
+                project_id,
+                4,
+                "failed",
+                message="Kernel push failed",
+                error=(res.stderr or res.stdout or "").strip()
+                or "kaggle kernels push exited non-zero",
+                manifest=manifest,
+            )
             return
 
-        track_stage(project_id, 4, "success",
-                    message=f"Worker kernel pushed to {kernel_id}", manifest=manifest)
+        track_stage(
+            project_id,
+            4,
+            "success",
+            message=f"Worker kernel pushed to {kernel_id}",
+            manifest=manifest,
+        )
         yield "[STAGE:5] ⏳ Waiting for Kaggle Worker to complete...\n"
 
         # Feature films can take several hours on a free shared GPU.
@@ -1035,92 +1590,144 @@ def run_pipeline(video_path, project_dir, target_lang, speaker_detection,
         # _wait_for_kernel already recorded the failure with the worker log.
         return
 
+    # kernel_safe's only reader is `kaggle kernels push -p kernel_dir` inside
+    # the loop above; the delete deliberately sits AFTER the loop because a
+    # network-error retry re-pushes from this same directory. Once the kernel
+    # is running, every remaining stage talks to Kaggle by kernel id alone,
+    # so the local staging is provably unused from here on.
+    _cleanup_scratch(kernel_dir)
+    yield "[STAGE:5] 🧹 Local kernel staging removed; the worker runs on Kaggle now.\n"
+
     yield "[STAGE:6] ⬇️ Downloading final outputs from Kaggle...\n"
     track_stage(project_id, 6, "running", message="Downloading Kaggle outputs", manifest=manifest)
 
     output_cmd = ["python", "-m", "kaggle", "kernels", "output", kernel_id, "-p", project_dir]
     yield f"[STAGE:6] Executing: {' '.join(output_cmd)}\n"
     run_cmd(output_cmd)
-    
+
     # Verify downloaded output video. Zero-disk runs have no local source file,
     # so there is simply nothing to exclude from the outputs by name.
     original_video_basename = os.path.basename(video_path) if video_path else ""
     mp4_files = [
-        f for f in glob.glob(os.path.join(project_dir, "*.mp4"))
+        f
+        for f in glob.glob(os.path.join(project_dir, "*.mp4"))
         if os.path.basename(f) != original_video_basename and os.path.getsize(f) > 0
     ]
-    
+
     if mp4_files:
-        track_stage(project_id, 6, "success",
-                    message=f"Downloaded {len(mp4_files)} file(s) from Kaggle", manifest=manifest)
+        track_stage(
+            project_id,
+            6,
+            "success",
+            message=f"Downloaded {len(mp4_files)} file(s) from Kaggle",
+            manifest=manifest,
+        )
         stale_error_log = os.path.join(project_dir, "error_log.txt")
         if os.path.isfile(stale_error_log):
             os.remove(stale_error_log)
+        # The download just mirrored the worker's whole /kaggle/working:
+        # pylibs/ (tens of MB of vendored wheels), mazinger_output/, voice
+        # wavs and a fresh pile of duplicate logs. Nothing downstream reads
+        # any of it (grep of app.py and dashboard_server.py: no hits) -- only
+        # the video, report and transcript below are consumed. Drop it before
+        # verification and subtitles run.
+        _prune_kernel_download(project_dir)
         # Pick the largest file (consistent with reattach_to_kernel)
         biggest = max(mp4_files, key=lambda f: os.path.getsize(f))
-        track_stage(project_id, 7, "success",
-                    message=f"Verified output video {os.path.basename(biggest)}",
-                    manifest=manifest)
+        track_stage(
+            project_id,
+            7,
+            "success",
+            message=f"Verified output video {os.path.basename(biggest)}",
+            manifest=manifest,
+        )
         yield f"[STAGE:7] 🎉 Pipeline finished successfully! Video saved at {os.path.basename(biggest)} and report saved locally."
 
         # Generate subtitles from the worker's transcript if one was downloaded.
-        transcript_candidates = (
-            glob.glob(os.path.join(project_dir, "*transcript*.json"))
-            + glob.glob(os.path.join(project_dir, "*whisper*.json"))
-        )
+        transcript_candidates = glob.glob(
+            os.path.join(project_dir, "*transcript*.json")
+        ) + glob.glob(os.path.join(project_dir, "*whisper*.json"))
         if transcript_candidates:
             transcript = transcript_candidates[0]
             stem = os.path.splitext(biggest)[0]
             yield f"[STAGE:7] 📝 Generating subtitles from {os.path.basename(transcript)}...\n"
             sub_result = generate_subtitles(transcript, stem)
             if sub_result["ok"]:
-                made = ", ".join(os.path.basename(p) for p in (sub_result["srt"], sub_result["ass"]) if p)
+                made = ", ".join(
+                    os.path.basename(p) for p in (sub_result["srt"], sub_result["ass"]) if p
+                )
                 yield f"[STAGE:7] ✅ Subtitles generated: {made}\n"
             else:
                 yield "[STAGE:7] ⚠️ Subtitle generation failed (see stderr); continuing without subtitles.\n"
         else:
             yield "[STAGE:7] ℹ️ No transcript JSON found; skipping subtitle generation.\n"
     else:
-        track_stage(project_id, 6, "success",
-                    message="Downloaded Kaggle outputs (no video present)", manifest=manifest)
+        track_stage(
+            project_id,
+            6,
+            "success",
+            message="Downloaded Kaggle outputs (no video present)",
+            manifest=manifest,
+        )
         # Worker said 'complete' but output is missing — this is NOT a success.
         # Download and display the actual error log from Kaggle.
         yield "[STAGE:7] ⚠️ Worker reported 'complete' but output video is missing or empty. Fetching error logs...\n"
-        
+
         error_log_path = os.path.join(project_dir, "error_log.txt")
         err_content = ""
         if os.path.exists(error_log_path):
             with open(error_log_path, "r") as f:
                 err_content = f.read()
         else:
-            log_files = glob.glob(os.path.join(project_dir, "*.log")) + glob.glob(os.path.join(project_dir, "*.txt"))
+            log_files = glob.glob(os.path.join(project_dir, "*.log")) + glob.glob(
+                os.path.join(project_dir, "*.txt")
+            )
             for lf in log_files:
                 with open(lf, "r") as f:
                     err_content += f"\n--- {os.path.basename(lf)} ---\n" + f.read()
-        
+
         if err_content:
             yield f"[STAGE:7] ❌ Worker Error Log:\n{err_content[-2500:]}\n"
         else:
             yield "[STAGE:7] ❌ No error_log.txt found. The worker likely failed silently (e.g., pip install failed due to no internet).\n"
-        
-        if "resolve host" in err_content.lower() or "network" in err_content.lower() or "internet" in err_content.lower() or not err_content:
-            yield "[STAGE:7] 💡 FIX: Open https://www.kaggle.com/code/" + kernel_id + " → Settings → Enable Internet → Re-run the notebook manually.\n"
+
+        if (
+            "resolve host" in err_content.lower()
+            or "network" in err_content.lower()
+            or "internet" in err_content.lower()
+            or not err_content
+        ):
+            yield (
+                "[STAGE:7] 💡 FIX: Open https://www.kaggle.com/code/"
+                + kernel_id
+                + " → Settings → Enable Internet → Re-run the notebook manually.\n"
+            )
         else:
-            yield "[STAGE:7] 💡 FIX: An error occurred in the execution. Please check the logs above or open https://www.kaggle.com/code/" + kernel_id + " to debug.\n"
+            yield (
+                "[STAGE:7] 💡 FIX: An error occurred in the execution. Please check the logs above or open https://www.kaggle.com/code/"
+                + kernel_id
+                + " to debug.\n"
+            )
 
-        track_stage(project_id, 7, "failed",
-                    message="Worker reported 'complete' but no output video was produced",
-                    error=err_content[-_MAX_ERROR:] if err_content
-                          else "No error_log.txt and no .log/.txt files were downloaded",
-                    manifest=manifest)
+        track_stage(
+            project_id,
+            7,
+            "failed",
+            message="Worker reported 'complete' but no output video was produced",
+            error=err_content[-_MAX_ERROR:]
+            if err_content
+            else "No error_log.txt and no .log/.txt files were downloaded",
+            manifest=manifest,
+        )
+        # The error log has been read into `content` above, so the junk the
+        # download mirrored is safe to drop. error_log.txt and the single
+        # newest *.log stay on disk as the post-mortem for this failed run.
+        _prune_kernel_download(project_dir)
 
-    # Clean up local temporary compressed files after upload is done
-    if compressed_video_path and os.path.exists(compressed_video_path):
-        try:
-            os.remove(compressed_video_path)
-            yield "[STAGE:7] 🧹 Cleaned up temporary compressed video.\n"
-        except Exception as exc:
-            print(f"[pipeline] could not remove {compressed_video_path}: {exc}", file=sys.stderr)
+    # (The old "clean up compressed_<id>.mp4 here" block moved: the temp is
+    # deleted at its earliest provable point right after the copy into
+    # dataset_safe, and run_pipeline's wrapper `finally` is the safety net
+    # that covers every early return, exception and abandoned iteration.)
 
     # Stop havaldar_core telemetry daemon
     if havaldar and havaldar.is_running():

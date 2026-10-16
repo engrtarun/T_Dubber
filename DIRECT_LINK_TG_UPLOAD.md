@@ -628,8 +628,12 @@ Aapke console me, ek baar:
 ```
 cd C:\Users\pocot\Music\T_Dubber
 .\tgup.exe upload --file dummy.mp4 --channel @tgwebcloud1 `
-  --api-id 35578684 --api-hash <hash> --phone +919286175802
+  --api-id $env:TDUBBER_API_ID --api-hash $env:TDUBBER_API_HASH --phone $env:TDUBBER_PHONE
 ```
+
+Credentials environment se aate hain -- is doc me (aur kisi bhi committed file
+me) literal api_hash/phone kabhi mat likhein. Jo value yahan pehle hardcoded thi
+wo 6 commits me chali gayi thi aur git history se wapas nahi aati.
 
 (API hash `config.json` me DPAPI-encrypted hai; `app.load_tg_config()[1]` se nikal
 sakta hai, ya aap GUI ke ☁️ Telegram Drive tab se dekh sakte hain.)

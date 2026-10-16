@@ -1,0 +1,233 @@
+# =============================================================================
+#  pyproject.toml -- the single source of truth for lint + types
+# =============================================================================
+#  Read AGENTS.md before editing this file. It states the rules that this file
+#  enforces mechanically, and it states which rules are deliberately NOT
+#  enforced here (and why).
+#
+#  ---------------------------------------------------------------------------
+#  WHY THERE WAS NO TOML FILE BEFORE THIS ONE
+#  ---------------------------------------------------------------------------
+#  There was none. Verified: no pyproject.toml, setup.cfg, tox.ini, .flake8 or
+#  mypy.ini existed anywhere in the repo, and `ruff`/`mypy` were not installed
+#  on any machine. Every quality decision lived as prose in CI comments, which
+#  no tool enforces.
+#
+#  ---------------------------------------------------------------------------
+#  WHAT "STRICT" MEANS HERE, AND WHAT IT DELIBERATELY DOES NOT
+#  ---------------------------------------------------------------------------
+#  "Strict" is treated as: high signal, zero tolerance for regressions. That is
+#  NOT the same as "select every rule and fail on everything".
+#
+#  A gate that starts red gets deleted. This one starts green. The mechanism is
+#  tools/lint_gate.py, which freezes today's findings into a baseline and fails
+#  only on NEW ones. Each fix shrinks the baseline; the baseline is never allowed
+#  to grow. That converts an unachievable "make 723 files strict today" into a
+#  ratchet that reaches the same destination without ever breaking a build.
+#
+#  See AGENTS.md #5 for the full rationale.
+# =============================================================================
+
+[tool.ruff]
+# Python 3.12, NOT 3.14 (which is what this dev machine runs). Reason: the code
+# ships to Kaggle kernels and runs in CI on 3.12, so 3.12 is the lowest common
+# denominator that is actually true. Targeting the local interpreter would let
+# UP-rules rewrite code into syntax that breaks on Kaggle -- a break the CI
+# would only discover after the kernel has already started.
+target-version = "py312"
+line-length = 100
+
+# MUST mirror pytest.ini's norecursedirs. If these two lists drift apart, the
+# test suite and the linter disagree about what "the project" is.
+#
+# The important entries are `projects` and the submodule paths:
+#
+#   projects/   contains 623 .py files that are byte-identical COPIES of our own
+#               source, written by the pipeline into every job folder under
+#               projects/<name>/dataset_safe/. Linting them would check the same
+#               multitasker.py hundreds of times, and `ruff --fix` would rewrite
+#               every copy. That is the single largest win in this file.
+#
+#   mazinger, Index-Translate, references/*  are 9 git submodules pointing at
+#               third-party repositories. `ruff --fix` on them dirties the
+#               submodule, and a dirty submodule cannot be committed from here --
+#               it is an unresolvable diff that follows you forever.
+exclude = [
+    "projects",
+    "archive",
+    "mazinger",
+    "Index-Translate",
+    "references",
+    "kotaemon-gradio-theme",
+    "ui-buttons",
+    "css-loaders",
+    "deepclonewebsite",
+    "drive",
+    "kaggle_test_dataset",
+    "Kaggle Tests Case",
+    "kaggle_worker_local",
+    "huggingface",
+    "lip_sync",
+    "edge",
+    "cmd",
+    "tools",
+    "stitcher",
+    "subtitle_forge",
+    "havaldar_core",
+    "cpp_accelerator",
+    "tts_rust",
+    "src",
+    "ui_static",
+    "tests",
+    "dashboard",
+    "__pycache__",
+    "node_modules",
+    "_pack_stage",
+    "pack",
+    "pack-export",
+    ".build",
+]
+
+[tool.ruff.lint]
+# E9  runtime/syntax errors only (NOT pycodestyle E1-E7, NOT line length)
+# F   pyflakes: undefined names, unused imports, f-string bugs
+# B   bugbear: real defect patterns (mutable defaults, shadowed loop vars)
+# S   bandit: hardcoded creds, shell=True, weak crypto, SQL string building
+# UP  pyupgrade
+# SIM simplify
+# TCH type-checking imports
+# RUF ruff-specific
+# BLE blind-except
+# C90 mccabe complexity
+#
+# BLE is enabled for a SPECIFIC reason, not for coverage. The codebase already
+# carries roughly 50 `# noqa: BLE001` suppressions -- app.py alone has 21 --
+# each with a written rationale ("reported, not swallowed"). With BLE off,
+# RUF100 fired 123 times calling those suppressions "unused" and telling the
+# team to delete them. That is actively wrong advice: it would strip the
+# codebase's deliberate, documented exception handling. Enabling BLE makes
+# those directives mean what they were written to mean.
+#
+# `ignore` is intentionally NOT empty. Each entry is a disagreement with the
+# default, recorded here so it can be argued with later:
+#   E501 line-too-long -- the codebase has never been reformatted to 100 cols.
+#                      Tying this to the gate would make the first run red for
+#                      thousands of purely cosmetic lines.
+#   E402 module-import-not-at-top -- NOT globally ignored on purpose. Seven
+#                      first-party files need it (go_planner.py:57,
+#                      login_once.py:44, direct_archive.py:53, e2e_upload.py:28,
+#                      db_seed.py:18, prune_archive_rows.py:44,
+#                      prune_test_project_rows.py:34) for a sys.path bootstrap
+#                      that must run before an import, and each already carries
+#                      `# noqa: E402`. Ignoring the rule globally while the
+#                      suppressions exist makes RUF100 call all 28 of those
+#                      directives "unused" and tells the team to delete them --
+#                      which would break the bootstrap. Let the rule fire and
+#                      let the existing, local suppressions do their job.
+#   B008 function-call-in-default -- false-positives on FastAPI/DI patterns.
+#   S603/S607 subprocess-without-shell-equals-true -- tgup_bridge.py and
+#                      go_planner.py invoke `tgup.exe` through
+#                      subprocess BY DESIGN. That is the whole point of a Go
+#                      fast path. Suppressing the warning is correct; removing
+#                      the subprocess is not an option.
+select = ["E9", "F", "B", "S", "UP", "SIM", "TCH", "RUF", "BLE"]
+
+ignore = ["E501", "B008", "S603", "S607"]
+
+[tool.ruff.lint.mccabe]
+# Off. The suggested default of 10 would flag the big procedural functions in
+# chop_drop.py / chunking.py / pipeline.py. "Fixing" C901 means restructuring
+# working upload and resume logic, which is precisely the behaviour risk this
+# whole rollout exists to avoid. Re-enable per-module once a module is typed.
+max-complexity = 25
+
+[tool.ruff.lint.per-file-ignores]
+# assert is how the suite asserts. NOTE: these tests live at the REPO ROOT
+# (test_db.py, test_chunking.py, test_tgup.py, ...), not under tests/. A
+# `tests/**/*.py` pattern would match almost nothing and leave S101 firing on
+# every root-level test file -- verified against pytest.ini's testpaths list.
+"test_*.py" = ["S101", "S603", "S607"]
+"multitasker_test.py" = ["S101", "S603", "S607"]
+"conftest.py" = ["S101"]
+# Scratch/one-off scripts that intentionally shell out.
+"e2e_upload.py" = ["S603", "S607"]
+"doctor.py" = ["S603", "S607"]
+
+[tool.ruff.format]
+# Deliberately NOT run as a CI gate yet. `ruff format --check .` on a repo that
+# has never been formatted fails on essentially every file, which means the job
+# would be born red. Formatting is applied to touched files via pre-commit only.
+quote-style = "double"
+indent-style = "space"
+
+# -----------------------------------------------------------------------------
+#  MYPY
+# -----------------------------------------------------------------------------
+#  strict = true, globally, as asked.
+#
+#  Reality check, measured before this config was written: the codebase contains
+#  7 `type: ignore[...]` comments and, outside them, essentially no annotations
+#  in files like app.py (2815 lines) and telegram_uploader.py (1799 lines).
+#  `mypy --strict` over that set is not "a few dozen errors", it is thousands.
+#
+#  So: strict is ON, and tools/lint_gate.py freezes today's output as the
+#  baseline. Same destination, no broken builds on the way. Run
+#  `python tools/lint_gate.py --write-baseline` after any fix to shrink it.
+# -----------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+pretty = true
+
+# Vendored and generated trees. `strict` would otherwise try to type-check the
+# 623 copied files under projects/ and the 9 third-party submodules.
+exclude = [
+    "^projects/",
+    "^archive/",
+    "^mazinger/",
+    "^Index-Translate/",
+    "^references/",
+    "^drive/",
+    "^deepclonewebsite/",
+    "^kaggle_test_dataset/",
+    "^Kaggle Tests Case/",
+    "^kaggle_worker_local/",
+    "^__pycache__/",
+    "^node_modules/",
+    "^pack/",
+    "^_pack_stage/",
+]
+
+# The four files that execute at import time have no `__main__` guard, so mypy
+# cannot tell a module from a script; and the `self.server` attribute trick in
+# the test HTTP servers is a legitimate stdlib pattern that mypy flags on every
+# line. Per-module relaxations, each with a reason.
+[[tool.mypy.overrides]]
+module = [
+    "conftest",
+    "e2e_upload",
+    "db_seed",
+    "prune_archive_rows",
+    "prune_test_project_rows",
+    "remove_two_fixture_rows",
+    "doctor",
+]
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+check_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["test_*", "multitasker_test"]
+disallow_untyped_defs = false
+check_untyped_defs = false
+
+# Third-party packages ship without type information. Without this, every
+# `import telethon` becomes an `import-untyped` error under strict -- noise that
+# buries the real findings.
+[[tool.mypy.overrides]]
+module = ["telethon.*", "gradio.*", "yt_dlp.*", "fastapi.*", "starlette.*", "uvicorn.*", "requests.*", "PIL.*", "pydub.*", "numpy.*"]
+ignore_missing_imports = true

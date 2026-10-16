@@ -1,6 +1,17 @@
-# T_Dubber Boost Script
+﻿# T_Dubber Boost Script
 # CPU Priority + Network QoS + Power Plan + Process Throttling
 # Run as Administrator: Right-click → Run as Administrator
+#
+# ⚠️  WARNING — THIS SCRIPT MODIFIES SYSTEM-WIDE SETTINGS.
+# It changes HKLM registry values (NetworkThrottlingIndex, SystemResponsiveness),
+# netsh TCP globals, adds a firewall rule (T_Dubber_Priority), creates/activates
+# a power scheme + disables USB selective suspend, and demotes 12 OTHER apps to
+# BelowNormal priority. Every change is machine-wide until '.\boost.ps1 revert'
+# runs, and applying it needs Administrator. It is NOT reversible from a
+# non-admin script — use .\revert-boost.ps1 for the complete restore.
+# NOTE: start-boosted.ps1 deliberately NO LONGER calls this script (that was
+# the old auto-boost path); the normal launcher makes zero system-wide changes.
+# Run boost.ps1 only when you consciously want machine-wide tuning.
 #
 # SPEED POLICY (AI/dev note, keep in sync with telegram_uploader.py +
 # go_planner.py + GO_SIDECAR.md): Python stays the boss, Go pumps bytes,
@@ -320,15 +331,28 @@ function Show-Menu {
 function Revert-AllSettings {
     Write-Header "REVERTING ALL SETTINGS"
     
-    # Power plan
-    powercfg /setactive scheme_current
-    Write-Success "Power plan → Balanced"
+    # Power plan: bahar aao agar boost wali duplicate scheme active hai
+    # (warna powercfg /delete niche active scheme delete nahi karega)
+    $activeLine = "$(powercfg /getactivescheme)"
+    if ($activeLine -match "8c5e7fda-5397-4f7c-9a4f-1499e67a3981") {
+        powercfg /setactive 381b4222-f694-41f0-9685-ff5bb260df2e | Out-Null  # Balanced = Windows default
+        Write-Success "Power plan → Balanced (boost ki duplicate scheme active thi)"
+    } else {
+        powercfg /setactive scheme_current
+        Write-Success "Power plan → scheme_current"
+    }
     
     # TCP settings
     netsh int tcp set global autotuninglevel=normal | Out-Null
     netsh int tcp set global chimney=disabled | Out-Null
     netsh int tcp set global netdma=disabled | Out-Null
+    netsh int tcp set global rss=enabled | Out-Null
     Write-Success "TCP settings → Default"
+    
+    # Firewall rule jo Set-NetworkQoS create karta tha — ye revert PHELE
+    # delete nahi karta tha (incomplete revert), ab delete karta hai.
+    netsh advfirewall firewall delete rule name="T_Dubber_Priority" | Out-Null
+    Write-Success "Firewall rule T_Dubber_Priority → deleted"
     
     # Network throttling
     $regPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
@@ -336,7 +360,38 @@ function Revert-AllSettings {
     Set-ItemProperty -Path $regPath -Name "SystemResponsiveness" -Value 20 -Type DWord
     Write-Success "Network throttling → Default"
     
-    # Process priorities
+    # USB selective suspend wapas default (1) — Set-HighPerformancePower ise
+    # disable karta tha, revert kabhi restore nahi karta tha.
+    powercfg /setacvalueindex scheme_current 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 1 | Out-Null
+    powercfg /setactive scheme_current | Out-Null
+    Write-Success "USB selective suspend → default (enabled)"
+    
+    # Boost ke dauran create hua duplicate 'High performance' scheme delete
+    # karo (sirf wo jo revert pehle chhod jata tha).
+    if (powercfg /list | Select-String -Pattern "8c5e7fda-5397-4f7c-9a4f-1499e67a3981") {
+        powercfg /delete 8c5e7fda-5397-4f7c-9a4f-1499e67a3981
+        Write-Success "Duplicate High performance scheme → deleted"
+    }
+    
+    # Process priorities — sirf python nahi, balki sabhi demoted apps bhi
+    # (pehle sirf python restore hota tha, 15 throttled apps BelowNormal hi
+    # reh jaate the).
+    $throttled = @()
+    foreach ($procName in $THROTTLE_PROCESSES) {
+        $procs = Get-Process -Name $procName -ErrorAction SilentlyContinue
+        foreach ($proc in $procs) {
+            try {
+                if ("$($proc.PriorityClass)" -eq "BelowNormal") {
+                    $proc.PriorityClass = "Normal"
+                    $throttled += "$procName (PID $($proc.Id))"
+                }
+            } catch { }
+        }
+    }
+    if ($throttled.Count -gt 0) {
+        foreach ($t in $throttled) { Write-Success "Restored priority → Normal: $t" }
+    }
+    
     $processes = Get-Process -Name $T_DUBBER_PROCESS -ErrorAction SilentlyContinue
     foreach ($proc in $processes) {
         try {
@@ -346,6 +401,7 @@ function Revert-AllSettings {
     Write-Success "Process priorities → Normal"
     
     Write-Header "ALL SETTINGS REVERTED"
+    Write-Info "Poora/complete restore chahiye (dry-run + summary): .\revert-boost.ps1"
 }
 
 # ============================================================

@@ -13,6 +13,81 @@ pack-export/
 __pycache__/
 *.pyc
 
+# Gate-owned mypy cache. tools/lint_gate.py pins --cache-dir here so that
+# running `mypy` by hand cannot change the gate's verdict -- see the reasoning
+# on TOOL_MODULES in that file. Separate from .mypy_cache for exactly that
+# reason: the two must not share state.
+.mypy_cache_gate/
+
+# ---------------------------------------------------------------------------
+# Build artifacts that are NOT covered by .gitattributes LFS rules
+# ---------------------------------------------------------------------------
+# NOTE: *.exe is deliberately NOT here. .gitattributes routes it through LFS,
+# and build-native.yml publishes the four Windows binaries as a CI artifact.
+# That is a working arrangement; do not "fix" it by ignoring them.
+#
+# MSVC debug symbols: 4 files, 6.9 MB each, ~28 MB in total. Pure build output
+# -- the .exe is identical without them, and `cmake --build` regenerates them in
+# seconds. No LFS rule, so these sit in git as raw blobs.
+*.pdb
+
+# Compiler intermediate. CMake keeps these under .build/ (already ignored);
+# this catches the strays that land at the root.
+*.obj
+*.ilk
+
+# Release bundles produced by the local PowerShell scripts. CI rebuilds both
+# from source as artifacts; keeping the archives means every commit that
+# touched a binary added another 10 MB of compressed copy that can never be
+# garbage collected.
+kaggle-tdubber-pack.zip
+windows-native-tools.zip
+dist/
+
+# ---------------------------------------------------------------------------
+# projects/ -- the runtime data directory. Source code NEVER goes here.
+# ---------------------------------------------------------------------------
+# Every project folder holds, by construction:
+#
+#   <name>.mp4           the dubbed output video
+#   project.json         project metadata, written by the pipeline
+#   dataset_safe/        a SNAPSHOT OF THIS REPO'S OWN SOURCE (see below)
+#   kernel_safe/         the Kaggle kernel copy
+#   pylibs/              a vendored Pillow, unpacked for offline use
+#
+# Nothing in it is authored by hand; everything is derived. It is input and
+# output for app.py, which reads it at runtime:
+#   app.py:24   PROJECTS_DIR
+#   app.py:70   db.import_existing_projects(PROJECTS_DIR)
+#
+# WHY THE STALE SNAPSHOTS MATTER MOST
+# MEASURED 2026-10-16: 717 tracked files under dataset_safe/ were byte-copies of
+# first-party modules (multitasker.py, huggingface/hf_store.py, lip_sync.py,
+# mazinger/*). Three reasons they must not be in git:
+#   1. They DRIFT. The multitasker.py in the sampled snapshot no longer matched
+#      the root file, so there were two "correct" versions and no way to tell
+#      which one a reader should trust.
+#   2. `ruff check .` and mypy both walk them, checking the same module once per
+#      job folder. This is most of why the lint baseline exists at all.
+#   3. Every fix to a real module had to be made N times over, or the copies
+#      became a permanent source of "works on Kaggle, not locally".
+#
+# Untracked with `git rm --cached` -- the files stay on disk, because the
+# pipeline reads them at runtime. Nothing here was deleted.
+projects/
+
+# ---------------------------------------------------------------------------
+# Stray scratch files that accumulated at the repo root
+# ---------------------------------------------------------------------------
+# pwd.txt held a real credential. `=` is an accidental shell redirect artifact.
+# dummy.mp4 is a 0-byte placeholder used as an upload argument in one manual
+# test. None of these are source, data, or fixtures.
+pwd.txt
+taruntest.txt
+test_chunk.txt
+dummy.mp4
+/=
+
 # CMake build tree for the C++ normalizer.
 #
 # This directory was committed by accident -- 22 files including CMakeCache.txt,
@@ -93,6 +168,25 @@ tgup.session.state.json
 *.session-journal
 *.session.bak
 
+# infra/_staging/ is what `python -m infra push` builds: a copy of the
+# authorised tgup.session plus its dataset-metadata.json, waiting to be handed
+# to the Kaggle CLI. The *.session rule above already covers the key itself;
+# this covers the directory, so a future change to the staging layout cannot
+# quietly put a credential in git. See infra/publish.py and SECURITY.md.
+infra/_staging/
+
+# Terraform working files. infra/ is a real module directory today but declares
+# no resources, so these should never appear -- ignored anyway so that adding
+# the first provider does not begin by committing state and secrets.
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
 # One-time login codes, passed to a script on stdin by whoever is logging in.
 # These are single-use, but a committed one is a committed login attempt, and
 # the habit that produces them is the habit that eventually commits the session.
@@ -111,5 +205,11 @@ t_dubber.db-shm
 t_dubber.db-wal
 
 target/
-
 **/target/
+
+# Local personal scratch & separate projects (protect secrets)
+drive/
+Dustbin 4 Code/
+deepclonewebsite/
+*.lock
+telegram_uploader_session.lock

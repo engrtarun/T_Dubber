@@ -1,0 +1,29 @@
+{
+  "artifact": "windows-native-tools",
+  "commit": "721e7a49171ea5bbde71dfdd2d18b302d31482e1",
+  "ref": "main",
+  "built": "2026-10-05T01:26:47Z",
+  "os": "windows-x86_64",
+  "binaries": [
+    {
+      "name": "havaldar_core.exe",
+      "bytes": 3570176,
+      "sha256": "89306a98714801fd59d7a7201358d754be4471c17bc097c649cf7ad077e4cde6"
+    },
+    {
+      "name": "normalizer.exe",
+      "bytes": 93184,
+      "sha256": "0a24e91119004132dc8ebaa659b65989b0b3553933679aa0502d2cfe24e1dc0f"
+    },
+    {
+      "name": "stitcher.exe",
+      "bytes": 302592,
+      "sha256": "b042a295b744a4141aa11a1fc9b8363f499f9c7c1f6569aa51f6cdb4dd936bea"
+    },
+    {
+      "name": "subtitle_forge.exe",
+      "bytes": 804864,
+      "sha256": "00b11f720a04dde44599fb512a8843d06faa22122aee00591b553144b6328003"
+    }
+  ]
+}

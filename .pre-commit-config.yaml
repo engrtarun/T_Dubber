@@ -1,0 +1,135 @@
+# =============================================================================
+#  .pre-commit-config.yaml -- local gatekeeper
+# =============================================================================
+#  Runs ruff (and mypy, in advisory mode) on the files you are about to commit.
+#  Because these hooks only see STAGED files, this is the one place where
+#  auto-formatting is safe: it reformats what you touched, never the 723
+#  untouched files. That is why `ruff format` is acceptable HERE and is
+#  explicitly forbidden as a CI gate (AGENTS.md section 1).
+#
+#  Install once:
+#      python -m pip install pre-commit
+#      pre-commit install
+#
+#  ---------------------------------------------------------------------------
+#  TWO CORRECTIONS TO THE USUAL TEMPLATE, AND WHY
+#  ---------------------------------------------------------------------------
+#  1. `mypy` runs with `--strict` AND `additional_dependencies`.
+#     mirrors-mypy builds an ISOLATED virtualenv containing only mypy itself. If
+#     you omit `additional_dependencies`, every `import telethon`,
+#     `import gradio`, `import yt_dlp` becomes an `import-untyped` error, and
+#     strict mode turns each one into a hard failure. The result is a hook that
+#     fails on every file and teaches the team to bypass it.
+#
+#  2. `--exit-non-zero-on-fix` is paired with `ruff --fix` deliberately, so a
+#     fix is staged and REVIEWED instead of silently riding along in a commit.
+#     (Note: `args: [--fix, --exit-non-zero-on-fix]` with a space after the
+#     comma is valid YAML -- PyYAML parses it to the correct two-element list.
+#     It is easy to believe otherwise and worth not asserting either way.
+#     The real reason `--fix` stays off `ruff-format` is that two writers
+#     rewriting one file in a single commit produce conflicts that land in the
+#     commit rather than in a scratch buffer.)
+#
+#  Exclusions mirror pytest.ini's norecursedirs and pyproject.toml's exclude.
+#  All three lists MUST stay in step -- see AGENTS.md section 1.
+# =============================================================================
+
+exclude: |
+  (?x)^(
+      projects/|
+      archive/|
+      mazinger/|
+      Index-Translate/|
+      references/|
+      kotaemon-gradio-theme/|
+      ui-buttons/|
+      css-loaders/|
+      deepclonewebsite/|
+      drive/|
+      kaggle_test_dataset/|
+      Kaggle Tests Case/|
+      kaggle_worker_local/|
+      huggingface/|
+      lip_sync/|
+      edge/|
+      cmd/|
+      tools/|
+      stitcher/|
+      subtitle_forge/|
+      havaldar_core/|
+      cpp_accelerator/|
+      tts_rust/|
+      src/|
+      ui_static/|
+      tests/|
+      dashboard/|
+      __pycache__/|
+      node_modules/|
+      pack/|
+      pack-export/|
+      \.build/
+  )$
+
+default_stages: [pre-commit]
+
+repos:
+  # ---------------------------------------------------------------------------
+  # RUFF -- lint + security
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.0
+    hooks:
+      # Lint. Fixes what is unambiguously safe, then fails so the fix gets
+      # staged and reviewed rather than silently riding along in a commit.
+      - id: ruff
+        name: ruff (lint + security S/B/E9/F rules)
+        args: ["--exit-non-zero-on-fix"]
+        types_or: [python, pyi]
+
+      # Format. Restricted to files that ruff flagged, so a clean file is never
+      # reformatted as a side effect of committing something else.
+      - id: ruff-format
+        name: ruff (format touched files only)
+        types_or: [python, pyi]
+
+  # ---------------------------------------------------------------------------
+  # MYPY -- types
+  # ---------------------------------------------------------------------------
+  # Advisory on purpose. It runs on changed files only, so it gives instant
+  # feedback on the code you are writing, but the AUTHORITATIVE type gate is
+  # tools/lint_gate.py + .github/workflows/lint-types.yml, which see the whole
+  # repo and compare against a baseline. Two gates with different scopes and
+  # different expectations would just be one gate nobody trusts.
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.14.0
+    hooks:
+      - id: mypy
+        name: mypy (strict, advisory)
+        args: ["--strict"]
+        additional_dependencies:
+          # Without these, every third-party import fails as `import-untyped`.
+          # Keep in step with the [[tool.mypy.overrides]] list in pyproject.toml.
+          - types-requests
+          - types-Pillow
+        pass_filenames: true
+        files: \.pyi?$
+
+  # ---------------------------------------------------------------------------
+  # PROTOCOL GATE -- the 4-step Ironclad Protocol (AGENTS.md section 8)
+  # ---------------------------------------------------------------------------
+  # Local hook: runs tools/protocol_gate.py on the Python files being
+  # committed. Unlike the advisory mypy above, this is a HARD gate -- exit 1
+  # blocks the commit. It checks ruff + mypy --strict against .lint-baseline.txt
+  # and the AST rules (bare generics, __all__ sync, helper asserts) against
+  # .protocol-baseline.txt.
+  #
+  # `tools/` is excluded above, so the gate is never run on itself; it fires on
+  # the root-level first-party files this repo actually owns.
+  - repo: local
+    hooks:
+      - id: protocol-gate
+        name: protocol_gate (ruff + mypy strict + AST protocol)
+        entry: python tools/protocol_gate.py
+        language: system
+        types: [python]
+        pass_filenames: true

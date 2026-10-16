@@ -15,6 +15,7 @@ This conftest fills that gap: ``scratch`` is a fresh temp directory
 import os
 import shutil
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -137,6 +138,7 @@ def _restore_patched_app_attributes():
     had, for the whole suite.
     """
     import app
+
     snapshot = dict(vars(app))
     yield
     live = vars(app)
@@ -145,3 +147,82 @@ def _restore_patched_app_attributes():
             delattr(app, name)
         elif live[name] is not snapshot[name]:
             setattr(app, name, snapshot[name])
+
+
+# =============================================================================
+#  testkit fixtures -- see testkit.py for what each helper is and why
+# =============================================================================
+#  MEASURED 2026-10-16: 15 test files hand-rolled a temp directory, 10
+#  open-coded a sha256 digest, and 7 repeated the same fake-video line. Those
+#  now live in testkit.py. The fixtures below are the pytest-shaped front door
+#  so a test can ask for the thing it needs by name instead of constructing it:
+#
+#      def test_x(scratch_workspace, fake_movie, tgup_capture):
+#          tgup_capture([...])
+#
+#  A test still runs standalone (`python test_x.py`), because these wrap
+#  testkit rather than replacing it -- the unittest.TestCase versions construct
+#  the helpers directly. Both paths go to the same implementation, which is the
+#  whole point: one copy of the arrangement, two ways to reach it.
+
+
+@pytest.fixture
+def scratch_workspace():
+    """A temp dir that cleans itself up. The Path-typed sibling of ``scratch``."""
+    import testkit
+
+    workspace = testkit.ScratchWorkspace()
+    yield workspace
+    workspace.close()
+
+
+@pytest.fixture
+def fake_movie(scratch_workspace):
+    """A 4 KiB deterministic fake video file inside the scratch dir.
+
+    Defaults to the name ``movie.mkv`` because chunk part naming derives from
+    it and several chunking assertions hardcode it. Pass
+    ``name=``/``size=`` to override.
+    """
+    import testkit
+
+    def _make(name: str = "movie.mkv", size: int = 4096) -> Path:
+        return testkit.fake_media(scratch_workspace.path, name=name, size=size)
+
+    return _make
+
+
+@pytest.fixture
+def tgup_capture():
+    """A ``CapturedCommand`` already installed over ``tgup_bridge.run_command``.
+
+    Restores the real function on teardown, so a test does not have to write a
+    try/finally -- and cannot forget to.
+    """
+    import tgup_bridge
+
+    import testkit
+
+    capture = testkit.CapturedCommand()
+    saved = tgup_bridge.run_command
+    tgup_bridge.run_command = capture
+    try:
+        yield capture
+    finally:
+        tgup_bridge.run_command = saved
+
+
+@pytest.fixture
+def sha256_of():
+    """``testkit.sha256_of`` -- digest bytes, a string, or a file's contents."""
+    import testkit
+
+    return testkit.sha256_of
+
+
+@pytest.fixture
+def serve_bytes():
+    """``testkit.serve_bytes`` -- a Range-capable HTTP server on a free port."""
+    import testkit
+
+    return testkit.serve_bytes

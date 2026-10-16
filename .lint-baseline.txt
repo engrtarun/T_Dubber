@@ -1,0 +1,720 @@
+# lint_gate baseline -- frozen findings, one key per line.
+# Managed by tools/lint_gate.py. Regenerate with --write-baseline.
+# This file must SHRINK. See AGENTS.md section 5.
+_probe_db.py::S608::Possible SQL injection vector through string-based query construction
+_probe_db.py::UP031::Use format specifiers instead of percent format
+app.py::F401::`telegram_uploader.SESSION_PATH` imported but unused
+app.py::F401::`telegram_uploader.list_uploads` imported but unused
+app.py::F541::f-string without any placeholders
+app.py::F841::Local variable `exc` is assigned to but never used
+app.py::RUF001::String contains ambiguous `–` (EN DASH). Did you mean `-` (HYPHEN-MINUS)?
+app.py::RUF005::Consider iterable unpacking instead of concatenation
+app.py::RUF013::PEP 484 prohibits implicit `Optional`
+app.py::RUF100::Unused `noqa` directive (unused: `BLE001`)
+app.py::S311::Standard pseudo-random generators are not suitable for cryptographic purposes
+app.py::SIM117::Use a single `with` statement with multiple contexts instead of nested `with` statements
+app.py::UP015::Unnecessary mode argument
+app.py::arg-type::Argument 2 to "_archive_to_db" has incompatible type "None"; expected "str"
+app.py::assignment::Incompatible default for parameter "content_sha256" (default has type "None", parameter has type "str")
+app.py::assignment::Incompatible default for parameter "filename" (default has type "None", parameter has type "str")
+app.py::assignment::Incompatible default for parameter "project_id" (default has type "None", parameter has type "str")
+app.py::assignment::Incompatible default for parameter "strategy" (default has type "None", parameter has type "str")
+app.py::attr-defined::"object" has no attribute "__iter__"; maybe "__dir__" or "__str__"? (not iterable)
+app.py::import-not-found::Cannot find implementation or library stub for module named "theme"
+app.py::no-any-return::Returning Any from function declared to return "str"
+app.py::no-untyped-call::Call to untyped function "_BackgroundJob" in typed context
+app.py::no-untyped-call::Call to untyped function "_coerce_video_path" in typed context
+app.py::no-untyped-call::Call to untyped function "_direct_archive_step" in typed context
+app.py::no-untyped-call::Call to untyped function "_dpapi_transform" in typed context
+app.py::no-untyped-call::Call to untyped function "_drive_log_panel" in typed context
+app.py::no-untyped-call::Call to untyped function "_ensure_db_seeded" in typed context
+app.py::no-untyped-call::Call to untyped function "_fingerprint_file" in typed context
+app.py::no-untyped-call::Call to untyped function "_link_card" in typed context
+app.py::no-untyped-call::Call to untyped function "_manifest_file" in typed context
+app.py::no-untyped-call::Call to untyped function "_progress_bar_html" in typed context
+app.py::no-untyped-call::Call to untyped function "_project_output_video" in typed context
+app.py::no-untyped-call::Call to untyped function "_project_report_path" in typed context
+app.py::no-untyped-call::Call to untyped function "_protect_api_hash" in typed context
+app.py::no-untyped-call::Call to untyped function "_read_project_manifest" in typed context
+app.py::no-untyped-call::Call to untyped function "_render_transfer" in typed context
+app.py::no-untyped-call::Call to untyped function "_resolve_link_step" in typed context
+app.py::no-untyped-call::Call to untyped function "_should_emit" in typed context
+app.py::no-untyped-call::Call to untyped function "_telegram_backup_step" in typed context
+app.py::no-untyped-call::Call to untyped function "_tg_credentials" in typed context
+app.py::no-untyped-call::Call to untyped function "_transfer_log_line" in typed context
+app.py::no-untyped-call::Call to untyped function "_unprotect_api_hash" in typed context
+app.py::no-untyped-call::Call to untyped function "_write_project_manifest" in typed context
+app.py::no-untyped-call::Call to untyped function "_write_tg_config" in typed context
+app.py::no-untyped-call::Call to untyped function "build_beautiful_link_card" in typed context
+app.py::no-untyped-call::Call to untyped function "check" in typed context
+app.py::no-untyped-call::Call to untyped function "events" in typed context
+app.py::no-untyped-call::Call to untyped function "fail" in typed context
+app.py::no-untyped-call::Call to untyped function "kernel_id_for" in typed context
+app.py::no-untyped-call::Call to untyped function "load_project_history" in typed context
+app.py::no-untyped-call::Call to untyped function "load_tg_config" in typed context
+app.py::no-untyped-call::Call to untyped function "parse_report_metrics" in typed context
+app.py::no-untyped-call::Call to untyped function "stat" in typed context
+app.py::no-untyped-call::Call to untyped function "tg_overview_html" in typed context
+app.py::no-untyped-def::Function is missing a return type annotation
+app.py::no-untyped-def::Function is missing a type annotation
+app.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+app.py::type-arg::Missing type arguments for generic type "dict"
+app.py::type-arg::Missing type arguments for generic type "list"
+app.py::type-arg::Missing type arguments for generic type "tuple"
+app.py::union-attr::Item "None" of "str | None" has no attribute "replace"
+app.py::var-annotated::Need type annotation for "_events"
+auto.py::F541::f-string without any placeholders
+auto.py::S110::`try`-`except`-`pass` detected, consider logging the exception
+auto.py::SIM105::Use `contextlib.suppress(BaseException)` instead of `try`-`except`-`pass`
+auto.py::no-untyped-call::Call to untyped function "apply_boost" in typed context
+auto.py::no-untyped-call::Call to untyped function "is_admin" in typed context
+auto.py::no-untyped-call::Call to untyped function "start_tdubber" in typed context
+auto.py::no-untyped-def::Function is missing a return type annotation
+auto_tuner.py::BLE001::Do not catch blind exception: `Exception`
+auto_tuner.py::F401::`os` imported but unused
+auto_tuner.py::S110::`try`-`except`-`pass` detected, consider logging the exception
+auto_tuner.py::no-any-return::Returning Any from function declared to return "int"
+bench_p0.py::F541::f-string without any placeholders
+bench_p0.py::RUF013::PEP 484 prohibits implicit `Optional`
+bench_p0.py::SIM105::Use `contextlib.suppress(AttributeError, ValueError)` instead of `try`-`except`-`pass`
+bench_p0.py::assignment::Incompatible default for parameter "channel" (default has type "None", parameter has type "str")
+bench_p0.py::assignment::Incompatible default for parameter "rate_mbps" (default has type "None", parameter has type "float")
+bench_p0.py::no-untyped-call::Call to untyped function "_telegram_backup_step" in typed context
+bench_p0.py::no-untyped-call::Call to untyped function "load_creds" in typed context
+bench_p0.py::no-untyped-call::Call to untyped function "load_tg_config" in typed context
+bench_p0.py::no-untyped-def::Function is missing a return type annotation
+bench_p0.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+bench_p0.py::operator::Cannot call function of unknown type
+bench_p0.py::return-value::No return value expected
+bench_p0.py::type-arg::Missing type arguments for generic type "dict"
+bench_p0.py::union-attr::Item "TextIO" of "TextIO | Any" has no attribute "reconfigure"
+bench_p1_tty.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+bench_p1_tty.py::no-untyped-call::Call to untyped function "load_tg_config" in typed context
+bench_p1_tty.py::type-arg::Missing type arguments for generic type "dict"
+chop_drop.py::B904::Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling
+chop_drop.py::RUF013::PEP 484 prohibits implicit `Optional`
+chop_drop.py::RUF100::Unused `noqa` directive (unused: `BLE001`)
+chop_drop.py::S310::Audit URL open for permitted schemes. Allowing use of `file:` or custom schemes is often unexpected.
+chop_drop.py::UP015::Unnecessary mode argument
+chop_drop.py::UP017::Use `datetime.UTC` alias
+chop_drop.py::arg-type::Argument "cwd" to "_run_streaming" has incompatible type "str | None"; expected "str"
+chop_drop.py::arg-type::Argument "timeout" to "_run_streaming" has incompatible type "float | None"; expected "float"
+chop_drop.py::assignment::Incompatible default for parameter "cwd" (default has type "None", parameter has type "str")
+chop_drop.py::assignment::Incompatible default for parameter "env" (default has type "None", parameter has type "dict
+chop_drop.py::assignment::Incompatible default for parameter "stdin_text" (default has type "None", parameter has type "str")
+chop_drop.py::assignment::Incompatible default for parameter "timeout" (default has type "None", parameter has type "float")
+chop_drop.py::assignment::Incompatible types in assignment (expression has type "dict
+chop_drop.py::assignment::Incompatible types in assignment (expression has type "str", target has type "int")
+chop_drop.py::call-overload::No overload variant of "Popen" matches argument types "list
+chop_drop.py::no-any-return::Returning Any from function declared to return "dict
+chop_drop.py::no-untyped-def::Function is missing a return type annotation
+chop_drop.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+chop_drop.py::type-arg::Missing type arguments for generic type "dict"
+chunk_ledger.py::RUF013::PEP 484 prohibits implicit `Optional`
+chunk_ledger.py::S608::Possible SQL injection vector through string-based query construction
+chunk_ledger.py::SIM105::Use `contextlib.suppress(sqlite3.Error)` instead of `try`-`except`-`pass`
+chunk_ledger.py::UP037::Remove quotes from type annotation
+chunk_ledger.py::assignment::Incompatible default for parameter "channel" (default has type "None", parameter has type "str")
+chunk_ledger.py::assignment::Incompatible default for parameter "db_path" (default has type "None", parameter has type "str")
+chunk_ledger.py::assignment::Incompatible default for parameter "error" (default has type "None", parameter has type "str")
+chunk_ledger.py::assignment::Incompatible default for parameter "fingerprint" (default has type "None", parameter has type "str")
+chunk_ledger.py::assignment::Incompatible default for parameter "message_id" (default has type "None", parameter has type "int")
+chunk_ledger.py::assignment::Incompatible default for parameter "message_link" (default has type "None", parameter has type "str")
+chunk_ledger.py::assignment::Incompatible default for parameter "state" (default has type "None", parameter has type "str")
+chunk_ledger.py::no-any-return::Returning Any from function declared to return "Connection"
+chunk_ledger.py::no-untyped-def::Function is missing a return type annotation
+chunk_ledger.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+chunk_ledger.py::type-arg::Missing type arguments for generic type "dict"
+chunk_ledger.py::type-arg::Missing type arguments for generic type "list"
+chunk_ledger.py::var-annotated::Need type annotation for "header"
+chunking.py::B904::Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling
+chunking.py::RUF013::PEP 484 prohibits implicit `Optional`
+chunking.py::S110::`try`-`except`-`pass` detected, consider logging the exception
+chunking.py::SIM105::Use `contextlib.suppress(Exception)` instead of `try`-`except`-`pass`
+chunking.py::SIM105::Use `contextlib.suppress(OSError)` instead of `try`-`except`-`pass`
+chunking.py::UP012::Unnecessary UTF-8 `encoding` argument to `encode`
+chunking.py::UP015::Unnecessary mode argument
+chunking.py::UP035::Import from `collections.abc` instead: `Callable`
+chunking.py::UP037::Remove quotes from type annotation
+chunking.py::arg-type::Argument 1 to "from_dict" of "ThroughputEstimator" has incompatible type "Any | None"; expected "dict
+chunking.py::assignment::Incompatible default for parameter "chunk_bytes" (default has type "None", parameter has type "int")
+chunking.py::assignment::Incompatible default for parameter "content_sha256" (default has type "None", parameter has type "str")
+chunking.py::assignment::Incompatible default for parameter "estimator" (default has type "None", parameter has type "ThroughputEstimator")
+chunking.py::assignment::Incompatible default for parameter "fingerprint" (default has type "None", parameter has type "str")
+chunking.py::assignment::Incompatible default for parameter "header" (default has type "None", parameter has type "dict
+chunking.py::assignment::Incompatible default for parameter "manifest" (default has type "None", parameter has type "ChunkManifest")
+chunking.py::assignment::Incompatible default for parameter "manifest_path" (default has type "None", parameter has type "str")
+chunking.py::assignment::Incompatible default for parameter "max_bytes" (default has type "None", parameter has type "int")
+chunking.py::assignment::Incompatible default for parameter "on_progress" (default has type "None", parameter has type "Callable
+chunking.py::assignment::Incompatible default for parameter "recover" (default has type "None", parameter has type "Callable
+chunking.py::no-any-return::Returning Any from function declared to return "list
+chunking.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+chunking.py::truthy-function::Function "recover" could always be true in boolean context
+chunking.py::type-arg::Missing type arguments for generic type "dict"
+chunking.py::type-arg::Missing type arguments for generic type "list"
+cpp_accelerator/runtimes/build_runtimes.py::arg-type::Argument 2 to "_extract_member" has incompatible type "BinarySpec | None"; expected "BinarySpec"
+cpp_accelerator/runtimes/build_runtimes.py::no-any-return::Returning Any from function declared to return "bytes"
+cpp_accelerator/runtimes/build_runtimes.py::no-any-return::Returning Any from function declared to return "str | None"
+cpp_accelerator/runtimes/build_runtimes.py::no-any-return::Returning Any from function declared to return "str"
+cpp_accelerator/runtimes/build_runtimes.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+cpp_accelerator/runtimes/llamacpp_bridge.py::assignment::Incompatible types in assignment (expression has type "TextIOWrapper
+cpp_accelerator/runtimes/llamacpp_bridge.py::attr-defined::Module has no attribute "SIGKILL"; maybe "SIGILL"?
+cpp_accelerator/runtimes/llamacpp_bridge.py::attr-defined::Module has no attribute "getpgid"; maybe "getpid" or "getppid"?
+cpp_accelerator/runtimes/llamacpp_bridge.py::attr-defined::Module has no attribute "killpg"
+cpp_accelerator/runtimes/llamacpp_bridge.py::import-not-found::Cannot find implementation or library stub for module named "build_runtimes"
+cpp_accelerator/runtimes/llamacpp_bridge.py::no-any-return::Returning Any from function declared to return "bool"
+cpp_accelerator/runtimes/llamacpp_bridge.py::no-any-return::Returning Any from function declared to return "dict
+cpp_accelerator/runtimes/llamacpp_bridge.py::no-untyped-call::Call to untyped function "_open_log" in typed context
+cpp_accelerator/runtimes/llamacpp_bridge.py::no-untyped-def::Function is missing a return type annotation
+cpp_accelerator/runtimes/llamacpp_bridge.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+cpp_accelerator/runtimes/llamacpp_bridge.py::type-arg::Missing type arguments for generic type "Popen"
+cpp_accelerator/runtimes/test_runtimes.py::assignment::Incompatible types in assignment (expression has type "TextIO | Any", variable has type "None")
+cpp_accelerator/runtimes/test_runtimes.py::import-not-found::Cannot find implementation or library stub for module named "build_runtimes"
+cpp_accelerator/runtimes/test_runtimes.py::import-not-found::Cannot find implementation or library stub for module named "llamacpp_bridge"
+cpp_accelerator/runtimes/test_runtimes.py::import-not-found::Cannot find implementation or library stub for module named "whispercpp_bridge"
+cpp_accelerator/runtimes/test_runtimes.py::no-any-return::Returning Any from function declared to return "str"
+cpp_accelerator/runtimes/test_runtimes.py::no-untyped-def::Function is missing a return type annotation
+cpp_accelerator/runtimes/test_runtimes.py::no-untyped-def::Function is missing a type annotation
+cpp_accelerator/runtimes/test_runtimes.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+cpp_accelerator/runtimes/test_runtimes.py::return-value::Incompatible return value type (got "Path", expected "list
+cpp_accelerator/runtimes/test_runtimes.py::return-value::Incompatible return value type (got "list
+cpp_accelerator/runtimes/whispercpp_bridge.py::import-not-found::Cannot find implementation or library stub for module named "build_runtimes"
+cpp_accelerator/runtimes/whispercpp_bridge.py::str-bytes-safe::If x = b'abc' then f"{x}" or "{}".format(x) produces "b'abc'", not "abc". If this is desired behavior, use f"{x!r}" or "{!r}".format(x). Otherwise, decode the bytes
+cpp_accelerator/runtimes/whispercpp_bridge.py::var-annotated::Need type annotation for "segments" (hint: "segments: list
+dashboard_contract_test.py::F541::f-string without any placeholders
+dashboard_contract_test.py::RUF059::Unpacked variable `status` is never used
+dashboard_contract_test.py::S310::Audit URL open for permitted schemes. Allowing use of `file:` or custom schemes is often unexpected.
+dashboard_contract_test.py::no-untyped-call::Call to untyped function "get" in typed context
+dashboard_contract_test.py::no-untyped-call::Call to untyped function "main" in typed context
+dashboard_contract_test.py::no-untyped-call::Call to untyped function "need" in typed context
+dashboard_contract_test.py::no-untyped-call::Call to untyped function "walk" in typed context
+dashboard_contract_test.py::no-untyped-def::Function is missing a type annotation
+dashboard_contract_test.py::var-annotated::Need type annotation for "fails" (hint: "fails: list
+dashboard_server.py::BLE001::Do not catch blind exception: `Exception`
+dashboard_server.py::RUF046::Value being cast to `int` is already an integer
+dashboard_server.py::RUF100::Unused `noqa` directive (non-enabled: `N802`)
+dashboard_server.py::S104::Possible binding to all interfaces
+dashboard_server.py::S608::Possible SQL injection vector through string-based query construction
+dashboard_server.py::SIM118::Use `key in dict` instead of `key in dict.keys()`
+dashboard_server.py::UP006::Use `dict` instead of `Dict` for type annotation
+dashboard_server.py::UP006::Use `list` instead of `List` for type annotation
+dashboard_server.py::UP006::Use `tuple` instead of `Tuple` for type annotation
+dashboard_server.py::UP009::UTF-8 encoding declaration is unnecessary
+dashboard_server.py::UP015::Unnecessary mode argument
+dashboard_server.py::UP017::Use `datetime.UTC` alias
+dashboard_server.py::UP035::Import from `collections.abc` instead: `Iterable`
+dashboard_server.py::UP035::`typing.Dict` is deprecated, use `dict` instead
+dashboard_server.py::UP035::`typing.List` is deprecated, use `list` instead
+dashboard_server.py::UP035::`typing.Tuple` is deprecated, use `tuple` instead
+dashboard_server.py::UP045::Use `X | None` for type annotations
+dashboard_server.py::arg-type::Argument 1 to "get" of "dict" has incompatible type "Any | None"; expected "str"
+dashboard_server.py::func-returns-value::"sleep" does not return a value (it only ever returns None)
+dashboard_server.py::index::Value of type "Row | None" is not indexable
+dashboard_server.py::no-any-return::Returning Any from function declared to return "Row | None"
+dashboard_server.py::no-untyped-def::Function is missing a return type annotation
+dashboard_server.py::type-arg::Missing type arguments for generic type "Iterable"
+dashboard_server.py::type-arg::Missing type arguments for generic type "set"
+db.py::RUF013::PEP 484 prohibits implicit `Optional`
+db.py::S608::Possible SQL injection vector through string-based query construction
+db.py::SIM105::Use `contextlib.suppress(sqlite3.Error)` instead of `try`-`except`-`pass`
+db.py::UP015::Unnecessary mode argument
+db.py::arg-type::Argument 1 to "append" of "list" has incompatible type "int"; expected "str"
+db.py::assignment::Incompatible default for parameter "audit_file" (default has type "None", parameter has type "str")
+db.py::assignment::Incompatible default for parameter "channels_file" (default has type "None", parameter has type "str")
+db.py::assignment::Incompatible default for parameter "day" (default has type "None", parameter has type "str")
+db.py::assignment::Incompatible default for parameter "detail" (default has type "None", parameter has type "str")
+db.py::assignment::Incompatible default for parameter "duration_sec" (default has type "None", parameter has type "float")
+db.py::assignment::Incompatible default for parameter "error" (default has type "None", parameter has type "str")
+db.py::assignment::Incompatible default for parameter "message" (default has type "None", parameter has type "str")
+db.py::assignment::Incompatible default for parameter "stage" (default has type "None", parameter has type "int")
+db.py::no-any-return::Returning Any from function declared to return "Connection"
+db.py::no-any-return::Returning Any from function declared to return "int"
+db.py::no-untyped-def::Function is missing a return type annotation
+db.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+db.py::type-arg::Missing type arguments for generic type "dict"
+db.py::type-arg::Missing type arguments for generic type "list"
+db.py::type-arg::Missing type arguments for generic type "set"
+db_seed.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+db_seed.py::UP015::Unnecessary mode argument
+direct_archive.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+direct_archive.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+direct_archive.py::type-arg::Missing type arguments for generic type "dict"
+doctor.py::BLE001::Do not catch blind exception: `Exception`
+doctor.py::F401::`os` imported but unused
+doctor.py::UP009::UTF-8 encoding declaration is unnecessary
+doctor_uploads.py::RUF013::PEP 484 prohibits implicit `Optional`
+doctor_uploads.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+doctor_uploads.py::assignment::Incompatible default for parameter "state_dir" (default has type "None", parameter has type "str")
+doctor_uploads.py::no-untyped-def::Function is missing a return type annotation
+doctor_uploads.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+doctor_uploads.py::var-annotated::Need type annotation for "buckets"
+doctor_uploads.py::var-annotated::Need type annotation for "records" (hint: "records: list
+e2e_upload.py::B904::Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling
+e2e_upload.py::F401::`json` imported but unused
+e2e_upload.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+edge/inject_cell.py::no-untyped-call::Call to untyped function "build_source" in typed context
+edge/inject_cell.py::no-untyped-call::Call to untyped function "main" in typed context
+edge/inject_cell.py::no-untyped-call::Call to untyped function "resolve_position" in typed context
+edge/inject_cell.py::no-untyped-call::Call to untyped function "to_source_lines" in typed context
+edge/inject_cell.py::no-untyped-call::Call to untyped function (unknown) in typed context
+edge/inject_cell.py::no-untyped-def::Function is missing a return type annotation
+edge/inject_cell.py::no-untyped-def::Function is missing a type annotation
+edge/notebook_cell.py::no-untyped-call::Call to untyped function "_edge_tick" in typed context
+edge/notebook_cell.py::no-untyped-call::Call to untyped function "_find_edge_fetch" in typed context
+edge/notebook_cell.py::no-untyped-call::Call to untyped function "main" in typed context
+edge/notebook_cell.py::no-untyped-def::Function is missing a return type annotation
+edge/notebook_cell.py::no-untyped-def::Function is missing a type annotation
+edge/publish_cell.py::call-overload::No overload variant matches argument types "HashingWriter", "str", "int"
+edge/publish_cell.py::no-untyped-call::Call to untyped function "HashingWriter" in typed context
+edge/publish_cell.py::no-untyped-call::Call to untyped function "build_tar" in typed context
+edge/publish_cell.py::no-untyped-call::Call to untyped function "log" in typed context
+edge/publish_cell.py::no-untyped-call::Call to untyped function "main" in typed context
+edge/publish_cell.py::no-untyped-call::Call to untyped function "read_remote_manifest" in typed context
+edge/publish_cell.py::no-untyped-def::Function is missing a return type annotation
+edge/publish_cell.py::no-untyped-def::Function is missing a type annotation
+go_planner.py::B904::Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling
+go_planner.py::RUF013::PEP 484 prohibits implicit `Optional`
+go_planner.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+go_planner.py::SIM105::Use `contextlib.suppress(OSError)` instead of `try`-`except`-`pass`
+go_planner.py::assignment::Incompatible default for parameter "caption" (default has type "None", parameter has type "str")
+go_planner.py::no-any-return::Returning Any from function declared to return "dict
+go_planner.py::no-untyped-call::Call to untyped function "_go_progress_shim" in typed context
+go_planner.py::no-untyped-def::Function is missing a type annotation
+go_planner.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+go_planner.py::type-arg::Missing type arguments for generic type "dict"
+go_planner.py::type-arg::Missing type arguments for generic type "list"
+go_planner.py::type-arg::Missing type arguments for generic type "tuple"
+havaldar.py::BLE001::Do not catch blind exception: `Exception`
+havaldar.py::S101::Use of `assert` detected
+havaldar.py::S110::`try`-`except`-`pass` detected, consider logging the exception
+havaldar.py::S310::Audit URL open for permitted schemes. Allowing use of `file:` or custom schemes is often unexpected.
+havaldar.py::UP045::Use `X | None` for type annotations
+havaldar.py::no-any-return::Returning Any from function declared to return "bool"
+havaldar.py::type-arg::Missing type arguments for generic type "Popen"
+havaldar.py::type-arg::Missing type arguments for generic type "dict"
+havaldar_backup.py::F841::Local variable `last_error` is assigned to but never used
+havaldar_backup.py::RUF100::Unused `noqa` directive (unused: `BLE001`)
+havaldar_backup.py::S110::`try`-`except`-`pass` detected, consider logging the exception
+havaldar_backup.py::SIM105::Use `contextlib.suppress(AttributeError, OSError, ValueError)` instead of `try`-`except`-`pass`
+havaldar_backup.py::SIM105::Use `contextlib.suppress(Exception)` instead of `try`-`except`-`pass`
+havaldar_backup.py::SIM105::Use `contextlib.suppress(OSError)` instead of `try`-`except`-`pass`
+havaldar_backup.py::SIM108::Use ternary operator `api_hash = _unprotect_api_hash(protected) if protected else data.get("api_hash", "") or ""` instead of `if`-`else`-block
+havaldar_backup.py::UP015::Unnecessary mode argument
+havaldar_backup.py::assignment::Incompatible types in assignment (expression has type "OSError | Error", variable has type "str | None")
+havaldar_backup.py::attr-defined::"object" has no attribute "id"
+havaldar_backup.py::no-any-return::Returning Any from function declared to return "tuple
+havaldar_backup.py::no-untyped-call::Call to untyped function "_embedded_session" in typed context
+havaldar_backup.py::no-untyped-call::Call to untyped function "_import_telethon" in typed context
+havaldar_backup.py::no-untyped-def::Function is missing a return type annotation
+havaldar_backup.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+havaldar_backup.py::type-arg::Missing type arguments for generic type "dict"
+havaldar_backup.py::type-arg::Missing type arguments for generic type "tuple"
+havaldar_backup.py::union-attr::Item "TextIO" of "TextIO | Any" has no attribute "reconfigure"
+huggingface/gguf_store.py::no-any-return::Returning Any from function declared to return "Path | None"
+huggingface/gguf_store.py::no-any-return::Returning Any from function declared to return "Path"
+huggingface/gguf_store.py::no-any-return::Returning Any from function declared to return "dict
+huggingface/gguf_store.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+huggingface/gguf_store.py::type-arg::Missing type arguments for generic type "dict"
+huggingface/hf_store.py::assignment::Incompatible types in assignment (expression has type "tuple
+huggingface/hf_store.py::call-overload::No overload variant of "snapshot_download" matches argument type "dict
+huggingface/hf_store.py::no-any-return::Returning Any from function declared to return "Path | None"
+huggingface/hf_store.py::no-any-return::Returning Any from function declared to return "dict
+huggingface/hf_store.py::no-untyped-def::Function is missing a return type annotation
+huggingface/hf_store.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+huggingface/hf_store.py::type-arg::Missing type arguments for generic type "dict"
+huggingface/seed_cache.py::attr-defined::"Sequence
+huggingface/test_gguf_store.py::arg-type::Argument 2 to "check" has incompatible type "list
+huggingface/test_gguf_store.py::arg-type::Argument 2 to "send_header" of "BaseHTTPRequestHandler" has incompatible type "str | None"; expected "str"
+huggingface/test_gguf_store.py::no-untyped-def::Function is missing a return type annotation
+huggingface/test_gguf_store.py::no-untyped-def::Function is missing a type annotation
+huggingface/test_gguf_store.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+huggingface/test_gguf_store.py::type-arg::Missing type arguments for generic type "dict"
+huggingface/test_hf_store.py::assignment::Incompatible types in assignment (expression has type "None", target has type "dict
+huggingface/test_hf_store.py::attr-defined::Module has no attribute "snapshot_download"
+huggingface/test_hf_store.py::method-assign::Cannot assign to a method
+huggingface/test_hf_store.py::no-untyped-call::Call to untyped function "_StubHub" in typed context
+huggingface/test_hf_store.py::no-untyped-def::Function is missing a return type annotation
+huggingface/test_hf_store.py::no-untyped-def::Function is missing a type annotation
+huggingface/test_hf_store.py::union-attr::Item "None" of "Path | None" has no attribute "read_bytes"
+kaggle_worker.ipynb::B007::Loop control variable `dirs` not used within loop body
+kaggle_worker.ipynb::BLE001::Do not catch blind exception: `Exception`
+kaggle_worker.ipynb::F401::`glob` imported but unused
+kaggle_worker.ipynb::F811::Redefinition of unused `argparse` from cell 4, line 65: `argparse` redefined here
+kaggle_worker.ipynb::F811::Redefinition of unused `build_tar` from cell 4, line 94: `build_tar` redefined here
+kaggle_worker.ipynb::F811::Redefinition of unused `hashlib` from cell 4, line 66: `hashlib` redefined here
+kaggle_worker.ipynb::F811::Redefinition of unused `io` from cell 4, line 67: `io` redefined here
+kaggle_worker.ipynb::F811::Redefinition of unused `log` from cell 4, line 81: `log` redefined here
+kaggle_worker.ipynb::F811::Redefinition of unused `read_remote_manifest` from cell 4, line 148: `read_remote_manifest` redefined here
+kaggle_worker.ipynb::F811::Redefinition of unused `refuse` from cell 4, line 85: `refuse` redefined here
+kaggle_worker.ipynb::F811::Redefinition of unused `subprocess` from cell 1, line 22: `subprocess` redefined here
+kaggle_worker.ipynb::F811::Redefinition of unused `subprocess` from cell 2, line 73: `subprocess` redefined here
+kaggle_worker.ipynb::F811::Redefinition of unused `sys` from cell 2, line 74: `sys` redefined here
+kaggle_worker.ipynb::F811::Redefinition of unused `tarfile` from cell 1, line 23: `tarfile` redefined here
+kaggle_worker.ipynb::F811::Redefinition of unused `tarfile` from cell 4, line 70: `tarfile` redefined here
+kaggle_worker.ipynb::F811::Redefinition of unused `zipfile` from cell 1, line 24: `zipfile` redefined here
+kaggle_worker.ipynb::RUF005::Consider `["vllm==0.26.0", *cu128]` instead of concatenation
+kaggle_worker.ipynb::RUF005::Consider `[*SPEECH_DEPS, "kaggle"]` instead of concatenation
+kaggle_worker.ipynb::RUF005::Consider `[*legacy_speech, "kaggle", *torch_pin, *cu128]` instead of concatenation
+kaggle_worker.ipynb::RUF005::Consider `[*legacy_speech, "kaggle"]` instead of concatenation
+kaggle_worker.ipynb::RUF005::Consider iterable unpacking instead of concatenation
+kaggle_worker.ipynb::RUF100::Unused `noqa` directive (non-enabled: `PLC0415`)
+kaggle_worker.ipynb::RUF100::Unused `noqa` directive (unused: `BLE001`)
+kaggle_worker.ipynb::S110::`try`-`except`-`pass` detected, consider logging the exception
+kaggle_worker.ipynb::S202::Uses of `tarfile.extractall()`
+kaggle_worker.ipynb::S310::Audit URL open for permitted schemes. Allowing use of `file:` or custom schemes is often unexpected.
+kaggle_worker.ipynb::SIM103::Return the negated condition directly
+kaggle_worker.ipynb::SIM105::Use `contextlib.suppress(Exception)` instead of `try`-`except`-`pass`
+kaggle_worker.ipynb::SIM105::Use `contextlib.suppress(OSError)` instead of `try`-`except`-`pass`
+kaggle_worker.ipynb::SIM115::Use a context manager for opening files
+kaggle_worker.ipynb::UP031::Use format specifiers instead of percent format
+link_resolver.py::BLE001::Do not catch blind exception: `Exception`
+link_resolver.py::RUF013::PEP 484 prohibits implicit `Optional`
+link_resolver.py::S101::Use of `assert` detected
+link_resolver.py::S110::`try`-`except`-`pass` detected, consider logging the exception
+link_resolver.py::S310::Audit URL open for permitted schemes. Allowing use of `file:` or custom schemes is often unexpected.
+link_resolver.py::SIM105::Use `contextlib.suppress(Exception)` instead of `try`-`except`-`pass`
+link_resolver.py::SIM105::Use `contextlib.suppress(OSError)` instead of `try`-`except`-`pass`
+link_resolver.py::assignment::Incompatible default for parameter "cookies_file" (default has type "None", parameter has type "str")
+link_resolver.py::assignment::Incompatible default for parameter "telegram_credentials" (default has type "None", parameter has type "dict
+link_resolver.py::func-returns-value::"add" of "set" does not return a value (it only ever returns None)
+link_resolver.py::no-any-return::Returning Any from function declared to return "LinkVerdict"
+link_resolver.py::no-untyped-call::Call to untyped function "_embedded_ipv4" in typed context
+link_resolver.py::no-untyped-call::Call to untyped function "_emit" in typed context
+link_resolver.py::no-untyped-call::Call to untyped function "_require_yt_dlp" in typed context
+link_resolver.py::no-untyped-def::Function is missing a return type annotation
+link_resolver.py::no-untyped-def::Function is missing a type annotation
+link_resolver.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+link_resolver.py::return-value::Incompatible return value type (got "None", expected "str")
+link_resolver.py::type-arg::Missing type arguments for generic type "dict"
+link_resolver.py::type-arg::Missing type arguments for generic type "frozenset"
+link_resolver.py::type-arg::Missing type arguments for generic type "list"
+link_resolver.py::type-arg::Missing type arguments for generic type "tuple"
+lip_sync/lip_sync.py::no-any-return::Returning Any from function declared to return "list
+lip_sync/lip_sync.py::type-arg::Missing type arguments for generic type "CompletedProcess"
+lip_sync/lip_sync.py::type-arg::Missing type arguments for generic type "dict"
+login_once.py::no-untyped-call::Call to untyped function "flow" in typed context
+login_once.py::no-untyped-call::Call to untyped function "load_tg_config" in typed context
+login_once.py::no-untyped-def::Function is missing a return type annotation
+login_once.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+multitasker.py::BLE001::Do not catch blind exception: `Exception`
+multitasker.py::F401::`traceback` imported but unused
+multitasker.py::S110::`try`-`except`-`pass` detected, consider logging the exception
+multitasker.py::UP037::Remove quotes from type annotation
+multitasker.py::assignment::Incompatible types in assignment (expression has type "Path | None", variable has type "Path")
+multitasker.py::attr-defined::"object" has no attribute "__iter__"; maybe "__dir__" or "__str__"? (not iterable)
+multitasker.py::import-not-found::Cannot find implementation or library stub for module named "torch"
+multitasker.py::no-any-return::Returning Any from function declared to return "dict
+multitasker.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+multitasker.py::type-arg::Missing type arguments for generic type "Queue"
+multitasker.py::type-arg::Missing type arguments for generic type "dict"
+multitasker_test.py::method-assign::Cannot assign to a method
+multitasker_test.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+pipeline.py::BLE001::Do not catch blind exception: `Exception`
+pipeline.py::RUF001::String contains ambiguous `ℹ` (INFORMATION SOURCE). Did you mean `i` (LATIN SMALL LETTER I)?
+pipeline.py::RUF005::Consider iterable unpacking instead of concatenation
+pipeline.py::S310::Audit URL open for permitted schemes. Allowing use of `file:` or custom schemes is often unexpected.
+pipeline.py::S602::`subprocess` call with `shell=True` identified, security issue
+pipeline.py::SIM102::Use a single `if` statement instead of nested `if` statements
+pipeline.py::UP015::Unnecessary mode argument
+pipeline.py::assignment::Incompatible types in assignment (expression has type "None", variable has type Module)
+pipeline.py::assignment::Incompatible types in assignment (expression has type "float", variable has type "int")
+pipeline.py::no-any-return::Returning Any from function declared to return "bool"
+pipeline.py::no-untyped-call::Call to untyped function "_channel_archive_link" in typed context
+pipeline.py::no-untyped-call::Call to untyped function "_collect_kernel_logs" in typed context
+pipeline.py::no-untyped-call::Call to untyped function "_resolve_source_sha256" in typed context
+pipeline.py::no-untyped-call::Call to untyped function "_sha256_file" in typed context
+pipeline.py::no-untyped-call::Call to untyped function "_tel_ensure_project" in typed context
+pipeline.py::no-untyped-call::Call to untyped function "_tel_truncate" in typed context
+pipeline.py::no-untyped-call::Call to untyped function "_tel_warn" in typed context
+pipeline.py::no-untyped-call::Call to untyped function "_wait_for_kernel" in typed context
+pipeline.py::no-untyped-call::Call to untyped function "_worker_fetches" in typed context
+pipeline.py::no-untyped-call::Call to untyped function "kernel_id_for" in typed context
+pipeline.py::no-untyped-call::Call to untyped function "project_id_for" in typed context
+pipeline.py::no-untyped-call::Call to untyped function "run_cmd" in typed context
+pipeline.py::no-untyped-call::Call to untyped function "track_stage" in typed context
+pipeline.py::no-untyped-def::Function is missing a type annotation
+pipeline.py::type-arg::Missing type arguments for generic type "dict"
+pipeline.py::union-attr::Item "None" of "Any | None" has no attribute "stderr"
+pipeline.py::union-attr::Item "None" of "Any | None" has no attribute "stdout"
+pipeline.py::var-annotated::Need type annotation for "_tel_ready" (hint: "_tel_ready: set
+pipeline.py::var-annotated::Need type annotation for "_tel_started" (hint: "_tel_started: dict
+prune_archive_rows.py::F401::`sqlite3` imported but unused
+prune_archive_rows.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+prune_archive_rows.py::arg-type::Argument 1 to "is_junk" has incompatible type "Any | None"; expected "str"
+prune_archive_rows.py::type-arg::Missing type arguments for generic type "dict"
+prune_test_project_rows.py::F401::`json` imported but unused
+prune_test_project_rows.py::F401::`sqlite3` imported but unused
+prune_test_project_rows.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+prune_test_project_rows.py::type-arg::Missing type arguments for generic type "dict"
+remove_two_fixture_rows.py::F401::`shutil` imported but unused
+setup_config.py::no-untyped-call::Call to untyped function "save_tg_config" in typed context
+space_sweeper.py::B007::Loop control variable `reason` not used within loop body
+space_sweeper.py::BLE001::Do not catch blind exception: `Exception`
+space_sweeper.py::RUF005::Consider iterable unpacking instead of concatenation
+space_sweeper.py::S110::`try`-`except`-`pass` detected, consider logging the exception
+space_sweeper.py::UP015::Unnecessary mode argument
+space_sweeper.py::UP017::Use `datetime.UTC` alias
+space_sweeper.py::import-untyped::Skipping analyzing "kaggle.api.kaggle_api_extended": module is installed, but missing library stubs or py.typed marker
+space_sweeper.py::no-any-return::Returning Any from function declared to return "str"
+space_sweeper.py::no-untyped-call::Call to untyped function "ensure_datetime" in typed context
+space_sweeper.py::no-untyped-call::Call to untyped function "get_api" in typed context
+space_sweeper.py::no-untyped-def::Function is missing a return type annotation
+space_sweeper.py::no-untyped-def::Function is missing a type annotation
+space_sweeper.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+space_sweeper.py::type-arg::Missing type arguments for generic type "dict"
+space_sweeper.py::var-annotated::Need type annotation for "ds_candidates" (hint: "ds_candidates: list
+space_sweeper.py::var-annotated::Need type annotation for "ds_skipped" (hint: "ds_skipped: list
+space_sweeper.py::var-annotated::Need type annotation for "k_candidates" (hint: "k_candidates: list
+space_sweeper.py::var-annotated::Need type annotation for "k_skipped" (hint: "k_skipped: list
+telegram_uploader.py::attr-defined::Module has no attribute "LOCK_EX"
+telegram_uploader.py::attr-defined::Module has no attribute "LOCK_NB"
+telegram_uploader.py::attr-defined::Module has no attribute "LOCK_UN"
+telegram_uploader.py::attr-defined::Module has no attribute "flock"
+telegram_uploader.py::no-any-return::Returning Any from function declared to return "str"
+telegram_uploader.py::no-untyped-call::Call to untyped function "_emit" in typed context
+telegram_uploader.py::no-untyped-call::Call to untyped function "_extract_video_thumb" in typed context
+telegram_uploader.py::no-untyped-call::Call to untyped function "_probe_video" in typed context
+telegram_uploader.py::no-untyped-call::Call to untyped function "_restore_from_manifest" in typed context
+telegram_uploader.py::no-untyped-call::Call to untyped function "message_filename" in typed context
+telegram_uploader.py::no-untyped-def::Function is missing a return type annotation
+telegram_uploader.py::no-untyped-def::Function is missing a type annotation
+telegram_uploader.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+telegram_uploader.py::return-value::Incompatible return value type (got "Any | None", expected "str")
+telegram_uploader.py::type-arg::Missing type arguments for generic type "dict"
+telegram_uploader.py::type-arg::Missing type arguments for generic type "list"
+telegram_uploader.py::union-attr::Item "None" of "BufferedReader
+telethon_session.py::B905::`zip()` without an explicit `strict=` parameter
+telethon_session.py::S324::Probable use of insecure hash functions in `hashlib`: `sha1`
+telethon_session.py::SIM105::Use `contextlib.suppress(OSError)` instead of `try`-`except`-`pass`
+telethon_session.py::type-arg::Missing type arguments for generic type "dict"
+test_archive_roundtrip.py::no-untyped-call::Call to untyped function "_import_app" in typed context
+test_archive_roundtrip.py::no-untyped-call::Call to untyped function "_use_temp_db" in typed context
+test_archive_roundtrip.py::no-untyped-def::Function is missing a return type annotation
+test_archive_roundtrip.py::no-untyped-def::Function is missing a type annotation
+test_channel_caption.py::UP015::Unnecessary mode argument
+test_channel_caption.py::no-untyped-call::Call to untyped function "_safe" in typed context
+test_channel_caption.py::no-untyped-call::Call to untyped function "_use_temp_channels" in typed context
+test_channel_caption.py::no-untyped-call::Call to untyped function "main" in typed context
+test_channel_caption.py::no-untyped-call::Call to untyped function (unknown) in typed context
+test_channel_caption.py::no-untyped-def::Function is missing a return type annotation
+test_channel_caption.py::no-untyped-def::Function is missing a type annotation
+test_chunk_ledger.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+test_chunk_ledger.py::SIM117::Use a single `with` statement with multiple contexts instead of nested `with` statements
+test_chunk_ledger.py::UP037::Remove quotes from type annotation
+test_chunk_ledger.py::arg-type::Argument 1 to "create" of "ChunkManifest" has incompatible type "Path"; expected "str"
+test_chunk_ledger.py::no-untyped-def::Function is missing a return type annotation
+test_chunk_ledger.py::no-untyped-def::Function is missing a type annotation
+test_chunk_ledger.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+test_chunk_ledger.py::type-arg::Missing type arguments for generic type "list"
+test_chunking.py::B905::`zip()` without an explicit `strict=` parameter
+test_chunking.py::RUF007::Prefer `itertools.pairwise()` over `zip()` when iterating over successive pairs
+test_chunking.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+test_chunking.py::UP015::Unnecessary mode argument
+test_chunking.py::arg-type::Argument "recover" to "upload_chunk_with_recovery" has incompatible type "Callable
+test_chunking.py::arg-type::Argument 1 to "create" of "ChunkManifest" has incompatible type "Path"; expected "str"
+test_chunking.py::arg-type::Argument 1 to "sample" of "ThroughputEstimator" has incompatible type "float"; expected "int"
+test_chunking.py::assignment::Incompatible types in assignment (expression has type "def <lambda>(path: Any, *a: Any, **k: Any) -> GuardedFile", variable has type overloaded function)
+test_chunking.py::no-untyped-call::Call to untyped function "GuardedFile" in typed context
+test_chunking.py::no-untyped-call::Call to untyped function "_make_sender" in typed context
+test_chunking.py::no-untyped-call::Call to untyped function "_manifest" in typed context
+test_chunking.py::no-untyped-def::Function is missing a return type annotation
+test_chunking.py::no-untyped-def::Function is missing a type annotation
+test_chunking.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+test_chunking.py::return-value::Incompatible return value type (got "None", expected "str")
+test_chunking.py::var-annotated::Need type annotation for "after" (hint: "after: list
+test_chunking.py::var-annotated::Need type annotation for "first" (hint: "first: list
+test_chunking.py::var-annotated::Need type annotation for "second" (hint: "second: list
+test_chunking.py::var-annotated::Need type annotation for "second_pass" (hint: "second_pass: list
+test_chunking.py::var-annotated::Need type annotation for "sent" (hint: "sent: list
+test_db.py::F401::`sqlite3` imported but unused
+test_db.py::F541::f-string without any placeholders
+test_db.py::RUF015::Prefer `next(...)` over single element slice
+test_db.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+test_db.py::SIM113::Use `enumerate()` for index variable `made` in `for` loop
+test_db.py::UP015::Unnecessary mode argument
+test_db.py::attr-defined::Module has no attribute "PROJECTS_DIR"
+test_db.py::no-untyped-call::Call to untyped function "_restore_db" in typed context
+test_db.py::no-untyped-call::Call to untyped function "_use_temp_db" in typed context
+test_db.py::no-untyped-call::Call to untyped function "main" in typed context
+test_db.py::no-untyped-call::Call to untyped function (unknown) in typed context
+test_db.py::no-untyped-def::Function is missing a return type annotation
+test_db.py::no-untyped-def::Function is missing a type annotation
+test_db.py::operator::Unsupported left operand type for + ("Collection
+test_db.py::operator::Unsupported left operand type for + ("object")
+test_direct_archive.py::RUF100::Unused `noqa` directive (non-enabled: `A003`)
+test_direct_archive.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+test_direct_archive.py::RUF100::Unused `noqa` directive (non-enabled: `N802`)
+test_direct_archive.py::SIM117::Use a single `with` statement with multiple contexts instead of nested `with` statements
+test_direct_archive.py::assignment::Incompatible types in assignment (expression has type "_GoSpy", variable has type "Callable
+test_direct_archive.py::attr-defined::"ThreadingHTTPServer" has no attribute "payload"
+test_direct_archive.py::no-untyped-call::Call to untyped function "_Origin" in typed context
+test_direct_archive.py::no-untyped-call::Call to untyped function "_origin" in typed context
+test_direct_archive.py::no-untyped-call::Call to untyped function "_restore" in typed context
+test_direct_archive.py::no-untyped-call::Call to untyped function "do_GET" in typed context
+test_direct_archive.py::no-untyped-call::Call to untyped function "do_HEAD" in typed context
+test_direct_archive.py::no-untyped-call::Call to untyped function "run" in typed context
+test_direct_archive.py::no-untyped-def::Function is missing a return type annotation
+test_direct_archive.py::no-untyped-def::Function is missing a type annotation
+test_direct_archive.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+test_direct_archive.py::str-bytes-safe::If x = b'abc' then f"{x}" or "{}".format(x) produces "b'abc'", not "abc". If this is desired behavior, use f"{x!r}" or "{!r}".format(x). Otherwise, decode the bytes
+test_direct_archive.py::type-arg::Missing type arguments for generic type "list"
+test_direct_archive.py::var-annotated::Need type annotation for "calls" (hint: "calls: list
+test_flow_order.py::F401::`time` imported but unused
+test_flow_order.py::RUF059::Unpacked variable `project_id` is never used
+test_flow_order.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+test_flow_order.py::S110::`try`-`except`-`pass` detected, consider logging the exception
+test_flow_order.py::SIM105::Use `contextlib.suppress(Exception)` instead of `try`-`except`-`pass`
+test_flow_order.py::UP015::Unnecessary mode argument
+test_flow_order.py::assignment::Incompatible types in assignment (expression has type "dict
+test_flow_order.py::attr-defined::Module "app" does not explicitly export attribute "TelegramCloudError"
+test_flow_order.py::attr-defined::Module "app" does not explicitly export attribute "run_pipeline"
+test_flow_order.py::attr-defined::Module "app" does not explicitly export attribute "upload_file_detailed"
+test_flow_order.py::call-overload::No overload variant of "__getitem__" of "tuple" matches argument type "str"
+test_flow_order.py::no-untyped-call::Call to untyped function "_BackgroundJob" in typed context
+test_flow_order.py::no-untyped-call::Call to untyped function "_drain" in typed context
+test_flow_order.py::no-untyped-call::Call to untyped function "_manifest_for" in typed context
+test_flow_order.py::no-untyped-call::Call to untyped function "_safe_all" in typed context
+test_flow_order.py::no-untyped-call::Call to untyped function "_stage_text" in typed context
+test_flow_order.py::no-untyped-call::Call to untyped function "_telegram_backup_step" in typed context
+test_flow_order.py::no-untyped-call::Call to untyped function "_transfer_log_line" in typed context
+test_flow_order.py::no-untyped-call::Call to untyped function "check" in typed context
+test_flow_order.py::no-untyped-call::Call to untyped function "events" in typed context
+test_flow_order.py::no-untyped-call::Call to untyped function "main" in typed context
+test_flow_order.py::no-untyped-call::Call to untyped function (unknown) in typed context
+test_flow_order.py::no-untyped-def::Function is missing a return type annotation
+test_flow_order.py::no-untyped-def::Function is missing a type annotation
+test_flow_order.py::union-attr::Item "None" of "Any | None" has no attribute "conn"
+test_isolation.py::S608::Possible SQL injection vector through string-based query construction
+test_isolation.py::SIM105::Use `contextlib.suppress(OSError)` instead of `try`-`except`-`pass`
+test_isolation.py::no-any-return::Returning Any from function declared to return "int"
+test_p0_direct.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+test_p0_direct.py::no-untyped-call::Call to untyped function "_archive" in typed context
+test_p0_direct.py::no-untyped-call::Call to untyped function "_channel_archive_link" in typed context
+test_p0_direct.py::no-untyped-call::Call to untyped function "_job_config" in typed context
+test_p0_direct.py::no-untyped-call::Call to untyped function "_resolve_source_sha256" in typed context
+test_p0_direct.py::no-untyped-call::Call to untyped function "_rows" in typed context
+test_p0_direct.py::no-untyped-call::Call to untyped function "_worker_fetches" in typed context
+test_p0_direct.py::no-untyped-def::Function is missing a return type annotation
+test_p0_direct.py::no-untyped-def::Function is missing a type annotation
+test_p0_direct.py::type-arg::Missing type arguments for generic type "CompletedProcess"
+test_passwords.py::no-untyped-call::Call to untyped function "load_tg_config" in typed context
+test_passwords.py::no-untyped-call::Call to untyped function "main" in typed context
+test_passwords.py::no-untyped-def::Function is missing a return type annotation
+test_telethon_session_import.py::S324::Probable use of insecure hash functions in `hashlib`: `sha1`
+test_telethon_session_import.py::no-untyped-def::Function is missing a return type annotation
+test_tg_cloud.py::B904::Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling
+test_tg_cloud.py::F541::f-string without any placeholders
+test_tg_cloud.py::F841::Local variable `data` is assigned to but never used
+test_tg_cloud.py::RUF012::Mutable default value for class attribute
+test_tg_cloud.py::SIM115::Use a context manager for opening files
+test_tg_cloud.py::attr-defined::Module "telegram_uploader" does not explicitly export attribute "time"
+test_tg_cloud.py::attr-defined::Module has no attribute "sleep"
+test_tg_cloud.py::method-assign::Cannot assign to a method
+test_tg_cloud.py::no-untyped-call::Call to untyped function "FakeClient" in typed context
+test_tg_cloud.py::no-untyped-call::Call to untyped function "FakeMessage" in typed context
+test_tg_cloud.py::no-untyped-call::Call to untyped function "_bytes_for" in typed context
+test_tg_cloud.py::no-untyped-call::Call to untyped function "_install" in typed context
+test_tg_cloud.py::no-untyped-call::Call to untyped function "_store" in typed context
+test_tg_cloud.py::no-untyped-call::Call to untyped function "main" in typed context
+test_tg_cloud.py::no-untyped-call::Call to untyped function "make_client" in typed context
+test_tg_cloud.py::no-untyped-call::Call to untyped function (unknown) in typed context
+test_tg_cloud.py::no-untyped-def::Function is missing a return type annotation
+test_tg_cloud.py::no-untyped-def::Function is missing a type annotation
+test_tg_cloud.py::var-annotated::Need type annotation for "_payloads" (hint: "_payloads: dict
+test_tgup.py::B905::`zip()` without an explicit `strict=` parameter
+test_tgup.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+test_tgup.py::SIM117::Use a single `with` statement with multiple contexts instead of nested `with` statements
+test_tgup.py::arg-type::Argument 1 to "create" of "ChunkManifest" has incompatible type "Path"; expected "str"
+test_tgup.py::no-untyped-call::Call to untyped function "_binary" in typed context
+test_tgup.py::no-untyped-call::Call to untyped function "_needs_binary" in typed context
+test_tgup.py::no-untyped-call::Call to untyped function "_parts" in typed context
+test_tgup.py::no-untyped-call::Call to untyped function "_with_env" in typed context
+test_tgup.py::no-untyped-def::Function is missing a return type annotation
+test_tgup.py::no-untyped-def::Function is missing a type annotation
+test_tgup.py::union-attr::Item "None" of "TransferProgress | None" has no attribute "bytes_done"
+test_tgup.py::union-attr::Item "None" of "TransferProgress | None" has no attribute "event"
+test_tgup.py::union-attr::Item "None" of "TransferProgress | None" has no attribute "part"
+test_tgup.py::union-attr::Item "None" of "TransferProgress | None" has no attribute "part_count"
+test_tgup.py::union-attr::Item "None" of "TransferProgress | None" has no attribute "rate"
+test_tgup_session_state.py::UP017::Use `datetime.UTC` alias
+test_tgup_session_state.py::no-untyped-def::Function is missing a return type annotation
+test_tgup_url.py::RUF100::Unused `noqa` directive (non-enabled: `E402`)
+test_tgup_url.py::arg-type::Argument 2 to "assertIn" of "TestCase" has incompatible type "Any | None"; expected "Iterable
+test_tgup_url.py::assignment::Incompatible types in assignment (expression has type "CapturedCommand", variable has type "def run_command(args: list
+test_tgup_url.py::attr-defined::Module "go_planner" does not explicitly export attribute "tgup_bridge"
+test_tgup_url.py::attr-defined::Module has no attribute "upload"
+test_tgup_url.py::no-untyped-call::Call to untyped function "CapturedCommand" in typed context
+test_tgup_url.py::no-untyped-call::Call to untyped function "_flag" in typed context
+test_tgup_url.py::no-untyped-def::Function is missing a return type annotation
+test_tgup_url.py::no-untyped-def::Function is missing a type annotation
+test_tgup_url.py::var-annotated::Need type annotation for "lines" (hint: "lines: list
+test_tgup_url.py::var-annotated::Need type annotation for "seen" (hint: "seen: dict
+test_ui_static.py::RUF005::Consider `(*HTML_FILES, "app.js")` instead of concatenation
+test_ui_static.py::SIM300::Yoda condition detected
+test_ui_static.py::no-untyped-call::Call to untyped function "_app_py" in typed context
+test_ui_static.py::no-untyped-call::Call to untyped function "_html_ids" in typed context
+test_ui_static.py::no-untyped-call::Call to untyped function "_js_references" in typed context
+test_ui_static.py::no-untyped-call::Call to untyped function "_read" in typed context
+test_ui_static.py::no-untyped-call::Call to untyped function "main" in typed context
+test_ui_static.py::no-untyped-call::Call to untyped function (unknown) in typed context
+test_ui_static.py::no-untyped-def::Function is missing a return type annotation
+test_ui_static.py::no-untyped-def::Function is missing a type annotation
+test_ui_static.py::union-attr::Item "None" of "Match
+test_upload.py::BLE001::Do not catch blind exception: `Exception`
+test_upload.py::F541::f-string without any placeholders
+test_upload.py::S602::`subprocess` call with `shell=True` identified, security issue
+test_upload.py::UP015::Unnecessary mode argument
+test_upload.py::no-untyped-call::Call to untyped function "run_cmd" in typed context
+test_upload.py::no-untyped-call::Call to untyped function "test_kaggle_upload" in typed context
+test_upload.py::no-untyped-call::Call to untyped function "verify_kaggle_auth" in typed context
+test_upload.py::no-untyped-def::Function is missing a return type annotation
+test_upload.py::no-untyped-def::Function is missing a type annotation
+test_upload_manual.py::BLE001::Do not catch blind exception: `Exception`
+test_upload_manual.py::F401::`json` imported but unused
+test_upload_manual.py::F841::Local variable `e` is assigned to but never used
+test_upload_manual.py::S110::`try`-`except`-`pass` detected, consider logging the exception
+test_upload_manual.py::no-untyped-call::Call to untyped function "load_tg_config" in typed context
+test_upload_manual.py::no-untyped-def::Function is missing a return type annotation
+test_upload_manual.py::no-untyped-def::Function is missing a type annotation
+tests/fake_normalizer.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+tests/fake_normalizer.py::type-arg::Missing type arguments for generic type "dict"
+tests/fake_stitcher.py::import-untyped::Skipping analyzing "soundfile": module is installed, but missing library stubs or py.typed marker
+tests/test_cpp_normalizer_bridge.py::arg-type::Argument 2 to "check" has incompatible type "numpy.bool
+tests/test_cpp_normalizer_bridge.py::attr-defined::Module "mazinger" has no attribute "assemble"
+tests/test_cpp_normalizer_bridge.py::import-untyped::Skipping analyzing "soundfile": module is installed, but missing library stubs or py.typed marker
+tests/test_cpp_normalizer_bridge.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+tests/test_stitcher_bridge.py::attr-defined::Module "mazinger" has no attribute "assemble"
+tests/test_stitcher_bridge.py::import-untyped::Skipping analyzing "soundfile": module is installed, but missing library stubs or py.typed marker
+tests/test_stitcher_bridge.py::no-untyped-call::Call to untyped function "tone" in typed context
+tests/test_stitcher_bridge.py::no-untyped-def::Function is missing a return type annotation
+tests/test_stitcher_bridge.py::no-untyped-def::Function is missing a type annotation
+tests/test_stitcher_bridge.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+tests/test_stitcher_e2e.py::no-untyped-call::Call to untyped function "expect" in typed context
+tests/test_stitcher_e2e.py::no-untyped-def::Function is missing a type annotation
+tests/test_stitcher_e2e.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+tests/test_stitcher_e2e.py::type-arg::Missing type arguments for generic type "CompletedProcess"
+tests/test_stitcher_e2e.py::type-arg::Missing type arguments for generic type "dict"
+tests/test_subtitle_forge_binary.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+tests/test_subtitle_forge_render.py::misc::Generator has incompatible item type "str"; expected "list
+tests/test_subtitle_forge_render.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+tg_qr_login.py::B905::`zip()` without an explicit `strict=` parameter
+tg_qr_login.py::S101::Use of `assert` detected
+tg_qr_login.py::UP017::Use `datetime.UTC` alias
+tg_qr_login.py::UP041::Replace aliased errors with `TimeoutError`
+tg_qr_login.py::no-untyped-call::Call to untyped function "_export" in typed context
+tg_qr_login.py::no-untyped-def::Function is missing a return type annotation
+tg_qr_login.py::no-untyped-def::Function is missing a type annotation
+tg_qr_login.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+tgup_bridge.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+tgup_bridge.py::type-arg::Missing type arguments for generic type "PathLike"
+tgup_bridge.py::type-arg::Missing type arguments for generic type "dict"
+tgup_bridge.py::type-arg::Missing type arguments for generic type "list"
+tgup_bridge.py::union-attr::Item "None" of "IO
+tools/tiny_range_server.py::no-untyped-def::Function is missing a return type annotation
+tools/tiny_range_server.py::no-untyped-def::Function is missing a type annotation
+tts_rust/tdub_tts_bridge.py::str-bytes-safe::If x = b'abc' then f"{x}" or "{}".format(x) produces "b'abc'", not "abc". If this is desired behavior, use f"{x!r}" or "{!r}".format(x). Otherwise, decode the bytes
+tts_rust/test_tts_bridge.py::arg-type::Argument 1 to "Path" has incompatible type "str | None"; expected "str | PathLike
+tts_rust/test_tts_bridge.py::arg-type::Argument 1 to "TtsRunner" has incompatible type "**dict
+tts_rust/test_tts_bridge.py::no-untyped-def::Function is missing a return type annotation
+tts_rust/test_tts_bridge.py::no-untyped-def::Function is missing a type annotation for one or more parameters
+wire_multitasker.py::type-arg::Missing type arguments for generic type "dict"

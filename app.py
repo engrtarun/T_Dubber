@@ -1,5 +1,6 @@
 import os
 import sys
+import io
 import queue
 import shutil
 import json
@@ -15,6 +16,8 @@ import ctypes
 import datetime
 import threading
 from ctypes import wintypes
+from collections.abc import Generator
+
 import gradio as gr
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,18 +28,24 @@ logger = logging.getLogger(__name__)
 # -------------------------------------------------------------------------
 # UI THEME: KOTAEMON
 # -------------------------------------------------------------------------
-kotaemon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'kotaemon-gradio-theme')
+kotaemon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kotaemon-gradio-theme")
 if kotaemon_path not in sys.path:
     sys.path.insert(0, kotaemon_path)
 
 try:
     from theme import Kotaemon
+
     custom_theme = Kotaemon()
 except ImportError as e:
     print(f"Failed to import Kotaemon theme: {e}")
     custom_theme = gr.themes.Default()
 
-from pipeline import run_pipeline, reattach_to_kernel, kernel_id_for
+from pipeline import (
+    run_pipeline,
+    reattach_to_kernel,
+    kernel_id_for,
+    sweep_stale_scratch,
+)
 from telegram_uploader import (
     CHUNK_SIZE,
     SESSION_PATH,
@@ -68,7 +77,58 @@ def _ensure_db_seeded():
     except Exception:  # noqa: BLE001 - never block startup on the database
         logger.exception("Could not seed the database from existing projects")
 
-# -------------------------------------------------------------------------
+
+def _dir_last_touched(path: str) -> float | None:
+    """Newest mtime of a folder and its immediate children, or None.
+
+    The folder's own mtime only changes when entries are added/removed, so a
+    30-hour download would look "untouched" and get swept mid-run. A .part
+    file being written updates ITS mtime, which is what we actually want to
+    see.
+    """
+    try:
+        newest = os.path.getmtime(path)
+        for name in os.listdir(path):
+            try:
+                newest = max(newest, os.path.getmtime(os.path.join(path, name)))
+            except OSError:
+                continue
+        return newest
+    except OSError:
+        return None
+
+
+def _sweep_stale_inbox(max_age_hours: int = 24) -> int:
+    """Delete abandoned ``projects/_inbox/<stamp>`` folders left by hard kills.
+
+    Every normal exit path cleans its own inbox (see the try/finally wrappers
+    around ``start_dubbing`` and ``do_telegram_upload_from_link``), but a
+    Task-Manager kill or a power cut never runs a finally block -- startup is
+    the only place those leftovers can go. Age-gated on the newest file inside
+    so a job that is running right now can never lose its scratch.
+    """
+    inbox_root = os.path.join(PROJECTS_DIR, "_inbox")
+    cutoff = time.time() - max_age_hours * 3600
+    try:
+        entries = os.listdir(inbox_root)
+    except OSError:
+        return 0
+    removed = 0
+    for name in entries:
+        path = os.path.join(inbox_root, name)
+        if not os.path.isdir(path):
+            continue
+        touched = _dir_last_touched(path)
+        if touched is None or touched >= cutoff:
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        removed += 1
+    if removed:
+        logger.info("Swept %d stale inbox folder(s) older than %dh", removed, max_age_hours)
+    return removed
+
+
+# ---------------------------------------------------------------------
 # AI ASSISTANT & UI HELPERS
 # -------------------------------------------------------------------------
 
@@ -85,19 +145,19 @@ def parse_report_metrics(report_path):
     try:
         with open(report_path, "r") as f:
             data = json.load(f)
-            
+
         cards_html = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-top: 15px;">'
         for k, v in data.items():
             label = html.escape(str(k).replace("_", " "))
             value = json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v)
             value = html.escape(value)
-            cards_html += f'''
+            cards_html += f"""
             <div style="background: var(--background-fill-secondary); border: 1px solid var(--border-color-primary); border-radius: 8px; text-align:center; padding:1.2rem; box-shadow: var(--shadow-drop);">
                 <div style="font-size: 26px; font-weight: 800; color: var(--color-accent);">{value}</div>
                 <div style="font-size: 13px; color: var(--body-text-color-subdued); text-transform: uppercase; letter-spacing: 1px; margin-top: 5px;">{label}</div>
             </div>
-            '''
-        cards_html += '</div>'
+            """
+        cards_html += "</div>"
         return cards_html
     except (OSError, json.JSONDecodeError, TypeError, AttributeError):
         logger.exception("Could not render report metrics from %s", report_path)
@@ -168,6 +228,7 @@ def build_beautiful_link_card(url):
     </div>
     """
 
+
 # -------------------------------------------------------------------------
 # TELEGRAM CLOUD + SOURCE LINK HELPERS
 # -------------------------------------------------------------------------
@@ -214,9 +275,7 @@ def load_channels() -> dict:
     if not data.get("channels"):
         fallback = load_tg_config()[3]
         data["channels"] = [fallback] if fallback else []
-    data["channels"] = [
-        str(name).strip() for name in data["channels"] if str(name).strip()
-    ]
+    data["channels"] = [str(name).strip() for name in data["channels"] if str(name).strip()]
     if data.get("strategy") not in ("round_robin", "least_used", "random", "fixed"):
         data["strategy"] = "round_robin"
     return data
@@ -289,12 +348,15 @@ def save_channels(text: str, strategy: str, default_index: int) -> str:
     if not names:
         return "❌ Enter at least one channel, like @tgwebcloud1"
     try:
-        _save_channels({
-            "channels": names,
-            "strategy": strategy if strategy in
-            ("round_robin", "least_used", "random", "fixed") else "round_robin",
-            "default_index": int(default_index or 0),
-        })
+        _save_channels(
+            {
+                "channels": names,
+                "strategy": strategy
+                if strategy in ("round_robin", "least_used", "random", "fixed")
+                else "round_robin",
+                "default_index": int(default_index or 0),
+            }
+        )
         return (
             f"✅ {len(names)} channel(s) saved, strategy = {strategy}. "
             "New uploads will spread across them."
@@ -312,11 +374,7 @@ def _coerce_video_path(video_file):
     """Gradio 5/6 hands gr.Video results back as a dict, tuple or plain path."""
     for _attempt in range(3):
         if isinstance(video_file, dict):
-            video_file = (
-                video_file.get("video")
-                or video_file.get("path")
-                or video_file.get("name")
-            )
+            video_file = video_file.get("video") or video_file.get("path") or video_file.get("name")
         elif isinstance(video_file, (tuple, list)):
             video_file = video_file[0] if video_file else None
         else:
@@ -346,12 +404,8 @@ class _BackgroundJob:
 
     def __init__(self, worker, min_interval=None, min_percent_delta=None):
         self._worker = worker
-        self._min_interval = (
-            self.MIN_INTERVAL_SECONDS if min_interval is None else min_interval
-        )
-        self._min_delta = (
-            self.MIN_PERCENT_DELTA if min_percent_delta is None else min_percent_delta
-        )
+        self._min_interval = self.MIN_INTERVAL_SECONDS if min_interval is None else min_interval
+        self._min_delta = self.MIN_PERCENT_DELTA if min_percent_delta is None else min_percent_delta
         self.result = None
         self.error = None
         self._events = queue.Queue()
@@ -497,7 +551,7 @@ def check_link_status(url):
             f' background:rgba(220,38,38,0.06); border-radius:6px; margin-top:8px;">'
             f'<b style="color:{colour};">Not usable ({badge})</b>'
             f'<div style="font-size:13px; margin-top:6px; color:var(--body-text-color);">'
-            f'{html.escape(verdict.reason)}</div></div>'
+            f"{html.escape(verdict.reason)}</div></div>"
         )
 
     if verdict.kind == "telegram":
@@ -506,7 +560,7 @@ def check_link_status(url):
             f' background:rgba(40,167,69,0.08); border-radius:6px; margin-top:8px;">'
             f'<b style="color:#28a745;">Telegram archive link</b>'
             f'<div style="font-size:13px; margin-top:6px;">'
-            f'{html.escape(verdict.reason)}</div></div>'
+            f"{html.escape(verdict.reason)}</div></div>"
         )
 
     info = link_resolver.probe(url, _tg_credentials())
@@ -515,9 +569,9 @@ def check_link_status(url):
             f'<div style="padding:12px 14px; border-left:4px solid #dc2626;'
             f' background:rgba(220,38,38,0.06); border-radius:6px; margin-top:8px;">'
             f'<b style="color:#dc2626;">{html.escape(verdict.label)} link found, '
-            f'but it could not be read</b>'
+            f"but it could not be read</b>"
             f'<pre style="white-space:pre-wrap; font-size:12px; margin-top:6px;">'
-            f'{html.escape(str(info.get("reason", "unknown error")))}</pre></div>'
+            f"{html.escape(str(info.get('reason', 'unknown error')))}</pre></div>"
         )
 
     duration = info.get("duration") or 0
@@ -531,11 +585,11 @@ def check_link_status(url):
         f' background:rgba(40,167,69,0.08); border-radius:6px; margin-top:8px;">'
         f'<b style="color:#28a745;">{html.escape(verdict.label)}</b>'
         f'<div style="font-size:14px; font-weight:600; margin-top:4px;">'
-        f'{html.escape(str(info.get("title", "Untitled")))}</div>'
+        f"{html.escape(str(info.get('title', 'Untitled')))}</div>"
         f'<div style="font-size:12px; color:var(--body-text-color-subdued);">'
-        f'{html.escape(str(info.get("size_label", "unknown size")))}'
-        f'{duration_text} &middot; via {html.escape(str(info.get("extractor", "?")))}</div>'
-        f'{warning_html}</div>'
+        f"{html.escape(str(info.get('size_label', 'unknown size')))}"
+        f"{duration_text} &middot; via {html.escape(str(info.get('extractor', '?')))}</div>"
+        f"{warning_html}</div>"
     )
 
 
@@ -560,9 +614,7 @@ def _transfer_log_line(payload, stage="STAGE:0"):
     percent = min(100.0, current / total * 100.0)
     chunk_index = payload.get("chunk_index")
     chunk_count = payload.get("chunk_count")
-    prefix = (
-        f"part {chunk_index}/{chunk_count} · " if chunk_index and chunk_count else ""
-    )
+    prefix = f"part {chunk_index}/{chunk_count} · " if chunk_index and chunk_count else ""
     verb = "restored" if payload.get("phase") == "restore" else "transferred"
     return (
         f"[{stage}] ⬆️ {prefix}{percent:.1f}% {verb} "
@@ -612,9 +664,7 @@ def _archive_to_db(journal: dict, project_id: str = None, content_sha256: str = 
             if content_sha256:
                 journal["fingerprint"] = _archive_fingerprint(content_sha256)
             elif file_path and os.path.isfile(file_path):
-                journal["fingerprint"] = _archive_fingerprint(
-                    _fingerprint_file(file_path)
-                )
+                journal["fingerprint"] = _archive_fingerprint(_fingerprint_file(file_path))
             else:
                 channel = journal.get("channel") or db.UNKNOWN_CHANNEL
                 journal["fingerprint"] = (
@@ -625,8 +675,7 @@ def _archive_to_db(journal: dict, project_id: str = None, content_sha256: str = 
             db.attach_archive_to_project(project_id, archive_id)
         return archive_id
     except Exception:  # noqa: BLE001
-        logger.exception("Could not record archive %s in the database",
-                         journal.get("filename"))
+        logger.exception("Could not record archive %s in the database", journal.get("filename"))
         return None
 
 
@@ -708,7 +757,12 @@ def _direct_archive_step(source_url, creds, channel, caption=""):
 
 
 def _telegram_backup_step(
-    source_path, creds, source_url, project_id=None, media=None, channel=None,
+    source_path,
+    creds,
+    source_url,
+    project_id=None,
+    media=None,
+    channel=None,
     content_sha256=None,
 ):
     """Archive the source on Telegram and return the manifest link.
@@ -772,9 +826,7 @@ def _telegram_backup_step(
             content_sha256=content_sha256,
             # Mirror progress into the database as parts land, so a crash still
             # leaves a queryable record of what exists on Telegram.
-            on_journal=lambda snapshot: _archive_to_db(
-                snapshot, project_id, content_sha256
-            ),
+            on_journal=lambda snapshot: _archive_to_db(snapshot, project_id, content_sha256),
         )
 
     job = _BackgroundJob(work)
@@ -817,7 +869,7 @@ def tg_overview_html():
     if not usage or totals.get("archives", 0) == 0:
         return (
             '<div style="padding:16px; border:1px dashed var(--border-color-primary);'
-            ' border-radius:10px; color:var(--body-text-color-subdued);'
+            " border-radius:10px; color:var(--body-text-color-subdued);"
             ' text-align:center;">No uploads recorded yet.</div>'
         )
 
@@ -835,7 +887,7 @@ def tg_overview_html():
     def stat(label, value):
         return (
             '<div style="text-align:center; padding:12px; border-radius:8px;'
-            ' background:var(--background-fill-secondary);'
+            " background:var(--background-fill-secondary);"
             ' border:1px solid var(--border-color-primary);">'
             f'<div style="font-size:22px; font-weight:800; color:var(--color-accent);">{value}</div>'
             f'<div style="font-size:11px; text-transform:uppercase; letter-spacing:1px;'
@@ -856,11 +908,11 @@ def tg_overview_html():
             ' border-radius:8px; padding:10px 12px;">'
             f'<div style="font-weight:700; font-size:13px;">{channel}</div>'
             f'<div style="font-size:12px; color:var(--body-text-color-subdued);">'
-            f'{row["uploads"]} upload{"s" if row["uploads"] != 1 else ""} · '
-            f'{human_bytes(row["total_bytes"])}</div>'
+            f"{row['uploads']} upload{'s' if row['uploads'] != 1 else ''} · "
+            f"{human_bytes(row['total_bytes'])}</div>"
             f'<div style="font-size:11px; color:var(--body-text-color-subdued);">'
-            f'{row["split"]} split · {row["complete"]} complete · '
-            f'{row["failed"]} failed{note}</div>'
+            f"{row['split']} split · {row['complete']} complete · "
+            f"{row['failed']} failed{note}</div>"
             "</div>"
         )
 
@@ -880,13 +932,13 @@ def tg_overview_html():
         cells = [
             f'<td style="padding:6px 8px; font-size:13px;">{name}</td>',
             f'<td style="padding:6px 8px; font-size:12px; white-space:nowrap;">'
-            f'{html.escape(str(record.get("channel") or "-"))}</td>',
+            f"{html.escape(str(record.get('channel') or '-'))}</td>",
             f'<td style="padding:6px 8px; font-size:13px; white-space:nowrap;">'
-            f'{human_bytes(record.get("file_size", 0))}</td>',
+            f"{human_bytes(record.get('file_size', 0))}</td>",
             f'<td style="padding:6px 8px; font-size:13px; text-align:center;">'
-            f'{record.get("chunk_count") or 1}</td>',
+            f"{record.get('chunk_count') or 1}</td>",
             f'<td style="padding:6px 8px; font-size:12px; color:{colour};">'
-            f'{html.escape(state)}</td>',
+            f"{html.escape(state)}</td>",
             f'<td style="padding:6px 8px; font-size:12px; white-space:nowrap;">{when}</td>',
         ]
         if link:
@@ -900,11 +952,15 @@ def tg_overview_html():
         rows.append("<tr>" + "".join(cells) + "</tr>")
 
     header_cells = ("File", "Channel", "Size", "Parts", "State", "When", "Link")
-    header = "<tr>" + "".join(
-        f'<th style="text-align:left; padding:6px 8px; font-size:11px;'
-        f' text-transform:uppercase; letter-spacing:1px;">{label}</th>'
-        for label in header_cells
-    ) + "</tr>"
+    header = (
+        "<tr>"
+        + "".join(
+            f'<th style="text-align:left; padding:6px 8px; font-size:11px;'
+            f' text-transform:uppercase; letter-spacing:1px;">{label}</th>'
+            for label in header_cells
+        )
+        + "</tr>"
+    )
 
     return (
         '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr));'
@@ -916,15 +972,14 @@ def tg_overview_html():
         + stat("Succeeded", str(totals.get("succeeded", 0)))
         + "</div>"
         + '<div style="font-size:12px; text-transform:uppercase;'
-        ' letter-spacing:1px; color:var(--body-text-color-subdued);'
-        ' margin:0 0 6px;">By channel</div>'
-        + '<div style="display:grid;'
-        ' grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px;'
+        " letter-spacing:1px; color:var(--body-text-color-subdued);"
+        ' margin:0 0 6px;">By channel</div>' + '<div style="display:grid;'
+        " grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px;"
         ' margin-bottom:16px;">'
         + "".join(channel_cards)
         + "</div>"
         + '<div style="font-size:12px; text-transform:uppercase;'
-        ' letter-spacing:1px; color:var(--body-text-color-subdued);'
+        " letter-spacing:1px; color:var(--body-text-color-subdued);"
         ' margin:0 0 6px;">Recent uploads</div>'
         + '<div style="overflow-x:auto;">'
         + '<table style="width:100%; border-collapse:collapse;">'
@@ -1047,26 +1102,29 @@ def do_telegram_upload(video_file):
     table = (
         f'<details style="margin-top:10px;">'
         f'<summary style="cursor:pointer; font-size:13px;">'
-        f'Show all {len(parts)} part checksums</summary>'
+        f"Show all {len(parts)} part checksums</summary>"
         f'<div style="max-height:260px; overflow:auto;">'
         f'<table style="width:100%; margin-top:8px; border-collapse:collapse;">'
         f'<tr><th style="text-align:left;font-size:11px;">Part</th>'
         f'<th style="text-align:left;font-size:11px;">Size</th>'
         f'<th style="text-align:left;font-size:11px;">SHA-256</th></tr>'
-        f'{rows}</table></div></details>'
+        f"{rows}</table></div></details>"
         if len(parts) > 1
         else ""
     )
 
-    yield _link_card(
-        link,
-        "♻️ Already archived" if reused else "✅ Archived on Telegram",
-        (
-            f"{html.escape(os.path.basename(path))} · {human_bytes(size)} · "
-            f"{planned} part{'s' if planned != 1 else ''}"
-            + (" · reused an identical earlier archive" if reused else "")
-        ),
-    ) + table
+    yield (
+        _link_card(
+            link,
+            "♻️ Already archived" if reused else "✅ Archived on Telegram",
+            (
+                f"{html.escape(os.path.basename(path))} · {human_bytes(size)} · "
+                f"{planned} part{'s' if planned != 1 else ''}"
+                + (" · reused an identical earlier archive" if reused else "")
+            ),
+        )
+        + table
+    )
 
 
 def do_restore_from_link(link):
@@ -1085,8 +1143,13 @@ def do_restore_from_link(link):
 
     def work(report):
         return download_or_restore(
-            link, creds["api_id"], creds["api_hash"], creds["phone"],
-            destination, progress_callback=report, verify=True,
+            link,
+            creds["api_id"],
+            creds["api_hash"],
+            creds["phone"],
+            destination,
+            progress_callback=report,
+            verify=True,
         )
 
     job = _BackgroundJob(work)
@@ -1125,6 +1188,7 @@ def do_restore_from_link(link):
 # LINK -> TELEGRAM BACKUP (Drive tab: archive only, no dubbing)
 # -------------------------------------------------------------------------
 
+
 def _drive_log_panel(text):
     safe = html.escape(text)
     return (
@@ -1135,12 +1199,30 @@ def _drive_log_panel(text):
     )
 
 
-def do_telegram_upload_from_link(source_url):
+def do_telegram_upload_from_link(source_url: str):
     """Archive a pasted link on Telegram and return its backup link.
 
     Same link logic as the Studio Workspace, but backup-only: we fetch the
     link, push it to Telegram, and hand back the manifest link. No dubbing.
+
+    Like :func:`start_dubbing`, the scratch inbox dies on every exit path --
+    the Drive tab's early error returns used to leak it (and any partial
+    download inside) forever.
     """
+    scratch: dict[str, str] = {}
+    try:
+        yield from _do_telegram_upload_from_link_impl(source_url, scratch)
+    finally:
+        inbox = scratch.get("inbox")
+        if inbox:
+            shutil.rmtree(inbox, ignore_errors=True)
+
+
+def _do_telegram_upload_from_link_impl(
+    source_url: str,
+    scratch: dict[str, str] | None = None,
+) -> Generator[str, None, None]:
+    """Body of :func:`do_telegram_upload_from_link`; see the wrapper."""
     link = (source_url or "").strip()
     if not link:
         yield '<div style="color:#dc2626;">Paste a source link first.</div>'
@@ -1202,13 +1284,16 @@ def do_telegram_upload_from_link(source_url):
     if direct:
         reason = direct.get("reason") or "no message link returned"
         yield _drive_log_panel(
-            direct_log + f"⚠️ Zero-disk refused: {reason}\n"
-            "Falling back to fetch, then upload…\n"
+            direct_log + f"⚠️ Zero-disk refused: {reason}\nFalling back to fetch, then upload…\n"
         )
 
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     inbox_dir = os.path.join(PROJECTS_DIR, "_inbox", stamp)
     os.makedirs(inbox_dir, exist_ok=True)
+    # Hand the path to the wrapper immediately: every early return below used
+    # to leak this directory and any partial download inside it.
+    if scratch is not None:
+        scratch["inbox"] = inbox_dir
 
     # 1) Resolve the link to a local file (live progress).
     yield '<div style="padding:8px 0;">🔗 Fetching the link…</div>'
@@ -1263,7 +1348,10 @@ def do_telegram_upload_from_link(source_url):
                 break
             log += line
             yield _drive_log_panel(log)
-    except (TelegramCloudError, OSError, ValueError) as exc:
+    except (TelegramCloudError, OSError, ValueError, EOFError) as exc:
+        # EOFError: stdin is deliberately closed at startup, so a stray
+        # interactive prompt (Telethon's OTP input) surfaces here as a clean
+        # error card instead of hanging the job.
         logger.exception("Telegram upload failed for %s", media.path)
         yield (
             '<div style="padding:12px; border-left:4px solid #dc2626; color:#dc2626;">'
@@ -1292,6 +1380,7 @@ def do_telegram_upload_from_link(source_url):
 # PIPELINE EXECUTION
 # -------------------------------------------------------------------------
 
+
 def _fingerprint_file(path):
     digest = hashlib.sha256()
     with open(path, "rb") as source:
@@ -1316,8 +1405,9 @@ def _write_project_manifest(project_dir, manifest):
     try:
         db.upsert_project(manifest)
     except Exception:  # noqa: BLE001 - the JSON write already succeeded
-        logger.exception("Could not mirror project %s into the database",
-                         manifest.get("project_id"))
+        logger.exception(
+            "Could not mirror project %s into the database", manifest.get("project_id")
+        )
 
 
 def _read_project_manifest(project_dir):
@@ -1361,9 +1451,19 @@ def _project_output_video(project_dir):
 
 def _project_report_path(project_dir):
     manifest = _read_project_manifest(project_dir)
-    return _manifest_file(project_dir, manifest.get("report_file")) or os.path.join(project_dir, "report.json")
+    return _manifest_file(project_dir, manifest.get("report_file")) or os.path.join(
+        project_dir, "report.json"
+    )
 
-def start_dubbing(video_file, target_lang, speaker_detection, source_url="", backup_to_telegram=True, archive_only=False):
+
+def start_dubbing(
+    video_file,
+    target_lang,
+    speaker_detection,
+    source_url: str = "",
+    backup_to_telegram=True,
+    archive_only=False,
+):
     """Run one dubbing job: Telegram archive first, then the Kaggle GPU handoff.
 
     Order matters. The Kaggle worker keeps running no matter what happens to
@@ -1371,6 +1471,47 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
     accepted. Archiving to Telegram first guarantees there is always a durable,
     checksummed copy plus a link the user can pass on, and gives us a way to
     restart the whole job later from the archive alone.
+
+    Scratch discipline: the link fetch writes into ``projects/_inbox/<stamp>``
+    and that directory is only ever an intermediate -- the video is moved into
+    the project folder and the thumbnail has served its caption by the time
+    this generator finishes. Delegating to the real generator through
+    ``yield from`` inside try/finally reclaims the inbox on EVERY exit path:
+    success, the early failure returns, an exception, and a client that walks
+    away mid-run (GeneratorExit). Deletion is best-effort so a locked partial
+    can never mask the real error.
+    """
+    scratch: dict[str, str] = {}
+    try:
+        yield from _start_dubbing_impl(
+            video_file,
+            target_lang,
+            speaker_detection,
+            source_url,
+            backup_to_telegram,
+            archive_only,
+            scratch,
+        )
+    finally:
+        inbox = scratch.get("inbox")
+        if inbox:
+            shutil.rmtree(inbox, ignore_errors=True)
+
+
+def _start_dubbing_impl(
+    video_file,
+    target_lang,
+    speaker_detection,
+    source_url="",
+    backup_to_telegram=True,
+    archive_only=False,
+    scratch: dict[str, str] | None = None,
+):
+    """Body of :func:`start_dubbing`; the wrapper owns scratch cleanup.
+
+    ``scratch`` is a one-entry handoff channel: it records the inbox directory
+    the moment it is created so the wrapper can delete it no matter where this
+    generator stops.
     """
     source_url = (source_url or "").strip()
     creds = _tg_credentials()
@@ -1490,9 +1631,11 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
                         "Streamed straight from the origin; nothing was written to this PC.",
                     )
                     yield (
-                        gr.update(value=logs), gr.update(value=None),
+                        gr.update(value=logs),
+                        gr.update(value=None),
                         gr.update(value=parse_report_metrics(None)),
-                        gr.update(value=""), gr.update(value=backup_html),
+                        gr.update(value=""),
+                        gr.update(value=backup_html),
                     )
                     return
                 yield (
@@ -1536,8 +1679,7 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
             # Download skipped on purpose: the worker restores the source
             # from the archive link this run just created.
             logs += (
-                "[STAGE:0] 📦 Source kept off disk; the worker restores it "
-                "from the archive link.\n"
+                "[STAGE:0] 📦 Source kept off disk; the worker restores it from the archive link.\n"
             )
             yield (
                 gr.update(value=logs),
@@ -1550,6 +1692,10 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
             stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             inbox_dir = os.path.join(PROJECTS_DIR, "_inbox", stamp)
             os.makedirs(inbox_dir, exist_ok=True)
+            # Hand the path to the wrapper immediately: from here on the inbox
+            # is guaranteed dead on every exit path, even a hard crash.
+            if scratch is not None:
+                scratch["inbox"] = inbox_dir
 
             try:
                 resolver = _resolve_link_step(source_url, inbox_dir)
@@ -1592,7 +1738,9 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
     # ------------------------------------------------------------------
     # Project folder + manifest
     # ------------------------------------------------------------------
-    movie_name = re.sub(r'[^A-Za-z0-9_-]', '_', source_title.replace(' ', '_')).strip('_') or "movie"
+    movie_name = (
+        re.sub(r"[^A-Za-z0-9_-]", "_", source_title.replace(" ", "_")).strip("_") or "movie"
+    )
     movie_name = movie_name[:64]
     if source_sha256 is None:
         # One whole-file read serves three consumers: the project id, the Tier 0
@@ -1653,9 +1801,11 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
             "[STAGE:0]    Save API details in the ☁️ Telegram Drive tab to switch this on.\n"
         )
         yield (
-            gr.update(value=logs), gr.update(value=None),
+            gr.update(value=logs),
+            gr.update(value=None),
             gr.update(value=parse_report_metrics(None)),
-            gr.update(value=""), gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
         )
     elif backup_to_telegram and backup_link:
         # Stage 0's zero-disk attempt already put the source on Telegram and
@@ -1669,9 +1819,11 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
             "Streamed straight from the origin; nothing was written to this PC.",
         )
         yield (
-            gr.update(value=logs), gr.update(value=None),
+            gr.update(value=logs),
+            gr.update(value=None),
             gr.update(value=parse_report_metrics(None)),
-            gr.update(value=""), gr.update(value=backup_html),
+            gr.update(value=""),
+            gr.update(value=backup_html),
         )
     elif backup_to_telegram:
         channel = pick_channel() or creds["channel"]
@@ -1680,8 +1832,13 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
         # The generator raises while it is being drained, so the whole loop
         # (not just the post-processing) has to sit inside the try.
         backup_resolver = _telegram_backup_step(
-            persisted_video, creds, source_url, project_id,
-            media=media, channel=channel, content_sha256=source_sha256,
+            persisted_video,
+            creds,
+            source_url,
+            project_id,
+            media=media,
+            channel=channel,
+            content_sha256=source_sha256,
         )
         try:
             while True:
@@ -1692,13 +1849,17 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
                     break
                 logs += line
                 yield (
-                    gr.update(value=logs), gr.update(value=None),
+                    gr.update(value=logs),
+                    gr.update(value=None),
                     gr.update(value=parse_report_metrics(None)),
-                    gr.update(value=""), gr.update(value=backup_html),
+                    gr.update(value=""),
+                    gr.update(value=backup_html),
                 )
-        except (TelegramCloudError, OSError, ValueError) as exc:
+        except (TelegramCloudError, OSError, ValueError, EOFError) as exc:
             # A failed backup must not block the dub, but it must be loud: the
             # user needs to know this run has no off-machine copy yet.
+            # EOFError is in the tuple because stdin is closed at startup:
+            # Telethon's OTP input() then fails fast instead of hanging here.
             logs += (
                 f"[STAGE:0] ❌ Telegram backup failed: {exc}\n"
                 "[STAGE:0]    Continuing to Kaggle anyway, but nothing is off "
@@ -1715,17 +1876,21 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
                 "that happens to this PC.",
             )
         yield (
-            gr.update(value=logs), gr.update(value=None),
+            gr.update(value=logs),
+            gr.update(value=None),
             gr.update(value=parse_report_metrics(None)),
-            gr.update(value=""), gr.update(value=backup_html),
+            gr.update(value=""),
+            gr.update(value=backup_html),
         )
 
     if archive_only:
         logs += "[STAGE:0] 📁 Archive-Only mode active. Stopping before dubbing.\n"
         yield (
-            gr.update(value=logs), gr.update(value=None),
+            gr.update(value=logs),
+            gr.update(value=None),
             gr.update(value=parse_report_metrics(None)),
-            gr.update(value=""), gr.update(value=backup_html),
+            gr.update(value=""),
+            gr.update(value=backup_html),
         )
         return
 
@@ -1733,7 +1898,10 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
     # Stages 1-7: Kaggle
     # ------------------------------------------------------------------
     for status_update in run_pipeline(
-        persisted_video, project_dir, target_lang, speaker_detection,
+        persisted_video,
+        project_dir,
+        target_lang,
+        speaker_detection,
         backup_link=backup_link,
         source_url=source_url or None,
         source_title=source_title,
@@ -1759,8 +1927,12 @@ def start_dubbing(video_file, target_lang, speaker_detection, source_url="", bac
             report_candidate = _project_report_path(project_dir)
             output_report_path = report_candidate if os.path.isfile(report_candidate) else None
             manifest["state"] = "success" if output_video_path else "failed_missing_output"
-            manifest["output_video"] = os.path.relpath(output_video_path, project_dir) if output_video_path else None
-            manifest["report_file"] = os.path.relpath(output_report_path, project_dir) if output_report_path else None
+            manifest["output_video"] = (
+                os.path.relpath(output_video_path, project_dir) if output_video_path else None
+            )
+            manifest["report_file"] = (
+                os.path.relpath(output_report_path, project_dir) if output_report_path else None
+            )
             _write_project_manifest(project_dir, manifest)
 
         yield (
@@ -1845,6 +2017,7 @@ def reattach_project(project_name):
             gr.update(value=active_url_html),
         )
 
+
 WORKSPACE_DIRS = {"_inbox", "_restored"}
 
 
@@ -1914,18 +2087,20 @@ def project_backup_html(project_name):
         )
     return ""
 
+
 def load_project_details(project_name):
     if not project_name:
         return None, parse_report_metrics(None)
-        
+
     project_dir = os.path.join(PROJECTS_DIR, os.path.basename(project_name))
     output_video = _project_output_video(project_dir)
 
     report_path = _project_report_path(project_dir)
     if not os.path.exists(report_path):
         report_path = None
-        
+
     return output_video, parse_report_metrics(report_path)
+
 
 class _DataBlob(ctypes.Structure):
     _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_ubyte))]
@@ -1946,24 +2121,48 @@ def _dpapi_transform(data, protect):
 
     if protect:
         transform = crypt32.CryptProtectData
-        transform.argtypes = [ctypes.POINTER(_DataBlob), wintypes.LPCWSTR,
-                              ctypes.POINTER(_DataBlob), ctypes.c_void_p,
-                              ctypes.c_void_p, wintypes.DWORD,
-                              ctypes.POINTER(_DataBlob)]
+        transform.argtypes = [
+            ctypes.POINTER(_DataBlob),
+            wintypes.LPCWSTR,
+            ctypes.POINTER(_DataBlob),
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(_DataBlob),
+        ]
         transform.restype = wintypes.BOOL
-        succeeded = transform(ctypes.byref(source), "T_Dubber Telegram API hash",
-                              None, None, None, 0x1, ctypes.byref(destination))
+        succeeded = transform(
+            ctypes.byref(source),
+            "T_Dubber Telegram API hash",
+            None,
+            None,
+            None,
+            0x1,
+            ctypes.byref(destination),
+        )
         description = None
     else:
         transform = crypt32.CryptUnprotectData
         description = wintypes.LPWSTR()
-        transform.argtypes = [ctypes.POINTER(_DataBlob), ctypes.POINTER(wintypes.LPWSTR),
-                              ctypes.POINTER(_DataBlob), ctypes.c_void_p,
-                              ctypes.c_void_p, wintypes.DWORD,
-                              ctypes.POINTER(_DataBlob)]
+        transform.argtypes = [
+            ctypes.POINTER(_DataBlob),
+            ctypes.POINTER(wintypes.LPWSTR),
+            ctypes.POINTER(_DataBlob),
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(_DataBlob),
+        ]
         transform.restype = wintypes.BOOL
-        succeeded = transform(ctypes.byref(source), ctypes.byref(description),
-                              None, None, None, 0x1, ctypes.byref(destination))
+        succeeded = transform(
+            ctypes.byref(source),
+            ctypes.byref(description),
+            None,
+            None,
+            None,
+            0x1,
+            ctypes.byref(destination),
+        )
     if not succeeded:
         raise ctypes.WinError(ctypes.get_last_error())
     try:
@@ -2021,16 +2220,19 @@ def load_tg_config():
 
 def save_tg_config(api_id, api_hash, phone, channel):
     try:
-        _write_tg_config({
-            "api_id": api_id,
-            "api_hash_protected": _protect_api_hash(api_hash),
-            "phone": phone,
-            "channel": channel,
-        })
+        _write_tg_config(
+            {
+                "api_id": api_id,
+                "api_hash_protected": _protect_api_hash(api_hash),
+                "phone": phone,
+                "channel": channel,
+            }
+        )
         return "✅ Settings saved; API hash is encrypted for this Windows account."
     except (OSError, RuntimeError, ValueError) as exc:
         logger.exception("Could not save Telegram settings")
         return f"❌ Settings could not be saved securely: {exc}"
+
 
 # -------------------------------------------------------------------------
 # GRADIO INTERFACE
@@ -2038,14 +2240,14 @@ def save_tg_config(api_id, api_hash, phone, channel):
 
 BACKUP_BADGE = (
     '<div style="padding:10px 14px; border-radius:8px; font-size:13px;'
-    ' background:rgba(40,167,69,0.10); border-left:4px solid #28a745;'
+    " background:rgba(40,167,69,0.10); border-left:4px solid #28a745;"
     ' color:var(--body-text-color);">'
     "<b>Cloud backup is on.</b> Every run is archived on Telegram before it "
     "reaches Kaggle, so a dead PC never costs you the source."
     "</div>"
     if tg_backup_ready()
     else '<div style="padding:10px 14px; border-radius:8px; font-size:13px;'
-    ' background:rgba(217,119,6,0.10); border-left:4px solid #d97706;'
+    " background:rgba(217,119,6,0.10); border-left:4px solid #d97706;"
     ' color:var(--body-text-color);">'
     "<b>Cloud backup is off.</b> Add your Telegram API details in the "
     "☁️ Telegram Drive tab to archive every video before it goes to Kaggle."
@@ -2139,9 +2341,13 @@ SUPPORT_TABLE_HTML = f"""
       <b>🔒 Safety:</b> local aur private network addresses (127.0.0.1, 192.168.x.x,
       10.x, aur cloud metadata 169.254.169.254) jaan-boojh kar block hain — taaki koi
       pasted link tumhare apne network se files kheench ke bahar na bhej sake.
-      {"<br><b>JS runtime:</b> " + ", ".join(sorted(link_resolver.JS_RUNTIMES)) + " detected — YouTube ka player challenge solve ho sakta hai."
-       if link_resolver.JS_RUNTIMES else
-       "<br><b>⚠️ JS runtime nahi mila.</b> Deno ya Node install karo, warna kuch YouTube videos download nahi hongi."}
+      {
+    "<br><b>JS runtime:</b> "
+    + ", ".join(sorted(link_resolver.JS_RUNTIMES))
+    + " detected — YouTube ka player challenge solve ho sakta hai."
+    if link_resolver.JS_RUNTIMES
+    else "<br><b>⚠️ JS runtime nahi mila.</b> Deno ya Node install karo, warna kuch YouTube videos download nahi hongi."
+}
     </div>
 
     <details style="margin-top:12px;">
@@ -2155,18 +2361,20 @@ SUPPORT_TABLE_HTML = f"""
             <th style="text-align:left; padding:5px 7px;">Example host</th>
             <th style="text-align:left; padding:5px 7px;">Notes</th>
           </tr>
-          {"".join(
-              f'<tr>'
-              f'<td style="padding:5px 7px; border-top:1px solid var(--border-color-primary);">'
-              f'{html.escape(row["label"])}</td>'
-              f'<td style="padding:5px 7px; border-top:1px solid var(--border-color-primary);">'
-              f'<code>{html.escape(row["example"])}</code></td>'
-              f'<td style="padding:5px 7px; border-top:1px solid var(--border-color-primary);">'
-              f'{html.escape(row["note"])}'
-              f'{" (cookies)" if row["needs_cookies"] else ""}</td>'
-              f'</tr>'
-              for row in link_resolver.describe_support()
-          )}
+          {
+    "".join(
+        f"<tr>"
+        f'<td style="padding:5px 7px; border-top:1px solid var(--border-color-primary);">'
+        f"{html.escape(row['label'])}</td>"
+        f'<td style="padding:5px 7px; border-top:1px solid var(--border-color-primary);">'
+        f"<code>{html.escape(row['example'])}</code></td>"
+        f'<td style="padding:5px 7px; border-top:1px solid var(--border-color-primary);">'
+        f"{html.escape(row['note'])}"
+        f"{' (cookies)' if row['needs_cookies'] else ''}</td>"
+        f"</tr>"
+        for row in link_resolver.describe_support()
+    )
+}
         </table>
       </div>
     </details>
@@ -2231,8 +2439,10 @@ def _db_value_html(value, limit: int = 160) -> str:
     numeric = isinstance(value, (int, float))
     if len(text) > limit:
         shown = html.escape(text[:limit]) + "…"
-        return (f'<span class="tdb-val{" tdb-num" if numeric else ""}" '
-                f'title="{html.escape(text, quote=True)}">{shown}</span>')
+        return (
+            f'<span class="tdb-val{" tdb-num" if numeric else ""}" '
+            f'title="{html.escape(text, quote=True)}">{shown}</span>'
+        )
     return f'<span class="tdb-val{" tdb-num" if numeric else ""}">{html.escape(text)}</span>'
 
 
@@ -2266,17 +2476,20 @@ def _db_overview_html() -> str:
         for label, value in cards
     )
     biggest_html = (
-        f'Largest table: <b>{html.escape(biggest[0])}</b> ({biggest[1]:,} rows)'
-        if biggest and biggest[1] else ""
+        f"Largest table: <b>{html.escape(biggest[0])}</b> ({biggest[1]:,} rows)"
+        if biggest and biggest[1]
+        else ""
     )
     return (
         _DB_CSS
-        + '<div class="tdb-cards">' + card_html + "</div>"
+        + '<div class="tdb-cards">'
+        + card_html
+        + "</div>"
         + f'<p class="tdb-note">📄 <code>{html.escape(info["path"])}</code> — '
-          "app ka pura memory. Har run, har Telegram upload, har error yahin "
-          "SQLite me pada hai. Neeche koi bhi table chuno: uska matlab, har "
-          "column ka kaam, aur rows. <b>Sirf padhne ke liye</b> — is tab se "
-          "kuch bhi change nahi hota. " + biggest_html + "</p>"
+        "app ka pura memory. Har run, har Telegram upload, har error yahin "
+        "SQLite me pada hai. Neeche koi bhi table chuno: uska matlab, har "
+        "column ka kaam, aur rows. <b>Sirf padhne ke liye</b> — is tab se "
+        "kuch bhi change nahi hota. " + biggest_html + "</p>"
     )
 
 
@@ -2296,41 +2509,40 @@ def _db_schema_html(table: str) -> str:
             tags += '<span class="tdb-tag">NOT NULL</span>'
         default = (
             f' <span class="tdb-null">default {html.escape(str(column["default"]))}</span>'
-            if column["default"] is not None else ""
+            if column["default"] is not None
+            else ""
         )
         rows.append(
             f'<tr class="tdb-schema-row"><td><b>{html.escape(column["name"])}</b>{tags}</td>'
-            f'<td>{html.escape(column["type"])}</td>'
+            f"<td>{html.escape(column['type'])}</td>"
             f"<td>{html.escape(column['help'])}{default}</td></tr>"
         )
 
     links = ""
     if info["foreign_keys"]:
         link_bits = ", ".join(
-            f'<code>{html.escape(link["column"])}</code> → '
-            f'<code>{html.escape(link["ref_table"])}.{html.escape(link["ref_column"])}</code> '
-            f'(on delete {html.escape(link["on_delete"].lower())})'
+            f"<code>{html.escape(link['column'])}</code> → "
+            f"<code>{html.escape(link['ref_table'])}.{html.escape(link['ref_column'])}</code> "
+            f"(on delete {html.escape(link['on_delete'].lower())})"
             for link in info["foreign_keys"]
         )
         links += f'<p class="tdb-note">🔗 Links: {link_bits}</p>'
     if info["indexes"]:
         index_bits = ", ".join(
-            f'<code>{html.escape(ix["name"])}</code>' + (" (unique)" if ix["unique"] else "")
+            f"<code>{html.escape(ix['name'])}</code>" + (" (unique)" if ix["unique"] else "")
             for ix in info["indexes"]
         )
         links += f'<p class="tdb-note">📇 Indexes: {index_bits}</p>'
 
     description = (
-        f'<p class="tdb-note">{html.escape(info["description"])}</p>'
-        if info["description"] else ""
+        f'<p class="tdb-note">{html.escape(info["description"])}</p>' if info["description"] else ""
     )
     return (
-        _DB_CSS
-        + f'<p style="font-size:15px; font-weight:800; margin:10px 0 2px;">'
-          f'📋 <code>{html.escape(info["name"])}</code></p>'
+        _DB_CSS + f'<p style="font-size:15px; font-weight:800; margin:10px 0 2px;">'
+        f"📋 <code>{html.escape(info['name'])}</code></p>"
         + description
         + '<div class="tdb-scroll"><table class="tdb"><thead><tr>'
-          "<th>Column</th><th>Type</th><th>Meaning</th></tr></thead><tbody>"
+        "<th>Column</th><th>Type</th><th>Meaning</th></tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table></div>"
         + links
@@ -2345,7 +2557,7 @@ def _db_pager_html(result: dict) -> str:
     search = f' · filter "{html.escape(result["search"])}"' if result["search"] else ""
     return (
         f'<div class="tdb-pager">Showing {first}–{last} of {result["total"]} rows '
-        f'· page {result["page"]}/{result["pages"]}{search}</div>'
+        f"· page {result['page']}/{result['pages']}{search}</div>"
     )
 
 
@@ -2390,8 +2602,14 @@ def render_db_tab(table: str, page=1, search: str = "") -> tuple:
 
 
 # Moved theme out of Blocks constructor for Gradio 6.0+ compatibility
-with gr.Blocks(title="Tarun Dubber AI") as demo:
-
+# delete_cache=(frequency, age) in seconds: Gradio keeps every uploaded video
+# in %TEMP%\gradio and, without this, NEVER deletes any of it (6.5 MB was
+# already sitting there across 6 days before this line existed -- one full
+# copy per upload, unbounded). Hourly sweep, 24h grace: a file picked in the
+# UI is copied into the project folder the moment Start is pressed, so
+# anything a day old is provably stale. If it ever bites, the UI answers
+# "Upload a video file or paste a source link first." -- re-pick, never a crash.
+with gr.Blocks(title="Tarun Dubber AI", delete_cache=(3600, 86400)) as demo:
     # Sticky top bar: brand, live clock + date, running-job timer, and the
     # settings drawer (theme / accent / scale / clock / assistant defaults).
     gr.HTML(TOP_BAR_HTML)
@@ -2419,9 +2637,7 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
                             value="📁 Upload a file",
                             label="Source",
                         )
-                        video_input = gr.Video(
-                            label="Upload Source Video", sources=["upload"]
-                        )
+                        video_input = gr.Video(label="Upload Source Video", sources=["upload"])
                         source_url = gr.Textbox(
                             label="Source link",
                             placeholder=(
@@ -2431,7 +2647,9 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
                             lines=2,
                             visible=False,
                         )
-                        check_link_btn = gr.Button("🔍 Check this link", variant="secondary", visible=False)
+                        check_link_btn = gr.Button(
+                            "🔍 Check this link", variant="secondary", visible=False
+                        )
                         link_status = gr.HTML("")
 
                         target_language = gr.Dropdown(
@@ -2452,7 +2670,9 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
                         )
                         gr.HTML(BACKUP_BADGE)
                         start_button = gr.Button(
-                            "🚀 Start Dubbing", variant="primary", size="lg",
+                            "🚀 Start Dubbing",
+                            variant="primary",
+                            size="lg",
                             elem_id="td-start-btn",
                         )
 
@@ -2483,7 +2703,9 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
                     with gr.Group():
                         output_video = gr.File(label="Download Output Video", interactive=False)
                         with gr.Row():
-                            tg_upload_btn = gr.Button("📤 Re-archive output to Telegram", variant="secondary")
+                            tg_upload_btn = gr.Button(
+                                "📤 Re-archive output to Telegram", variant="secondary"
+                            )
                             tg_link_output = gr.HTML("No upload yet.")
 
                         tg_upload_btn.click(
@@ -2527,8 +2749,21 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
 
             start_button.click(
                 fn=start_dubbing,
-                inputs=[video_input, target_language, speaker_toggle, source_url, backup_toggle, archive_only_toggle],
-                outputs=[status_output, output_video, metrics_ui, action_links_output, backup_output],
+                inputs=[
+                    video_input,
+                    target_language,
+                    speaker_toggle,
+                    source_url,
+                    backup_toggle,
+                    archive_only_toggle,
+                ],
+                outputs=[
+                    status_output,
+                    output_video,
+                    metrics_ui,
+                    action_links_output,
+                    backup_output,
+                ],
             )
 
         # --- TAB 2: Telegram Drive ---
@@ -2594,8 +2829,12 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
                     tg_api_id = gr.Textbox(label="API ID", value=init_api_id)
                     tg_api_hash = gr.Textbox(label="API HASH", type="password", value=init_api_hash)
                 with gr.Row():
-                    tg_phone = gr.Textbox(label="Phone Number (with country code)", value=init_phone)
-                    tg_channel = gr.Textbox(label="Channel Username (e.g. @tgwebcloud1)", value=init_channel)
+                    tg_phone = gr.Textbox(
+                        label="Phone Number (with country code)", value=init_phone
+                    )
+                    tg_channel = gr.Textbox(
+                        label="Channel Username (e.g. @tgwebcloud1)", value=init_channel
+                    )
 
                 save_config_btn = gr.Button("💾 Save Settings", variant="primary")
                 config_status = gr.Markdown("")
@@ -2609,8 +2848,12 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
             with gr.Row():
                 with gr.Column(scale=2):
                     gr.Markdown("### 📤 Upload Any Size")
-                    drive_file_input = gr.File(label="Select any file (no size limit)", type="filepath")
-                    drive_upload_btn = gr.Button("🚀 Start Auto-Chunked Upload", variant="primary", size="lg")
+                    drive_file_input = gr.File(
+                        label="Select any file (no size limit)", type="filepath"
+                    )
+                    drive_upload_btn = gr.Button(
+                        "🚀 Start Auto-Chunked Upload", variant="primary", size="lg"
+                    )
                     drive_progress_out = gr.HTML("Status: <b>Ready for Upload</b>")
 
                     drive_upload_btn.click(
@@ -2652,7 +2895,9 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
                     )
                     with gr.Row():
                         drive_check_btn = gr.Button("🔍 Check this link", variant="secondary")
-                        drive_link_btn = gr.Button("☁️ Archive this link to Telegram", variant="primary")
+                        drive_link_btn = gr.Button(
+                            "☁️ Archive this link to Telegram", variant="primary"
+                        )
                     drive_link_status = gr.HTML("")
                     drive_link_out = gr.HTML("")
 
@@ -2692,7 +2937,9 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
             with gr.Group():
                 with gr.Row():
                     with gr.Column(scale=1):
-                        project_dropdown = gr.Dropdown(choices=load_project_history(), label="Select Project")
+                        project_dropdown = gr.Dropdown(
+                            choices=load_project_history(), label="Select Project"
+                        )
                         refresh_btn = gr.Button("🔄 Refresh List", variant="secondary")
                         reattach_btn = gr.Button("♻️ Reattach to Kaggle worker", variant="primary")
                     with gr.Column(scale=2):
@@ -2811,5 +3058,32 @@ with gr.Blocks(title="Tarun Dubber AI") as demo:
     demo.load(js=APP_JS)
 
 if __name__ == "__main__":
+    # 1) Close stdin on purpose. Nothing in this app is allowed to ask a
+    #    human anything on the console: a stray Telethon/yt-dlp prompt would
+    #    read THIS process's stdin, which under start-boosted.ps1 is not even
+    #    a terminal (the job just hangs forever -- that is exactly the
+    #    "Please enter the code you received:" hang). With stdin closed the
+    #    same prompt fails instantly with EOFError, which the backup steps
+    #    catch and turn into a visible UI error card instead of a hang.
+    #    Unconditional on purpose: a TTY blocks, and a piped stdin that never
+    #    closes blocks just the same.
+    sys.stdin = io.StringIO("")
+
+    # 2) Reclaim scratch left behind by killed runs (finally blocks never ran).
+    #    Two independent sweeps: the app's own _inbox, and the pipeline's
+    #    project scratch (compressed_*.mp4 / dataset_safe / kernel_safe) with
+    #    age gates so a run in progress is never touched. Either failing must
+    #    never block launch, hence the separate try/except around each.
+    try:
+        _sweep_stale_inbox()
+    except Exception:  # noqa: BLE001 - a sweep failure must never block launch
+        logger.exception("Startup inbox sweep failed")
+    try:
+        _reclaimed = sweep_stale_scratch(PROJECTS_DIR)
+        if any(_reclaimed.values()):
+            logger.info("Startup pipeline scratch sweep reclaimed: %s", _reclaimed)
+    except Exception:  # noqa: BLE001 - a sweep failure must never block launch
+        logger.exception("Startup pipeline scratch sweep failed")
+
     # In Gradio 6.0, theme goes in launch()
     demo.launch(inbrowser=True, theme=custom_theme)

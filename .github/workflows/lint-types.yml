@@ -1,0 +1,146 @@
+# =============================================================================
+#  lint-types.yml -- the ruff + mypy gate
+# =============================================================================
+#  WHY THIS IS A SEPARATE WORKFLOW AND NOT A JOB IN build-native.yml
+#  -----------------------------------------------------------------
+#  build-native.yml already has a `python-tests` job, and its own comments
+#  state an invariant that this workflow must not break:
+#
+#    "no pip install step exists here on purpose ... If a future edit makes
+#     one of them need a third-party package, this job fails at import and
+#     that is the correct signal: the test stopped being a free gate."
+#
+#    "this is the one job worth blocking a merge on"
+#
+#  Linting and type-checking REQUIRE a pip install. Adding them to that job
+#  would destroy the property its author explicitly protected -- it would stop
+#  being the free, zero-install, seconds-long gate. So this is a separate
+#  workflow with its own trigger surface, and build-native.yml is untouched.
+#
+# -----------------------------------------------------------------------------
+#  WHY tools/lint_gate.py INSTEAD OF BARE `ruff check .`
+#  -----------------------------------------------------------------
+#  A bare `ruff check .` on this repo fails on its first run and stays red for
+#  weeks, because the codebase has never been reformatted or typed. A gate that
+#  starts red gets ignored, then deleted, and then nothing is protecting
+#  anything.
+#
+#  So the gate is a RATCHET: tools/lint_gate.py freezes today's findings into
+#  .lint-baseline.txt and fails only on NEW ones. New code gets the full rule
+#  set at once; legacy code stops getting worse; the baseline shrinks over time
+#  until it hits zero. See AGENTS.md section 5.
+#
+#  STAGE 1 (this file, today): everything is `continue-on-error: true`.
+#  A gate that blocks nothing still gets run by every human on every commit,
+#  which is how a gate earns trust. Once the baseline has held green for a
+#  week, flip the two markers below to `false` and enable branch protection.
+#  The flips are marked FLIP-TO-REQUIRED so there is no hunting for them.
+# =============================================================================
+
+name: lint-types
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # No paths filter on purpose. This job is cheap (the baseline comparison is
+    # a set difference, and ruff walks 74 first-party files rather than 723),
+    # and filtering it means a Python change that slips past the filter gets a
+    # green tick it never earned.
+    paths:
+      - '**/*.py'
+      - 'pyproject.toml'
+      - '.lint-baseline.txt'
+      - 'tools/lint_gate.py'
+      - '.pre-commit-config.yaml'
+      - '.github/workflows/lint-types.yml'
+  workflow_dispatch:
+
+# Least privilege: this workflow reads the repo and runs two linters. It never
+# needs a token to write anything.
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-types-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-types:
+    name: ruff + mypy (ratchet gate)
+    runs-on: ubuntu-latest
+    # This is a lint job, not a build job. If it is taking more than ten
+    # minutes something is wrong -- most likely the exclude list in
+    # pyproject.toml has drifted and it is walking projects/*/dataset_safe.
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Pinned explicitly so a runner image bump cannot silently change which
+      # interpreter type-checks the codebase. Matches [tool.mypy].
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ruff and mypy
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff mypy
+          python -m ruff --version
+          python -m mypy --version
+
+      # Log the baseline size before the gate runs. When this number stops
+      # shrinking, the ratchet has stalled and someone needs to know -- that is
+      # the signal this whole design depends on.
+      - name: Report baseline size
+        run: |
+          if [ -f .lint-baseline.txt ]; then
+            n=$(grep -cv '^#' .lint-baseline.txt || true)
+            echo "baseline entries: ${n}"
+            echo "### ruff + mypy baseline: ${n} findings" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::.lint-baseline.txt is missing -- see AGENTS.md section 5"
+            echo "### ruff + mypy baseline: MISSING" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The actual gate. Exit 1 = a finding that is not in the baseline.
+      - name: Run lint gate (ratchet)
+        # FLIP-TO-REQUIRED: set to false once the baseline has been green for a
+        # week, then enable "Require status checks to pass" in branch
+        # protection. Until then this warns instead of blocking, so that the
+        # gate gets exercised by every push and earns its eventual authority.
+        continue-on-error: true
+        run: python tools/lint_gate.py --verbose
+
+      # pip-audit is deliberately advisory and lives OUTSIDE the gate.
+      #
+      # It cannot gate a merge here: requirements-legacy-torch.txt still pins
+      # torch, and torch carries a large, slow-moving CVE backlog. Gating on it
+      # would mean no PR ever merges, which is the same "red gate gets deleted"
+      # failure this workflow was designed to avoid.
+      #
+      # Instead it runs on a schedule and opens visibility without blocking.
+      # continue-on-error is explicit, not an oversight.
+      - name: Dependency audit (advisory)
+        continue-on-error: true
+        run: |
+          python -m pip install pip-audit
+          python -m pip_audit --requirement requirements.txt || \
+            echo "::warning::pip-audit findings in requirements.txt (advisory -- not blocking)"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo ""
+            echo "### Gate contract"
+            echo ""
+            echo "- New findings: **FAIL**"
+            echo "- Pre-existing findings: tracked in \`.lint-baseline.txt\`, must shrink"
+            echo "- Fixing one? Run \`python tools/lint_gate.py --write-baseline\` locally"
+            echo ""
+            echo "Rules live in \`pyproject.toml\`. Agent rules live in \`AGENTS.md\`."
+          } >> "$GITHUB_STEP_SUMMARY"

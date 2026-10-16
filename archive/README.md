@@ -66,8 +66,9 @@ koi by mistake na chalaye) par unka asli fix alag hai:
 
 | File | Asli problem | Zaroori fix |
 |---|---|---|
-| `setup_config.py` | **plaintext `api_id` + `api_hash` + phone git me committed** | api_hash **rotate** karo (my.telegram.org → naya app) + git history purge |
-| `scratch_login.py` | wahi creds **+ ek login OTP code** | same |
+| `setup_config.py` | **plaintext `api_id` + `api_hash` + phone git me committed** | ✅ **source fix done** — ab env vars (`TDUBBER_API_HASH`) se padhta hai. ⏳ api_hash **rotate** karna baaki hai (my.telegram.org → naya app). History purge: see `SECURITY.md` |
+| `scratch_login.py` | wahi creds **+ ek login OTP code** | ✅ **done** — file delete. Dead thi bhi (`tg_up` package exist hi nahi karta tha) |
+| `__pycache__/*.pyc` | compiled bytecode me api_hash leak | ✅ **done** — 20 `.pyc` untracked; `.gitignore` me rule pehle se thi par already-tracked files par apply nahi hoti |
 
 `config.json` me `api_hash` **DPAPI-encrypted** hai — yahi poora security point
 hai. Ye do file uske saamne wo value **plaintext** me rakhti hain, isliye

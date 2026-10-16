@@ -60,6 +60,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import threading
 import time
 from urllib.parse import urlparse
@@ -166,7 +167,10 @@ def hold_session_lock(wait_seconds: float = 8.0) -> bool:
             return True
 
         os.makedirs(os.path.dirname(SESSION_LOCK_PATH) or ".", exist_ok=True)
-        handle = open(SESSION_LOCK_PATH, "a+b")
+        # The lock file must outlive every ``with`` block in this process, so a
+        # context manager is the wrong shape here: the handle is stored in a
+        # module global and closed by release_session_lock() or by process exit.
+        handle = open(SESSION_LOCK_PATH, "a+b")  # noqa: SIM115 -- held for process lifetime
         handle.seek(0)
         handle.write(b"0")
         handle.flush()
@@ -187,7 +191,7 @@ def hold_session_lock(wait_seconds: float = 8.0) -> bool:
                         "Telegram session safely. Close the other window (or the "
                         "other python process) and retry. Parts already uploaded "
                         "are journalled and will not be sent again."
-                    )
+                    ) from None  # the raw OSError would just confuse the user
                 time.sleep(0.5)
 
 
@@ -252,24 +256,21 @@ def _emit(callback, **payload):
     try:
         parameters = inspect.signature(callback).parameters.values()
         positional = [
-            p
-            for p in parameters
-            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+            p for p in parameters if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
         ]
         takes_varargs = any(p.kind == p.VAR_POSITIONAL for p in parameters)
         arity = len(positional)
     except (TypeError, ValueError):
         arity, takes_varargs = 3, False
 
-    try:
+    # A broken progress widget must never abort an upload.
+    with contextlib.suppress(Exception):
         if takes_varargs or arity >= 3:
             callback(payload.get("current", 0), payload.get("total", 0), payload)
         elif arity == 2:
             callback(payload.get("current", 0), payload.get("total", 0))
         elif arity == 1:
             callback(payload)
-    except Exception:  # a broken progress widget must never abort an upload
-        pass
 
 
 def _atomic_write_json(path: str, data) -> None:
@@ -282,7 +283,7 @@ def _atomic_write_json(path: str, data) -> None:
 
 def _read_json(path: str, default=None):
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             return json.load(handle)
     except (OSError, json.JSONDecodeError):
         return default
@@ -292,6 +293,64 @@ def state_path_for(key: str) -> str:
     return os.path.join(STATE_DIR, f"{key}.json")
 
 
+def prune_upload_journals(
+    max_age_days: int = 30, max_files: int = 200, keep_path: str | None = None
+) -> int:
+    """Best-effort cleanup of old upload journals; returns files removed.
+
+    Each upload writes a ``<key>.json`` journal into STATE_DIR. Over months of
+    use they accumulate into thousands of tiny files that nothing ever reads
+    again (resume only cares about the most recent attempts). This keeps the
+    newest ``max_files`` and drops anything older than ``max_age_days``.
+
+    Safety rules, in order of importance:
+    - The journal of the upload currently running (``keep_path``) is never
+      removed, no matter how old it looks.
+    - Any journal still marked ``state == "uploading"`` is kept: deleting it
+      would silently throw away the parts record of an interrupted transfer.
+    - Every step is stat-based and wrapped by the caller in
+      ``contextlib.suppress(Exception)``; a locked, unreadable or vanished file
+      is simply skipped. This function must never fail an upload.
+    - Running it twice changes nothing the first run did not already do
+      (idempotent).
+    """
+    try:
+        entries: list[tuple[float, str]] = []
+        for name in os.listdir(STATE_DIR):
+            # Underscore-prefixed files are internal scratch (manifest probes,
+            # self-test payloads), not journals, and belong to someone else.
+            if not name.endswith(".json") or name.startswith("_"):
+                continue
+            path = os.path.join(STATE_DIR, name)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue  # vanished or locked; not our problem today
+            entries.append((stat.st_mtime, path))
+    except OSError:
+        return 0  # STATE_DIR unreadable or absent: nothing to prune
+
+    cutoff = time.time() - max_age_days * 86400
+    entries.sort(key=lambda item: item[0], reverse=True)  # newest first
+
+    removed = 0
+    for rank, (mtime, path) in enumerate(entries):
+        if rank < max_files and mtime >= cutoff:
+            continue  # newest enough AND recent enough: keep
+        if keep_path is not None and os.path.normcase(path) == os.path.normcase(keep_path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as handle:
+                if (json.load(handle) or {}).get("state") == "uploading":
+                    continue  # interrupted transfer; its parts record still matters
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            pass  # unreadable journal: safe to prune
+        with contextlib.suppress(OSError):
+            os.remove(path)
+            removed += 1
+    return removed
+
+
 # How many bytes from each end of the file a sampled content key digests.
 # 16 MB of reads per call instead of the whole file: a 3 GB source costs a
 # fraction of a second, while a replacement of the same size still lands on a
@@ -299,7 +358,7 @@ def state_path_for(key: str) -> str:
 CONTENT_SAMPLE_BYTES = 8 * 1024 * 1024
 
 
-def _fingerprint(path: str, size: int, digest: str = None) -> str:
+def _fingerprint(path: str, size: int, digest: str | None = None) -> str:
     """Identify a file by what it contains, not by where it sits on disk.
 
     A caller that already paid for a whole-file digest passes it in and this
@@ -406,11 +465,7 @@ def _plan_digests_from_go(path: str, chunk_size: int, expected_parts: int) -> di
         parts = plan.get("parts") or []
         if plan.get("planner") != "go" or len(parts) != expected_parts:
             return {}
-        return {
-            int(entry["part"]): entry["sha256"]
-            for entry in parts
-            if entry.get("sha256")
-        }
+        return {int(entry["part"]): entry["sha256"] for entry in parts if entry.get("sha256")}
     except Exception:  # noqa: BLE001 - an optimisation must never break a run
         return {}
 
@@ -445,9 +500,7 @@ def parse_tg_link(url: str) -> dict:
         raise TelegramCloudError("Empty Telegram link.")
 
     if raw.startswith("tg://"):
-        query = dict(
-            pair.split("=", 1) for pair in raw[6:].split("&") if "=" in pair
-        )
+        query = dict(pair.split("=", 1) for pair in raw[6:].split("&") if "=" in pair)
         if "user_id" in query:
             return {
                 "kind": "private",
@@ -518,7 +571,7 @@ class HashingFileSlice(io.IOBase):
         last_error = None
         for attempt in range(OPEN_RETRIES):
             try:
-                self._handle = open(filepath, "rb")
+                self._handle = open(filepath, "rb")  # noqa: SIM115 -- closed by close()
                 break
             except PermissionError as exc:
                 # Windows Defender and OneDrive commonly hold a brief lock.
@@ -585,22 +638,25 @@ def _get_client(api_id, api_hash, phone=None, session_path: str = SESSION_PATH):
 
     Opening a fresh client per upload wasted a handshake and, worse, called
     ``start()`` unconditionally -- which drops into an interactive OTP prompt
-    whenever the session had expired. We now connect first and only prompt when
-    authorisation is genuinely missing.
+    whenever the session had expired. ``start()`` is now NEVER called from
+    here: Telethon sends a real login code to the phone *before* it prompts,
+    and its default prompt is a bare ``input()`` on this process's console
+    stdin. On a web worker that reads the parent's console it blocks forever
+    -- after the code was already burned. An unauthorised session is an error
+    the user fixes once, by hand, with ``python login_once.py`` in a terminal.
     """
     try:
         numeric_id = int(api_id)
     except (TypeError, ValueError):
-        raise TelegramCloudError("Telegram API ID must be numeric.")
+        raise TelegramCloudError("Telegram API ID must be numeric.") from None
 
     cached = getattr(_client_cache, "client", None)
     if cached is not None:
-        try:
+        # A broken or stale cache entry is replaced, never fatal to the run.
+        with contextlib.suppress(Exception):
             if cached.is_connected() and cached.is_user_authorized():
                 return cached
             cached.disconnect()
-        except Exception:
-            pass
 
     # telethon.sync is not optional here. ``from telethon import
     # TelegramClient`` gives the async client in Telethon 1.4x, so every call
@@ -615,14 +671,25 @@ def _get_client(api_id, api_hash, phone=None, session_path: str = SESSION_PATH):
     client = TelegramClient(session_path, numeric_id, api_hash)
     client.connect()
     if not client.is_user_authorized():
+        # Belt and braces: never let this helper reach an interactive login,
+        # even if the phone number is configured. The reason is timing, not
+        # politeness: Telethon's start() sends the OTP code FIRST and only
+        # THEN asks for it with input(), and by then the code is already on
+        # the user's phone with nobody able to type it in. One-time terminal
+        # login is python login_once.py (or python telegram_uploader.py).
+        client.disconnect()
         if not phone:
-            client.disconnect()
             raise TelegramCloudError(
                 "Telegram session missing or expired. Run "
                 "`python telegram_uploader.py` in a terminal once and complete "
                 "the OTP login."
             )
-        client.start(phone=phone)
+        raise TelegramCloudError(
+            "Telegram session missing or expired (phone "
+            f"{phone} is configured but no valid session file exists). Run "
+            "`python login_once.py` in a terminal once to complete the OTP "
+            "login; the app never asks for codes interactively."
+        )
 
     _client_cache.client = client
     return client
@@ -632,10 +699,8 @@ def disconnect_client() -> None:
     """Close the thread's cached client, if any."""
     cached = getattr(_client_cache, "client", None)
     if cached is not None:
-        try:
+        with contextlib.suppress(Exception):
             cached.disconnect()
-        except Exception:
-            pass
         _client_cache.client = None
 
 
@@ -682,6 +747,10 @@ def _probe_video(path):
             capture_output=True,
             text=True,
             timeout=30,
+            # stdin=DEVNULL: ffprobe is strictly file-to-file here. Without it,
+            # a stray inherited stdin (e.g. the Gradio worker's closed console)
+            # can make it block waiting for input it will never receive.
+            stdin=subprocess.DEVNULL,
         )
         data = _json.loads(proc.stdout or "{}")
         duration = 0
@@ -725,12 +794,12 @@ def _extract_video_thumb(path, out_path):
             ],
             capture_output=True,
             timeout=30,
+            # stdin=DEVNULL: this call reads one input file and writes one JPEG
+            # (no piped input, no interactive filters). Sealing stdin stops any
+            # inherited console handle from stalling the worker thread.
+            stdin=subprocess.DEVNULL,
         )
-        if (
-            proc.returncode == 0
-            and os.path.isfile(out_path)
-            and os.path.getsize(out_path) > 0
-        ):
+        if proc.returncode == 0 and os.path.isfile(out_path) and os.path.getsize(out_path) > 0:
             return out_path
     except Exception:  # noqa: BLE001
         return None
@@ -751,7 +820,7 @@ def _try_go_upload(
     progress_callback,
     on_journal,
     go_concurrency: int = 3,
-    journal_key: str = None,
+    journal_key: str | None = None,
 ) -> dict | None:
     """SPEED PATH: try the tgup multi-connection uploader. Journal or None.
 
@@ -776,24 +845,40 @@ def _try_go_upload(
     except ImportError:
         return None
     ok, reason = go_planner.should_use_go_upload(
-        size, chunk_size, channel, thumbnail_path=thumbnail_path, use_go=True,
+        size,
+        chunk_size,
+        channel,
+        thumbnail_path=thumbnail_path,
+        use_go=True,
     )
     if not ok:
         return None
     _emit(
-        progress_callback, phase="start", current=0, total=size,
+        progress_callback,
+        phase="start",
+        current=0,
+        total=size,
         chunk_count=len(plan),
         message=f"Go parallel upload x{go_concurrency} ({reason}) …",
     )
     try:
         result = go_planner.upload_via_go(
-            file_path, api_id, api_hash, channel, phone=phone,
-            concurrency=go_concurrency, chunk_size=chunk_size,
-            caption=caption, thumbnail_path=thumbnail_path
+            file_path,
+            api_id,
+            api_hash,
+            channel,
+            phone=phone,
+            concurrency=go_concurrency,
+            chunk_size=chunk_size,
+            caption=caption,
+            thumbnail_path=thumbnail_path,
         )
     except Exception as exc:  # noqa: BLE001 - speed must never fail a run
         _emit(
-            progress_callback, phase="note", current=0, total=size,
+            progress_callback,
+            phase="note",
+            current=0,
+            total=size,
             chunk_count=len(plan),
             message=f"Go upload unavailable ({exc}); Telethon fallback …",
         )
@@ -802,23 +887,32 @@ def _try_go_upload(
     got_parts = result.get("parts") or []
     if len(got_parts) != len(plan):
         _emit(
-            progress_callback, phase="note", current=0, total=size,
+            progress_callback,
+            phase="note",
+            current=0,
+            total=size,
             chunk_count=len(plan),
-            message=(f"Go returned {len(got_parts)}/{len(plan)} parts; "
-                     "Telethon fallback …"),
+            message=(f"Go returned {len(got_parts)}/{len(plan)} parts; Telethon fallback …"),
         )
         return None
     if any(not p.get("message_id") or not p.get("link") for p in got_parts):
         return None
     if len(plan) > 1 and not result.get("message_link"):
         _emit(
-            progress_callback, phase="note", current=0, total=size,
+            progress_callback,
+            phase="note",
+            current=0,
+            total=size,
             chunk_count=len(plan),
             message="Go manifest missing; Telethon fallback …",
         )
         return None
     journal = go_planner.convert_go_result_to_journal(
-        result, file_path, channel, chunk_size=chunk_size, caption=caption,
+        result,
+        file_path,
+        channel,
+        chunk_size=chunk_size,
+        caption=caption,
     )
     journal["file_path"] = os.path.abspath(file_path)
     journal["reused"] = False
@@ -826,24 +920,23 @@ def _try_go_upload(
     # The key must be the caller's: recomputing it here would derive a different
     # key whenever the caller supplied a whole-file digest, and the journal this
     # writes would then be invisible to the next run's resume lookup.
-    try:
-        _atomic_write_json(
-            state_path_for(journal_key or _fingerprint(file_path, size)), journal
-        )
-    except OSError:
-        pass
+    with contextlib.suppress(OSError):
+        _atomic_write_json(state_path_for(journal_key or _fingerprint(file_path, size)), journal)
     if on_journal:
-        try:
+        with contextlib.suppress(Exception):
             on_journal(dict(journal))
-        except Exception:
-            pass
     rate = float(result.get("bytes_per_sec") or 0)
     _emit(
-        progress_callback, phase="complete", current=size, total=size,
+        progress_callback,
+        phase="complete",
+        current=size,
+        total=size,
         chunk_count=len(parts_to_count(journal)),
         journal=dict(journal),
-        message=(f"Go upload complete x{result.get('concurrency')} · "
-                 f"{human_bytes(rate)}/s · {journal.get('message_link')}"),
+        message=(
+            f"Go upload complete x{result.get('concurrency')} · "
+            f"{human_bytes(rate)}/s · {journal.get('message_link')}"
+        ),
     )
     return journal
 
@@ -859,20 +952,20 @@ def upload_file_detailed(
     api_hash,
     phone,
     channel: str,
-    caption: str = None,
+    caption: str | None = None,
     progress_callback=None,
     resume: bool = True,
     reuse_completed: bool = True,
     chunk_size: int = CHUNK_SIZE,
     on_journal=None,
-    thumbnail_path: str = None,
+    thumbnail_path: str | None = None,
     # SPEED POLICY params (AI/dev note):
     # As per user request, Go path is now the default everywhere for max speed.
     # go_concurrency 3..8 maps straight to `tgup upload --concurrency`.
     # For machine-level speed see boost.ps1 / start-boosted.ps1 (Windows).
     use_go: bool = True,
-    go_concurrency: int = 0, # 0 means auto-tune
-    content_sha256: str = None, # whole-file digest the caller already computed
+    go_concurrency: int = 0,  # 0 means auto-tune
+    content_sha256: str | None = None,  # whole-file digest the caller already computed
 ) -> dict:
     """Upload any file to Telegram and return a full archival description.
 
@@ -894,6 +987,7 @@ def upload_file_detailed(
     """
     if go_concurrency <= 0:
         import auto_tuner
+
         go_concurrency = auto_tuner.get_optimal_concurrency(channel, api_id, api_hash)
     from telethon.errors import FloodWaitError
     from telethon.tl.types import DocumentAttributeFilename
@@ -922,10 +1016,8 @@ def upload_file_detailed(
         legacy = _read_json(state_path_for(_legacy_fingerprint(file_path, size)), {}) or {}
         if legacy:
             stored = legacy
-            try:
+            with contextlib.suppress(OSError):
                 _atomic_write_json(journal_path, legacy)
-            except OSError:
-                pass
     journal = dict(stored)
     journal.update({"file_path": file_path, "filename": base_name, "size": size})
 
@@ -974,11 +1066,25 @@ def upload_file_detailed(
     # below takes over). Single-part/private/thumb files skip this by design.
     if use_go:
         go_journal = _try_go_upload(
-            file_path, api_id, api_hash, phone, channel, size, plan,
-            chunk_size, caption, thumbnail_path, progress_callback, on_journal,
-            go_concurrency=go_concurrency, journal_key=key,
+            file_path,
+            api_id,
+            api_hash,
+            phone,
+            channel,
+            size,
+            plan,
+            chunk_size,
+            caption,
+            thumbnail_path,
+            progress_callback,
+            on_journal,
+            go_concurrency=go_concurrency,
+            journal_key=key,
         )
         if go_journal is not None:
+            # Opportunistic housekeeping; protect the journal Go just wrote.
+            with contextlib.suppress(Exception):
+                prune_upload_journals(keep_path=journal_path)
             return go_journal
         # Fall through: Go missed (not runnable, single-part, private
         # channel, or error) — Telethon sequential path below is authoritative.
@@ -1028,6 +1134,11 @@ def upload_file_detailed(
     client = _get_client(api_id, api_hash, phone)
     total_done = sum(entry["size"] for entry in done_parts.values())
     parts = []
+    # Scratch dir in %TEMP% for extracted video frames. Written inside the
+    # project directory these files were never cleaned up and accumulated as
+    # user-visible junk next to the movies. Created lazily (most uploads never
+    # extract a frame) and always removed in the finally block below.
+    thumb_tmp_dir: str | None = None
 
     if recovering:
         _emit(
@@ -1059,9 +1170,7 @@ def upload_file_detailed(
                 continue
 
             part_name = (
-                f"{base_name}.part{part_number:04d}of{len(plan):04d}"
-                if chunked
-                else base_name
+                f"{base_name}.part{part_number:04d}of{len(plan):04d}" if chunked else base_name
             )
             if chunked:
                 part_name += os.path.splitext(base_name)[1] or ".bin"
@@ -1082,13 +1191,18 @@ def upload_file_detailed(
                 message=f"Part {part_number}/{len(plan)} uploading ({human_bytes(length)})",
             )
 
-            def on_part_progress(current, _total, _slice=part_slice, _base=base_current):
+            # Bind part_number as a default argument: the closure must capture
+            # THIS part's number, not whatever the loop variable holds when the
+            # callback finally runs (late binding, B023).
+            def on_part_progress(
+                current, _total, _slice=part_slice, _base=base_current, _part=part_number
+            ):
                 _emit(
                     progress_callback,
                     phase="part",
                     current=_base + current,
                     total=size,
-                    chunk_index=part_number,
+                    chunk_index=_part,
                     chunk_count=len(plan),
                 )
 
@@ -1107,8 +1221,17 @@ def upload_file_detailed(
                     }
             local_thumb = None
             if preview is not None:
+                if thumb_tmp_dir is None:
+                    thumb_tmp_dir = tempfile.mkdtemp(prefix="t_dub_thumb_")
+                # Same basename as before ("<stem>.t_dub_thumb.jpg") so the
+                # bytes Telegram receives are identical; only the directory
+                # moved out of the project tree.
                 local_thumb = _extract_video_thumb(
-                    file_path, os.path.splitext(file_path)[0] + ".t_dub_thumb.jpg"
+                    file_path,
+                    os.path.join(
+                        thumb_tmp_dir,
+                        os.path.splitext(base_name)[0] + ".t_dub_thumb.jpg",
+                    ),
                 )
             send_thumb = None
             if part_number == 1:
@@ -1264,10 +1387,8 @@ def upload_file_detailed(
             # stay in step with Telegram. The upload itself must not depend on
             # the listener, so a failure here is ignored.
             if on_journal:
-                try:
+                with contextlib.suppress(Exception):
                     on_journal(dict(journal))
-                except Exception:
-                    pass
 
             _emit(
                 progress_callback,
@@ -1284,20 +1405,20 @@ def upload_file_detailed(
                 time.sleep(CHUNK_GAP_SECONDS)
 
             manifest = {
-            MANIFEST_MARKER: MANIFEST_VERSION,
-            "filename": base_name,
-            "size": size,
-            "chunk_size": chunk_size,
-            "chunked": chunked,
-            "chunk_count": len(parts),
-            "channel": channel,
-            "source_path": file_path,
-            "thumbnail_path": thumb,
-            "caption": caption,
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "app": "T_Dubber",
-            "parts": parts,
-        }
+                MANIFEST_MARKER: MANIFEST_VERSION,
+                "filename": base_name,
+                "size": size,
+                "chunk_size": chunk_size,
+                "chunked": chunked,
+                "chunk_count": len(parts),
+                "channel": channel,
+                "source_path": file_path,
+                "thumbnail_path": thumb,
+                "caption": caption,
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "app": "T_Dubber",
+                "parts": parts,
+            }
 
         if chunked:
             manifest_document = json.dumps(manifest, ensure_ascii=False, indent=2)
@@ -1319,10 +1440,8 @@ def upload_file_detailed(
                     ),
                 )
             finally:
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(manifest_path)
-                except OSError:
-                    pass
             journal["message_id"] = int(manifest_message.id)
             journal["message_link"] = build_message_link(channel, manifest_message.id)
         else:
@@ -1349,10 +1468,12 @@ def upload_file_detailed(
             message=f"Archive complete · {journal['message_link']}",
         )
         if on_journal:
-            try:
+            with contextlib.suppress(Exception):
                 on_journal(dict(journal))
-            except Exception:
-                pass
+        # Opportunistic housekeeping: the journal this upload just wrote must
+        # never be pruned, so it is explicitly protected here.
+        with contextlib.suppress(Exception):
+            prune_upload_journals(keep_path=journal_path)
         return journal
     except BaseException as exc:
         # BaseException, not Exception: asyncio.CancelledError no longer derives
@@ -1363,6 +1484,11 @@ def upload_file_detailed(
         journal["updated_at"] = time.time()
         _atomic_write_json(journal_path, journal)
         raise
+    finally:
+        # Runs on success, failure and cancellation alike, so a scratch frame
+        # can never be left behind in %TEMP%.
+        if thumb_tmp_dir is not None:
+            shutil.rmtree(thumb_tmp_dir, ignore_errors=True)
 
 
 def upload_to_telegram(
@@ -1372,7 +1498,7 @@ def upload_to_telegram(
     phone,
     channel_username: str,
     progress_callback=None,
-    caption: str = None,
+    caption: str | None = None,
 ) -> str:
     """Backward-compatible wrapper returning just the shareable link."""
     result = upload_file_detailed(
@@ -1439,15 +1565,13 @@ def _read_manifest_message(client, message) -> dict:
     os.makedirs(STATE_DIR, exist_ok=True)
     try:
         _download_message_to(client, message, scratch)
-        with open(scratch, "r", encoding="utf-8") as handle:
+        with open(scratch, encoding="utf-8") as handle:
             data = json.load(handle)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise TelegramCloudError(f"Could not read that manifest: {exc}")
+        raise TelegramCloudError(f"Could not read that manifest: {exc}") from None
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.remove(scratch)
-        except OSError:
-            pass
 
     if not isinstance(data, dict) or data.get(MANIFEST_MARKER) != MANIFEST_VERSION:
         raise TelegramCloudError(
@@ -1470,15 +1594,11 @@ def fetch_manifest(api_id, api_hash, phone, link: str) -> dict:
 
 
 def _restore_from_manifest(client, manifest, dest_dir, progress_callback, verify):
-    parts = sorted(
-        manifest.get("parts") or [], key=lambda entry: int(entry.get("part", 0))
-    )
+    parts = sorted(manifest.get("parts") or [], key=lambda entry: int(entry.get("part", 0)))
     if not parts:
         raise TelegramCloudError("The manifest lists no parts.")
 
-    base_name = (
-        os.path.basename(manifest.get("filename") or "restored.bin") or "restored.bin"
-    )
+    base_name = os.path.basename(manifest.get("filename") or "restored.bin") or "restored.bin"
     total = int(manifest.get("size") or sum(int(p.get("size", 0)) for p in parts))
     os.makedirs(dest_dir, exist_ok=True)
     staging = os.path.join(dest_dir, base_name + ".restoring")
@@ -1490,10 +1610,7 @@ def _restore_from_manifest(client, manifest, dest_dir, progress_callback, verify
         current=0,
         total=total,
         chunk_count=len(parts),
-        message=(
-            f"Restoring {base_name} from {len(parts)} archived parts "
-            f"({human_bytes(total)})"
-        ),
+        message=(f"Restoring {base_name} from {len(parts)} archived parts ({human_bytes(total)})"),
     )
 
     if os.path.exists(staging):
@@ -1513,9 +1630,7 @@ def _restore_from_manifest(client, manifest, dest_dir, progress_callback, verify
                         f"Part {entry.get('part')} has no usable link in the manifest."
                     )
                 part_message = _fetch_message(client, part_reference)
-                part_file = os.path.join(
-                    STATE_DIR, f"_part_{int(entry['part']):04d}.bin"
-                )
+                part_file = os.path.join(STATE_DIR, f"_part_{int(entry['part']):04d}.bin")
                 try:
                     _download_message_to(client, part_message, part_file)
                     if verify and entry.get("sha256"):
@@ -1531,10 +1646,8 @@ def _restore_from_manifest(client, manifest, dest_dir, progress_callback, verify
                     with open(part_file, "rb") as source:
                         shutil.copyfileobj(source, sink, 4 * 1024 * 1024)
                 finally:
-                    try:
+                    with contextlib.suppress(OSError):
                         os.remove(part_file)
-                    except OSError:
-                        pass
                 done += int(entry.get("size", 0))
                 _emit(
                     progress_callback,
@@ -1551,10 +1664,8 @@ def _restore_from_manifest(client, manifest, dest_dir, progress_callback, verify
     except BaseException:
         # Never leave a half-rebuilt file behind. A retry would otherwise find
         # the staging file and could mistake it for a finished restore.
-        try:
+        with contextlib.suppress(OSError):
             os.remove(staging)
-        except OSError:
-            pass
         raise
 
     rebuilt = os.path.getsize(staging)
@@ -1628,9 +1739,7 @@ def download_or_restore(
 
     if _is_manifest_message(message):
         manifest = _read_manifest_message(client, message)
-        return _restore_from_manifest(
-            client, manifest, dest_dir, progress_callback, verify
-        )
+        return _restore_from_manifest(client, manifest, dest_dir, progress_callback, verify)
 
     os.makedirs(dest_dir, exist_ok=True)
     name = os.path.basename(message_filename(message) or "") or "downloaded.bin"
@@ -1670,9 +1779,7 @@ def restore_from_link(
     verify: bool = True,
 ) -> str:
     """Backwards-compatible alias for download_or_restore."""
-    return download_or_restore(
-        link, api_id, api_hash, phone, dest_dir, progress_callback, verify
-    )
+    return download_or_restore(link, api_id, api_hash, phone, dest_dir, progress_callback, verify)
 
 
 # ---------------------------------------------------------------------------
@@ -1709,7 +1816,32 @@ def forget_upload(key: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _tty_code_callback() -> str:
+    """Ask for the login code on a REAL terminal, or refuse loudly.
+
+    Telethon only swallows ``telethon.errors.*`` around its code prompt, so a
+    TelegramCloudError raised here propagates out of ``start()`` instead of
+    turning into an ``input()`` call on a closed or redirected stdin (the Gradio
+    worker has no console, and there ``input()`` would block the thread forever).
+    """
+    if not sys.stdin.isatty():
+        raise TelegramCloudError(
+            "Telegram login needs an interactive terminal. Run "
+            "`python login_once.py` in a terminal once to create the session."
+        )
+    return input("Please enter the code you received: ").strip()
+
+
 def _bootstrap() -> None:
+    # Refuse BEFORE any prompt: client.start() sends the OTP to the phone first
+    # and only then asks for it, so proceeding without a terminal would waste a
+    # code and still hang on input(). login_once.py is the supported path.
+    if not sys.stdin.isatty():
+        print(
+            "Telegram login needs an interactive terminal, and this process "
+            "does not have one. Run `python login_once.py` in a terminal once."
+        )
+        sys.exit(1)
     print("=== Telegram first-time setup ===")
     api_id = input("Enter your API ID: ").strip()
     if not api_id.isdigit():
@@ -1721,7 +1853,7 @@ def _bootstrap() -> None:
     from telethon.sync import TelegramClient
 
     client = TelegramClient(SESSION_PATH, int(api_id), api_hash)
-    client.start(phone=phone)
+    client.start(phone=phone, code_callback=_tty_code_callback)
     print("Session created successfully. You can now use the UI.")
     client.disconnect()
 
@@ -1735,10 +1867,12 @@ def _selftest() -> None:
     from telethon import TelegramClient as AsyncClient
     from telethon.sync import TelegramClient as SyncClient
 
-    assert not inspect.iscoroutinefunction(
+    # These asserts are the point of the self-test: they only run from a real
+    # terminal via `python telegram_uploader.py --selftest`, never in production.
+    assert not inspect.iscoroutinefunction(  # noqa: S101 -- self-test, see above
         AsyncClient.connect
     ), "expected telethon.TelegramClient to be the async client"
-    assert not inspect.iscoroutinefunction(
+    assert not inspect.iscoroutinefunction(  # noqa: S101 -- self-test, see above
         SyncClient.connect
     ), "telethon.sync.TelegramClient must be synchronous"
 
@@ -1748,15 +1882,17 @@ def _selftest() -> None:
     with open(scratch, "wb") as handle:
         handle.write(payload)
     try:
+        # Every assert below runs only from `python telegram_uploader.py
+        # --selftest`, never in production code paths.
         small = plan_chunks(len(payload), chunk_size=8 * 1024 * 1024)
-        assert small == [(1, 0, len(payload))], small
+        assert small == [(1, 0, len(payload))], small  # noqa: S101 -- self-test
 
-        ninety_gb = 90 * 1024 ** 3
+        ninety_gb = 90 * 1024**3
         big = plan_chunks(ninety_gb, CHUNK_SIZE)
-        assert len(big) == 49, len(big)
-        assert big[-1][2] == ninety_gb - 48 * CHUNK_SIZE
-        assert sum(length for _n, _o, length in big) == ninety_gb
-        assert all(
+        assert len(big) == 49, len(big)  # noqa: S101 -- self-test
+        assert big[-1][2] == ninety_gb - 48 * CHUNK_SIZE  # noqa: S101 -- self-test
+        assert sum(length for _n, _o, length in big) == ninety_gb  # noqa: S101 -- self-test
+        assert all(  # noqa: S101 -- self-test
             big[i][1] == sum(length for _n, _o, length in big[:i]) for i in range(len(big))
         ), "part offsets must be contiguous and gapless"
 
@@ -1771,25 +1907,23 @@ def _selftest() -> None:
                     rebuilt.update(block)
             finally:
                 view.close()
-        assert rebuilt.hexdigest() == hashlib.sha256(payload).hexdigest()
+        assert rebuilt.hexdigest() == hashlib.sha256(payload).hexdigest()  # noqa: S101 -- self-test
 
-        assert parse_tg_link("https://t.me/tgwebcloud1/123")["message_id"] == 123
-        assert parse_tg_link("https://t.me/c/1234567890/55") == {
+        assert parse_tg_link("https://t.me/tgwebcloud1/123")["message_id"] == 123  # noqa: S101 -- self-test
+        assert parse_tg_link("https://t.me/c/1234567890/55") == {  # noqa: S101 -- self-test
             "kind": "private",
             "chat": 1234567890,
             "message_id": 55,
         }
-        assert build_message_link("@tgwebcloud1", 9) == "https://t.me/tgwebcloud1/9"
+        assert build_message_link("@tgwebcloud1", 9) == "https://t.me/tgwebcloud1/9"  # noqa: S101 -- self-test
 
         print(f"OK  chunk planning ({len(big)} parts for 90 GB)  {human_bytes(ninety_gb)}")
         print("OK  streaming slice round-trip matches source SHA-256")
         print("OK  Telegram link parsing (public + private) and link building")
         print("OK  Telethon sync client is the one imported (async would no-op)")
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.remove(scratch)
-        except OSError:
-            pass
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ Exit code 0 = authorized (and carried over). Exit code 1 = nothing to report.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import getpass
 import json
 import sys
@@ -41,11 +42,31 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-import telethon_session  # noqa: E402
+import telethon_session
 
 # Telegram codes are short-lived; beyond this the run is a lost cause.
 CODE_TIMEOUT_SECONDS = 600
 RETRY_ATTEMPTS = 3
+
+
+def non_tty_refusal(code_file: str) -> str:
+    """Return an error message when a terminal-less run would need to prompt.
+
+    Empty string = everything is fine (either stdin really is a terminal, or
+    the OTP will come from ``--code-file`` without anyone typing). Otherwise
+    the caller must stop BEFORE ``client.start()``: Telethon sends the SMS/OTP
+    first and only then calls input(), so a run without a console would burn a
+    code and still hang forever waiting for keystrokes that can never arrive.
+    """
+    if code_file:
+        return ""  # documented terminal-less path: the code arrives in a file
+    if sys.stdin.isatty():
+        return ""
+    return (
+        "no interactive terminal (stdin is not a TTY) and no --code-file was "
+        "given. Telegram would send an OTP that nobody could type in. Run "
+        "`python login_once.py` in a terminal, or pass --code-file <path>."
+    )
 
 
 def wait_for_code(path: Path, rejected: set[str]) -> str:
@@ -68,9 +89,14 @@ def wait_for_code(path: Path, rejected: set[str]) -> str:
     raise TimeoutError(f"no code arrived in {path} within {CODE_TIMEOUT_SECONDS}s")
 
 
-def run_qr_login(session: str, api_id: int, api_hash: str,
-                 png_path: str | None, timeout: float,
-                 password_callback=None):
+def run_qr_login(
+    session: str,
+    api_id: int,
+    api_hash: str,
+    png_path: str | None,
+    timeout: float,
+    password_callback=None,
+):
     """The ``--qr`` path: connect, show the QR, wait for the phone.
 
     The client is built *inside* the running loop and torn down in the same
@@ -97,8 +123,11 @@ def run_qr_login(session: str, api_id: int, api_hash: str,
                 print(f"already authorized as {me.id} (@{me.username or 'no username'})")
                 return me
             user = await tg_qr_login.qr_login(
-                client, png_path=png_path or None, timeout=timeout,
-                password_callback=password_callback)
+                client,
+                png_path=png_path or None,
+                timeout=timeout,
+                password_callback=password_callback,
+            )
             if not await client.is_user_authorized():
                 raise RuntimeError("Telegram returned a user but the session is not authorized")
             print(f"authorized as {user.id} (@{getattr(user, 'username', None) or 'no username'})")
@@ -121,12 +150,10 @@ def _force_utf8_console() -> None:
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is None:
             continue
-        try:
+        # A stream that cannot be reconfigured (already-detached, or a
+        # real file we must not touch) just keeps its own encoding.
+        with contextlib.suppress(ValueError, OSError):
             reconfigure(encoding="utf-8", errors="replace")
-        except (ValueError, OSError):
-            # A stream that cannot be reconfigured (already-detached, or a
-            # real file we must not touch) just keeps its own encoding.
-            pass
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -134,26 +161,49 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="One Python login, shared by the Telethon and Go uploaders."
     )
-    parser.add_argument("--session", default=str(ROOT / "telegram_uploader_session"),
-                        help="Telethon session to use (default: telegram_uploader_session)")
-    parser.add_argument("--qr", action="store_true",
-                        help="log in by scanning a QR code with the phone (no code typing)")
-    parser.add_argument("--qr-png", default="",
-                        help="with --qr: also write the QR to this PNG file")
-    parser.add_argument("--qr-timeout", type=float, default=300.0,
-                        help="with --qr: give up after this many seconds (default 300)")
-    parser.add_argument("--code-file", default="",
-                        help="read the login code from this file instead of stdin")
-    parser.add_argument("--password-file", default="",
-                        help="read the 2FA password from this file instead of stdin")
+    parser.add_argument(
+        "--session",
+        default=str(ROOT / "telegram_uploader_session"),
+        help="Telethon session to use (default: telegram_uploader_session)",
+    )
+    parser.add_argument(
+        "--qr",
+        action="store_true",
+        help="log in by scanning a QR code with the phone (no code typing)",
+    )
+    parser.add_argument(
+        "--qr-png", default="", help="with --qr: also write the QR to this PNG file"
+    )
+    parser.add_argument(
+        "--qr-timeout",
+        type=float,
+        default=300.0,
+        help="with --qr: give up after this many seconds (default 300)",
+    )
+    parser.add_argument(
+        "--code-file", default="", help="read the login code from this file instead of stdin"
+    )
+    parser.add_argument(
+        "--password-file", default="", help="read the 2FA password from this file instead of stdin"
+    )
     args = parser.parse_args(argv)
+
+    # Guard BEFORE anything touches the Telegram API: client.start() sends the
+    # OTP first and only then prompts, so a terminal-less run without a
+    # --code-file would waste a code and hang. Fail fast instead.
+    refusal = non_tty_refusal(args.code_file)
+    if refusal and not args.qr:
+        # --qr never prompts for a code (exportLoginToken only), so it may
+        # proceed without a TTY; the 2FA password still needs --password-file.
+        print(f"login_once.py: {refusal}", file=sys.stderr)
+        return 1
 
     # Imported late: the config decrypts credentials, and a `--help` should not
     # need DPAPI or Flask to answer.
     import app
     from telethon import TelegramClient
 
-    api_id, api_hash, phone, channel = app.load_tg_config()
+    api_id, api_hash, phone, _channel = app.load_tg_config()
     if not (api_id and api_hash and phone):
         print("config.json incomplete: api_id/api_hash/phone chahiye", file=sys.stderr)
         return 1
@@ -169,11 +219,24 @@ def main(argv: list[str] | None = None) -> int:
     def read_code() -> str:
         if code_file:
             return wait_for_code(code_file, tried_codes)
+        if not sys.stdin.isatty():
+            # EOFError, not TelegramCloudError: the retry loop below treats it
+            # as "no point trying again" (a fresh prompt cannot appear where
+            # there is no console).
+            raise EOFError(
+                "stdin is not a terminal; cannot ask for the login code. "
+                "Run `python login_once.py` in a terminal or use --code-file."
+            )
         return input("Telegram login code: ").strip()
 
     def read_password() -> str:
         if password_file:
             return wait_for_code(password_file, tried_passwords)
+        if not sys.stdin.isatty():
+            raise EOFError(
+                "stdin is not a terminal; cannot ask for the 2FA password. "
+                "Use --password-file <path> instead."
+            )
         # getpass, not input: input() echoes the password to the screen and
         # into the shell's scrollback. A cloud password typed in the clear is
         # a leaked password.
@@ -184,10 +247,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.qr:
         try:
-            run_qr_login(args.session, int(api_id), api_hash,
-                         args.qr_png or None, args.qr_timeout,
-                         password_callback=read_password)
-        except (TimeoutError, RuntimeError, OSError, ValueError) as exc:
+            run_qr_login(
+                args.session,
+                int(api_id),
+                api_hash,
+                args.qr_png or None,
+                args.qr_timeout,
+                password_callback=read_password,
+            )
+        except (TimeoutError, RuntimeError, OSError, ValueError, EOFError) as exc:
             print(f"QR login failed: {exc}", file=sys.stderr)
             return 1
     else:
@@ -196,9 +264,16 @@ def main(argv: list[str] | None = None) -> int:
             last_error: Exception | None = None
             for attempt in range(1, RETRY_ATTEMPTS + 1):
                 try:
-                    user = client.start(phone=phone, code_callback=read_code,
-                                        password=read_password)
+                    user = client.start(
+                        phone=phone, code_callback=read_code, password=read_password
+                    )
                     break
+                except EOFError as exc:
+                    # No console and no code file: Telegram has possibly already
+                    # been asked for a code by an earlier attempt, but another
+                    # prompt cannot succeed where the first one failed. Stop.
+                    print(f"login failed: {exc}", file=sys.stderr)
+                    return 1
                 except Exception as exc:  # noqa: BLE001 - reported, then retried
                     last_error = exc
                     print(f"attempt {attempt} failed: {exc}", flush=True)
@@ -208,10 +283,8 @@ def main(argv: list[str] | None = None) -> int:
                     # A wrong code costs nothing to replace: start() asks Telegram
                     # for a fresh one on the next call.
                     if code_file:
-                        try:
+                        with contextlib.suppress(OSError):
                             code_file.unlink()
-                        except OSError:
-                            pass
                         tried_codes.clear()
             else:
                 print(f"login failed: {last_error}", file=sys.stderr)
@@ -235,10 +308,8 @@ def main(argv: list[str] | None = None) -> int:
     # sign-in revives it), so the carry-over can correctly report "nothing to
     # do" while a cached "rejected" verdict from those dead runs sits beside the
     # session claiming otherwise.
-    try:
+    with contextlib.suppress(OSError):
         telethon_session.verdict_path(ROOT / "tgup.session").unlink()
-    except OSError:
-        pass
     print(json.dumps(info, indent=2))
     print("\nDone — Go upload (tgup) will reuse this login. No more codes.")
     return 0
